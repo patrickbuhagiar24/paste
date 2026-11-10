@@ -10,10 +10,9 @@ klik** (salin + `Ctrl+V` otomatis).
 
 - 🌳 **Hierarki kategori/folder** — struktur folder di disk menjadi pohon di GUI.
   Setiap folder = kategori, setiap berkas `.txt` = satu teks siap paste.
-- ⚡ **Paste satu klik** — double-click / `Enter` / tombol *Paste ke Aplikasi
-  Lain*: teks disalin ke clipboard, jendela dikecilkan, lalu `Ctrl+V` dikirim
-  otomatis ke aplikasi yang sedang fokus.
-- 📋 **Salin saja** — tombol *Salin* / `Ctrl+C` untuk clipboard tanpa paste otomatis.
+- ⚡ **Paste satu klik** — klik/double-click/`Enter`: teks disalin, jendela
+  Paste Teks dilepas sejenak agar fokus kembali ke aplikasi Anda, lalu `Ctrl+V`
+  dikirim otomatis. Jendela muncul lagi setelah teks tertempel.
 - 🔍 **Pencarian** — cari berdasarkan nama berkas *atau isi teksnya*.
 - ✏️ **Kelola dari GUI** — tambah kategori, tambah teks, edit (editor internal),
   hapus, buka folder di Nautilus. Perubahan tersimpan di folder pengguna.
@@ -27,68 +26,48 @@ klik** (salin + `Ctrl+V` otomatis).
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE`, serta
   `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan.
 
-## Cara paste (pilih salah satu)
+## Cara pakai — satu klik, langsung tertempel
 
-### A. Pintasan global Ctrl+Alt+V — **paling andal**
+1. **Klik** (atau double-click, atau Enter) satu berkas `.txt` di panel kiri.
+2. Teksnya langsung tertempel di kolom input aplikasi lain yang terakhir Anda
+   pakai.
 
-Tidak bergantung pada fokus jendela, jadi bebas dari masalah "Ctrl+V masuk ke
-aplikasi yang salah".
+Itu saja. Tidak ada langkah tambahan, tidak ada hitung mundur, tidak ada
+tombol salin.
 
-1. Di Paste Teks, **klik sekali** berkas `.txt` yang ingin dipakai.
-2. **Klik kolom input di aplikasi tujuan** (browser, chat, editor).
-3. Tekan **Ctrl+Alt+V**.
+### Bagaimana mungkin tanpa memilih aplikasi tujuan?
 
-Teks tersalin dan langsung tertempel di tempat kursor Anda berada. Tidak ada
-hitung mundur, tidak ada jendela yang berpindah.
-
-Pasang/hapus pintasan:
-
-```bash
-paste-teks --install-shortcut     # pasang (biasanya sudah otomatis saat instal)
-paste-teks --remove-shortcut      # hapus
-```
-
-Atau lewat tombol **⌨ Pintasan** di aplikasi. Pintasan memakai *keybinding
-kustom GNOME* (`gsettings`), jadi tidak menambah dependensi apa pun.
-
-### B. Tombol di jendela
-
-1. Klik berkas `.txt` → pratinjau tampil.
-2. Klik **⚡ Paste ke Aplikasi Lain**, lalu **klik aplikasi tujuan** selama
-   hitungan mundur (status bar).
-3. Teks tertempel.
-
-Cara ini berfungsi, tetapi bisa terpengaruh window manager: di GNOME Wayland,
-fokus kadang kembali ke jendela Paste Teks saat hitungan selesai. Bila itu
-terjadi, gunakan cara A.
-
-## Cara pakai
-
-1. Buka **Paste Teks** dari menu Aplikasi (atau jalankan `paste-teks`).
-2. Di panel kiri, klik folder untuk mengembang/menyusut; klik berkas `.txt`
-   untuk melihat pratinjau isinya di panel kanan.
-3. **Double-click** berkas (atau tekan `Enter`) → teks disalin dan ditempel
-   otomatis. Dalam jeda yang diatur, **klik aplikasi tujuan** (mis. browser,
-   editor, form) agar `Ctrl+V` terkirim ke sana.
-4. Tambah teks sendiri: tombol **＋ Teks** / **＋ Kategori**, atau buat berkas
-   `.txt` langsung di `~/.local/share/paste-teks/snippets/` lalu tekan `F5`.
-
-Contoh bawaan (dari `/usr/share/paste-teks/snippets`):
+Paste Teks melepas jendelanya sendiri (`withdraw`) sesaat sebelum mengirim
+`Ctrl+V`:
 
 ```
-Umum/            Sapaan.txt, Tanda Tangan.txt
-Email/           Balas Lamaran.txt, Tindak Lanjut.txt
-Kerja/           Format Laporan.txt
-Alamat & Kontak/ Alamat.txt
-Perintah Terminal/ Perintah Umum.txt
+klik teks  →  salin ke clipboard  →  jendela Paste Teks dilepas
+           →  fokus kembali ke aplikasi Anda  →  Ctrl+V dikirim
+           →  jendela Paste Teks muncul lagi
 ```
+
+Karena jendelanya benar-benar hilang dari layar, GNOME **wajib** menyerahkan
+fokus kembali ke aplikasi yang tadi aktif — itulah kolom input Anda. Setelah
+teks tertempel, jendela Paste Teks muncul kembali.
+
+> Sebelumnya jendela hanya dinonaktifkan/mundur (`iconify`/`lower`), yang
+> **tidak** memindahkan fokus — sehingga `Ctrl+V` masuk ke Paste Teks sendiri.
+> Itu penyebab lama "paste tidak berfungsi".
+
+### Yang tidak ada lagi (disederhanakan)
+
+Supaya alurnya benar-benar satu tindakan, fitur berikut dihapus:
+
+- tombol **Salin** (tanpa paste)
+- **pintasan global** dan pemasangan otomatisnya
+- **hitung mundur** dan pengaturan jeda manual
+- pilihan "double-click = salin saja"
 
 ### Pintasan keyboard
 
 | Tombol | Aksi |
 |---|---|
-| Double-click / `Enter` | Paste otomatis (satu klik) |
-| `Ctrl+C` | Salin ke clipboard |
+| Klik / double-click / `Enter` | Tempel ke aplikasi lain (satu tindakan) |
 | `F5` | Muat ulang pohon |
 | `F2` | Edit berkas terpilih |
 | `Delete` | Hapus berkas/kategori terpilih |
@@ -285,7 +264,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.3.0-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.4.0-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 
