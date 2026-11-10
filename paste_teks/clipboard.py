@@ -19,11 +19,45 @@ from typing import Callable
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
+# Tool clipboard yang mem-fork lalu tetap hidup untuk memegang seleksi.
+# Bila output-nya ditangkap, pipe tidak pernah EOF -> subprocess menunggu
+# sampai timeout dan melaporkan GAGAL padahal clipboard sudah terisi.
+_FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
+
+
 def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+    cmd = args[0] if args else kwargs.get("args")
+    tool = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else str(cmd or "")
     kwargs.setdefault("input", None)
-    kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
     kwargs.setdefault("timeout", 5)
+    if tool in _FORKING_TOOLS:
+        # Jangan tunggu proses selesai: wl-copy/xclip sengaja tetap hidup.
+        # Tulis masukan, tutup stdin, beri tenggang singkat, lalu anggap
+        # berhasil bila proses masih hidup (itu memang perilaku normalnya).
+        text = kwargs.pop("input", None)
+        timeout = kwargs.pop("timeout", 5) or 5
+        kwargs.pop("capture_output", None)
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE if text else subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        if text:
+            try:
+                proc.stdin.write(text)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+        try:
+            code = proc.wait(timeout=min(1.0, timeout))
+        except subprocess.TimeoutExpired:
+            code = 0  # masih memegang seleksi — normal, bukan gagal
+        return subprocess.CompletedProcess(cmd, code, "", "")
+    kwargs.setdefault("capture_output", True)
     return subprocess.run(*args, **kwargs)
 
 
@@ -128,22 +162,69 @@ except ImportError:  # pragma: no cover
     _sleep = None
 
 
+def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
+    """Baca isi clipboard (untuk diagnosis). None bila tidak didukung."""
+    session = detect_session()
+    if session == "wayland":
+        candidates = [["wl-paste", "--no-newline"],
+                      ["xclip", "-selection", "clipboard", "-o"]]
+    else:
+        candidates = [["xclip", "-selection", "clipboard", "-o"],
+                      ["wl-paste", "--no-newline"]]
+    for cmd in candidates:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            proc = runner(cmd)
+            if proc.returncode == 0:
+                return getattr(proc, "stdout", "") or ""
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
+
+
+def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
+    """Ketik teks apa adanya lewat ydotool (untuk diagnosis).
+
+    Berbeda dari Ctrl+V: tidak bergantung pada clipboard sama sekali.
+    """
+    if shutil.which("ydotool") is None:
+        return PasteResult(ok=False, tool="",
+                          message="ydotool tidak terpasang.")
+    try:
+        proc = runner(["ydotool", "type", text])
+        if proc.returncode == 0:
+            return PasteResult(ok=True, tool="ydotool",
+                               message=f"Teks uji terkirim via ydotool: {text!r}")
+        detail = " ".join(filter(None, [
+            (getattr(proc, "stderr", "") or "").strip(),
+            (getattr(proc, "stdout", "") or "").strip()]))
+        return PasteResult(ok=False, tool="ydotool",
+                          message=f"ydotool type gagal: {detail or proc.returncode}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return PasteResult(ok=False, tool="", message=str(exc))
+
+
 def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
     """Kirim Ctrl+V ke aplikasi yang sedang fokus (paste otomatis)."""
     session = detect_session()
-    # Keycode Linux: 29=LeftCtrl, 47=V → Ctrl+V (42=Shift, JANGAN dipakai).
-    # Satu perintah per tool: `ydotool key` hanya menerima SATU argumen
-    # spesifikasi kunci, jadi "ctrl+v" (nama kunci) lebih andal daripada
-    # rangkaian keycode yang bisa ditolak sebagai argumen berlebih.
+    # ydotool >= 1.0 (breaking change): `key` HANYA menerima keycode, ditulis
+    # sebagai <keycode>:<tekan/lepas>. Linux: 29=LeftCtrl, 47=V, 42=Shift.
+    # Urutan: tekan Ctrl, tekan V, lepas V, lepas Ctrl.
+    KEYCODE_CTRL_V = ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
+    # ydotool 0.1.x memakai nama kunci; tetap dicoba sebagai cadangan.
+    NAME_CTRL_V = ["ydotool", "key", "ctrl+v"]
     if session == "wayland":
         candidates = [
-            ("ydotool", ["ydotool", "key", "ctrl+v"]),
+            ("ydotool", KEYCODE_CTRL_V),
+            ("ydotool", NAME_CTRL_V),
             ("xdotool", ["xdotool", "key", "ctrl+v"]),
         ]
     else:
         candidates = [
             ("xdotool", ["xdotool", "key", "ctrl+v"]),
-            ("ydotool", ["ydotool", "key", "ctrl+v"]),
+            ("ydotool", KEYCODE_CTRL_V),
+            ("ydotool", NAME_CTRL_V),
         ]
     errors: list[str] = []
     daemon_tried = False
@@ -160,8 +241,11 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
             if proc.returncode == 0:
                 return PasteResult(ok=True, tool=name,
                                    message=f"Paste otomatis terkirim via {name}.")
-            stderr = (getattr(proc, "stderr", "") or "").strip()
-            errors.append(f"{name}: {stderr or proc.returncode}")
+            detail = " ".join(filter(None, [
+                (getattr(proc, "stderr", "") or "").strip(),
+                (getattr(proc, "stdout", "") or "").strip(),
+            ]))
+            errors.append(f"{name}: {detail or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
     detail = "; ".join(errors) if errors else "tidak ada tool paste otomatis ditemukan"
@@ -169,5 +253,4 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
         ok=False, tool="",
         message=(f"Paste otomatis tidak tersedia ({detail}). "
                  "Teks sudah disalin — tekan Ctrl+V di aplikasi tujuan. "
-                 "Untuk Wayland pasang ydotool dan aktifkan izin /dev/uinput "
-                 "lewat menu \"Izin Paste Otomatis\" di aplikasi."))
+                 "Jalankan `paste-teks --check` untuk diagnosis."))

@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -400,8 +401,10 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         tick()
 
     def _finish_paste(self) -> None:
-        # Kecilkan jendela agar aplikasi tujuan mendapat fokus, lalu kirim Ctrl+V.
-        self.iconify()
+        # JANGAN iconify: di Wayland/GNOME hal itu sering diabaikan, memicu
+        # animasi, dan bisa merebut fokus tepat saat Ctrl+V dikirim. Jendela
+        # utama hanya diturunkan (lower) agar aplikasi tujuan tetap fokus.
+        self.lower()
         threading.Thread(target=self._paste_sender, daemon=True).start()
 
     def _paste_sender(self) -> None:
@@ -409,8 +412,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.after(0, self._paste_done, result)
 
     def _paste_done(self, result) -> None:
-        self.deiconify()
-        self.lift()
+        # Tidak memunculkan/menaikkan jendela: aplikasi tujuan yang harus
+        # memegang fokus. Status bar sudah cukup sebagai umpan balik.
         if result.ok:
             self.status_var.set(f"⚡ {result.message}")
         else:
@@ -656,6 +659,10 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--paste", metavar="FILE",
                         help="Salin FILE lalu kirim Ctrl+V otomatis.")
     parser.add_argument("--version", action="store_true", help="Tampilkan versi.")
+    parser.add_argument("--test-paste", action="store_true",
+                        help="kirim teks uji lewat ydotool (diagnostik)")
+    parser.add_argument("--ctrl-v", action="store_true",
+                        help="dengan --test-paste: kirim Ctrl+V, bukan teks")
     parser.add_argument("--check", action="store_true",
                         help="Periksa lingkungan (tkinter, display, tool) lalu keluar.")
     args = parser.parse_args(argv)
@@ -671,6 +678,9 @@ def run_cli(argv: list[str] | None = None) -> int:
         for node in scan_roots(roots):
             _print_tree(node, prefix="")
         return 0
+    if args.test_paste:
+        return run_test_paste(ctrl_v=args.ctrl_v)
+
     if args.copy or args.paste:
         target = Path(args.copy or args.paste or "")
         try:
@@ -703,6 +713,87 @@ def run_cli(argv: list[str] | None = None) -> int:
     return 0
 
 
+TEST_PASTE_TEXT = "paste-teks-ok "
+
+
+def run_test_paste(ctrl_v: bool = False) -> int:
+    """Diagnostik: ketik teks uji (atau kirim Ctrl+V) ke jendela aktif.
+
+    Bila teks uji muncul di aplikasi tujuan, berarti izin /dev/uinput,
+    daemon, dan ydotool sudah benar — masalahnya murni di clipboard atau
+    pada penekanan Ctrl+V.
+    """
+    from .clipboard import detect_session, ensure_ydotoold, simulate_paste, type_text
+
+    print(f"Tes paste — sesi grafis: {detect_session()}")
+    if ctrl_v:
+        print("Mengirim Ctrl+V ke jendela aktif dalam 3 detik ...")
+    else:
+        print(f"Mengirim teks uji {TEST_PASTE_TEXT!r} dalam 3 detik ...")
+    print("Klik jendela tujuan SEKARANG (mis. kolom komentar atau chat).")
+    time.sleep(3)
+
+    if ctrl_v:
+        result = simulate_paste()
+        if not result.ok:
+            ensure_ydotoold()
+            result = simulate_paste()
+    else:
+        result = type_text(TEST_PASTE_TEXT)
+        if not result.ok:
+            print("Gagal mengetik; menyalakan ydotoold lalu mengulang ...")
+            ensure_ydotoold()
+            result = type_text(TEST_PASTE_TEXT)
+
+    if not result.ok:
+        print(f"❌ {result.message}")
+        print("Jalankan `paste-teks --check` lalu periksa "
+              f"{ERROR_LOG}.")
+        return 2
+    print(f"✅ {result.message}")
+    if ctrl_v:
+        print("Bila teks dari clipboard tertempel, semuanya berfungsi.")
+    else:
+        print("Bila teks uji muncul di jendela tujuan, ydotool berfungsi.")
+        print("Uji Ctrl+V dengan: paste-teks --test-paste --ctrl-v")
+    return 0
+
+
+def clipboard_status() -> list[str]:
+    """Uji nyata: tulis & baca kembali clipboard sistem.
+
+    wl-copy/xclip mem-fork dan memegang seleksi, jadi kegagalan di sini
+    (mis. pipe menggantung sehingga tool dianggap gagal) membuat paste
+    otomatis menempelkan isi lama walau Ctrl+V terkirim.
+    """
+    from .clipboard import (available_tools, copy_text, detect_session,
+                            read_text_from_clipboard)
+
+    tools = available_tools()
+    lines = ["tool: " + ", ".join(
+        f"{k}={'ada' if v else 'tidak ada'}"
+        for k, v in tools.items() if k in ("wl-copy", "xclip", "xsel"))]
+    if detect_session() == "unknown":
+        lines.append("sesi grafis tidak terdeteksi — uji clipboard dilewati")
+        return lines
+
+    probe = f"paste-teks-{os.getpid()}"
+    result = copy_text(probe)
+    if not result.ok:
+        lines.append(f"❌ salin: {result.message}")
+        return lines
+    lines.append(f"✅ salin via {result.tool}")
+
+    back = read_text_from_clipboard()
+    if back is None:
+        lines.append("(baca kembali tidak didukung — pasang wl-paste/xclip)")
+    elif back.strip() == probe:
+        lines.append("✅ baca kembali cocok")
+    else:
+        lines.append(f"⚠️ baca kembali berbeda: {back.strip()[:40]!r}")
+    return lines
+
+
 def run_check(roots: list[Path]) -> int:
     """Cetak laporan diagnosis lingkungan (untuk pemecahan masalah)."""
     from .clipboard import available_tools, detect_session
@@ -726,6 +817,10 @@ def run_check(roots: list[Path]) -> int:
             print(f"  {line}")
     except Exception as exc:  # pragma: no cover - jangan gagalkan --check
         print(f"Izin paste otomatis: tidak dapat diperiksa ({exc})")
+    clip = clipboard_status()
+    print("Clipboard:")
+    for line in clip:
+        print(f"  {line}")
     print("Folder snippets:")
     for r in roots:
         print(f"  - {r} ({'ada' if r.is_dir() else 'belum ada'})")

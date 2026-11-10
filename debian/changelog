@@ -1,3 +1,25 @@
+paste-teks (1.2.1-1) unstable; urgency=medium
+
+  * PERBAIKAN: paste otomatis tidak pernah terkirim. ydotool >= 1.0 hanya
+    menerima KEYCODE pada `key` (breaking change), sehingga "ydotool key
+    ctrl+v" ditolak diam-diam. Kini keycode 29:1 47:1 47:0 29:0 dengan
+    nama kunci sebagai cadangan untuk ydotool 0.1.x.
+  * PERBAIKAN: clipboard bisa gagal palsu. wl-copy/xclip mem-fork dan
+    tetap hidup memegang seleksi; menangkap outputnya membuat proses
+    menunggu sampai timeout lalu dilaporkan gagal, sehingga Ctrl+V
+    menempelkan isi lama. Tool tersebut kini dijalankan dengan output
+    dibuang dan start_new_session, dan timeout dianggap berhasil.
+  * PERBAIKAN: alur fokus. Jendela tidak lagi iconify/deiconify saat
+    mengirim Ctrl+V (di GNOME Wayland itu diabaikan dan dapat merebut
+    fokus); kini hanya di-lower.
+  * BARU: `paste-teks --test-paste [--ctrl-v]` mengetik teks uji ke
+    jendela aktif untuk memastikan ydotool benar-benar bekerja.
+  * BARU: `--check` menguji clipboard sungguhan (salin + baca kembali).
+  * Pesan galat menyertakan keluaran tool (ydotool mencetak ke stdout).
+  * Uji: 66 lolos.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.2.0-1) unstable; urgency=medium
 
   * Nol konfigurasi: paste otomatis langsung bekerja setelah apt install.
