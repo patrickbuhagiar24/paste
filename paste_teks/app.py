@@ -59,6 +59,11 @@ def log_error(message: str) -> None:
     except OSError:
         pass
 
+def _run_in_thread(target, *args) -> None:
+    """Jalankan `target` di thread daemon (pekerjaan I/O tanpa membekukan GUI)."""
+    threading.Thread(target=target, args=args, daemon=True).start()
+
+
 DEFAULT_SETTINGS = {
     # Jeda setelah jendela dilepas, agar compositor sempat memindahkan fokus
     # sebelum Ctrl+V dikirim. 0,6 detik cukup di GNOME Wayland.
@@ -122,6 +127,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.writable = writable_root(self.roots)
         self.current_file: Path | None = None
         self._pasting = False
+        self._search_after_id: str | None = None
         self._build_ui()
         self.refresh_tree()
         self._apply_settings()
@@ -144,15 +150,21 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         toolbar = ttk.Frame(self, padding=6)
         toolbar.pack(fill="x")
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self.refresh_tree())
+        self.search_var.trace_add("write", lambda *_: self._on_search_changed())
         ttk.Label(toolbar, text="🔍").pack(side="left")
-        ttk.Entry(toolbar, textvariable=self.search_var, width=26).pack(side="left", padx=(2, 6))
-        ttk.Button(toolbar, text="↻ Muat Ulang (F5)", command=self.refresh_tree).pack(side="left")
-        ttk.Button(toolbar, text="📂 Buka Folder", command=self.open_folder).pack(side="left", padx=(4, 0))
-        ttk.Button(toolbar, text="＋ Kategori", command=self.add_category).pack(side="left", padx=(4, 0))
-        ttk.Button(toolbar, text="＋ Teks", command=self.add_text).pack(side="left", padx=(4, 0))
-        ttk.Button(toolbar, text="✏️ Edit", command=self.edit_selected).pack(side="left", padx=(4, 0))
-        ttk.Button(toolbar, text="🗑 Hapus", command=self.delete_selected).pack(side="left", padx=(4, 0))
+        ttk.Entry(toolbar, textvariable=self.search_var,
+                  width=26).pack(side="left", padx=(2, 6))
+        buttons = (
+            ("↻ Muat Ulang (F5)", self.refresh_tree, (0, 0)),
+            ("📂 Buka Folder", self.open_folder, (4, 0)),
+            ("＋ Kategori", self.add_category, (4, 0)),
+            ("＋ Teks", self.add_text, (4, 0)),
+            ("✏️ Edit", self.edit_selected, (4, 0)),
+            ("🗑 Hapus", self.delete_selected, (4, 0)),
+        )
+        for label, command, padx in buttons:
+            ttk.Button(toolbar, text=label, command=command).pack(
+                side="left", padx=padx)
         # Panel utama: kiri pohon, kanan pratinjau
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=6)
@@ -234,7 +246,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     def refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
         nodes = scan_roots(self.roots)
-        query = self.search_var.get().strip() if hasattr(self, "search_var") else ""
+        query = self.search_var.get().strip()
         if query:
             nodes = filter_tree(nodes, search_nodes(nodes, query))
         total = 0
@@ -331,8 +343,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         # (gejala: log berhenti di "[paste] mulai").
         self.withdraw()
         log_error("[paste] jendela di-withdraw, menyalin di latar")
-        threading.Thread(target=self._paste_worker, args=(text,),
-                         daemon=True).start()
+        _run_in_thread(self._paste_worker, text)
 
     def _paste_worker(self, text: str) -> None:
         started = time.monotonic()
@@ -352,7 +363,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.after(delay_ms, self._send_paste_after_release)
 
     def _send_paste_after_release(self) -> None:
-        threading.Thread(target=self._paste_sender, daemon=True).start()
+        _run_in_thread(self._paste_sender)
 
     def _paste_sender(self) -> None:
         log_error("[paste] mengirim Ctrl+V")
@@ -364,20 +375,28 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     def _paste_done(self, result) -> None:
         self._pasting = False
         self.deiconify()
-        if result.ok:
-            log_error("[paste] berhasil, jendela muncul kembali")
-            self.status_var.set(f"⚡ {result.message}")
-        else:
+        if not result.ok:
             self.lift()
             self.status_var.set(f"📋 Teks sudah disalin. {result.message}")
             self._show_paste_failure(result.message)
+            return
+        if getattr(result, "confident", True):
+            log_error("[paste] berhasil, jendela muncul kembali")
+            self.status_var.set(f"⚡ {result.message}")
+            return
+        # Perintah berhasil tetapi efeknya tidak dapat dipastikan (mis. xdotool
+        # di sesi Wayland). Jangan klaim berhasil — minta pengguna memeriksa.
+        log_error("[paste] terkirim, keberhasilan BELUM pasti")
+        self.lift()
+        self.status_var.set(
+            f"⚡ {result.message} Bila teks tidak muncul, tekan Ctrl+V.")
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
         # Jendela sudah dilepas: WAJIB dimunculkan kembali apa pun hasilnya.
         self.deiconify()
         self.lift()
-        self.status_var.set(f"Gagal menyalin: {message}")
+        self.status_var.set(f"Gagal menyalin ke clipboard: {message}")
         self._show_paste_failure(message)
 
     # ---------- izin paste otomatis (grup paste-teks) ----------
@@ -414,8 +433,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
                 + uinput.MANUAL_COMMAND)
             return
         self.status_var.set("Meminta hak administrator...")
-        threading.Thread(target=self._enable_worker, args=(st.user,),
-                         daemon=True).start()
+        _run_in_thread(self._enable_worker, st.user)
 
     def _enable_worker(self, user: str) -> None:
         code, out, err = uinput.enable_for_user(user)
@@ -461,7 +479,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     def start_ydotoold(self) -> None:
         """Nyalakan ydotoold lewat systemd --user (tanpa hak root)."""
         self.status_var.set("Menyalakan ydotoold...")
-        threading.Thread(target=self._daemon_worker, daemon=True).start()
+        _run_in_thread(self._daemon_worker)
 
     def _daemon_worker(self) -> None:
         code, out, err = uinput.start_daemon()

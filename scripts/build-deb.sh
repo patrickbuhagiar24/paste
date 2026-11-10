@@ -46,14 +46,14 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
-Recommends: wl-clipboard, xclip, xdotool, ydotool
+Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
 Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lain satu klik
  Paste Teks menampilkan berkas .txt dalam hierarki kategori/folder (GUI).
  Double-click atau tombol "Paste ke Aplikasi Lain" menyalin teks ke clipboard
  dan mengirim Ctrl+V otomatis ke aplikasi yang sedang fokus.
  .
- Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via wl-copy/xclip,
- paste otomatis via ydotool/xdotool, dengan fallback clipboard internal.
+ Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via
+ wl-copy/xclip/xsel, paste otomatis via ydotool/xdotool.
  .
  Contoh bawaan ada di /usr/share/paste-teks/snippets; teks pribadi disimpan
  di ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.

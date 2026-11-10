@@ -1,3 +1,46 @@
+paste-teks (1.4.3-1) unstable; urgency=medium
+
+  * PERBAIKAN: paste tidak lagi melaporkan "berhasil" secara palsu.
+    - Di sesi Wayland, xdotool tidak lagi dipakai. Ia memakai XTEST sehingga
+      hanya menjangkau jendela XWayland, namun tetap mengembalikan kode 0
+      walau aplikasi Wayland asli tidak menerima apa pun. Bila ydotool tidak
+      ada, aplikasi kini melaporkan alasan sebenarnya alih-alih sukses.
+    - PasteResult punya atribut "confident"; hasil yang tidak dapat
+      dipastikan ditampilkan dengan langkah lanjutan (tekan Ctrl+V).
+  * PERBAIKAN: debounce pencarian akhirnya berfungsi.
+    _on_search_changed() sudah lama ada (debounce 300 ms) tetapi tidak pernah
+    tersambung ke trace_add; _search_after_id juga tidak pernah dibuat.
+    Setiap huruf memicu pemindaian penuh folder. Kini tersambung dan
+    diinisialisasi.
+  * PERBAIKAN: pesan "Teks sudah disalin" hanya muncul bila salinan berhasil;
+    kegagalan salin memakai pesan yang tepat.
+  * KEBERSIHAN:
+    - Hapus dead code di uinput.py (COMMON_GROUPS, device_details).
+    - Helper _run_in_thread menggantikan 4 salinan threading.Thread(...).
+    - Tidak ada lagi baris > 99 karakter.
+    - Hapus hasattr(self, "search_var") yang mubazir.
+  * Uji: 94 lolos (10 uji baru). Setiap uji baru diperiksa dengan
+    mengembalikan bug lama untuk memastikan benar-benar gagal.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
+paste-teks (1.4.2-1) unstable; urgency=medium
+
+  * Kebersihan metadata paket setelah fitur dihapus di 1.3.0--1.4.1:
+    - xsel ditambahkan ke Recommends (dipakai kode sebagai cadangan ketiga,
+      sebelumnya tidak dideklarasikan).
+    - Klaim "fallback clipboard internal Tk" dihapus dari deskripsi paket
+      dan README; fallback itu sudah tidak ada sejak 1.4.0.
+    - Docstring clipboard.py diperbarui: tidak lagi menyebut fallback Tk
+      maupun "salin saja + ingatkan Ctrl+V".
+  * Uji baru menjaga metadata tetap konsisten:
+    - Recommends di debian/control dan scripts/build-deb.sh wajib sama.
+    - Setiap tool clipboard yang dipakai kode wajib ada di Recommends.
+    - README/control tidak boleh menjanjikan fallback yang sudah dihapus.
+  * Uji: 84 lolos.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.4.1-1) unstable; urgency=medium
 
   * PERBAIKAN: klik terasa macet / paste tidak pernah terkirim bila

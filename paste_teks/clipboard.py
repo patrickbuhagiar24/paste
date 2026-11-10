@@ -2,8 +2,9 @@
 
 Urutan prioritas disesuaikan Ubuntu 26.10 (GNOME, Wayland default):
 
-  Salin : wl-copy (Wayland) -> xclip -> xsel -> Tk clipboard (fallback GUI)
-  Paste : ydotool (Wayland) -> xdotool (X11) -> salin saja + ingatkan Ctrl+V
+  Salin  : wl-copy (Wayland) -> xclip -> xsel
+  Verifikasi : wl-paste (Wayland) -> xclip -o -> xsel -o  (maks 0,3 detik)
+  Paste  : ydotool (Wayland) -> xdotool (X11)
 
 Semua pemanggilan proses lewat `runner` yang bisa diganti saat pengujian,
 sehingga modul ini bisa diuji tanpa clipboard asli.
@@ -87,6 +88,10 @@ class PasteResult:
     ok: bool
     tool: str = ""
     message: str = ""
+    # False bila perintah berhasil tetapi efeknya tidak dapat dipastikan
+    # (mis. xdotool di sesi Wayland: hanya menjangkau jendela XWayland,
+    # aplikasi Wayland asli tidak menerima Ctrl+V walau exit code 0).
+    confident: bool = True
 
 
 def detect_session() -> str:
@@ -268,10 +273,14 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
     # ydotool 0.1.x memakai nama kunci; tetap dicoba sebagai cadangan.
     NAME_CTRL_V = ["ydotool", "key", "ctrl+v"]
     if session == "wayland":
+        # xdotool SENGAJA tidak dipakai di Wayland: ia memakai XTEST sehingga
+        # hanya menjangkau jendela XWayland, dan tetap mengembalikan kode 0
+        # walau aplikasi Wayland asli tidak menerima apa pun. Melaporkan
+        # "berhasil" di kondisi itu menyesatkan (persis jenis kebohongan yang
+        # menyulitkan diagnosis versi sebelumnya).
         candidates = [
             ("ydotool", KEYCODE_CTRL_V),
             ("ydotool", NAME_CTRL_V),
-            ("xdotool", ["xdotool", "key", "ctrl+v"]),
         ]
     else:
         candidates = [
@@ -292,8 +301,10 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
                 if ensure_ydotoold(runner=runner):
                     proc = runner(cmd)
             if proc.returncode == 0:
-                return PasteResult(ok=True, tool=name,
-                                   message=f"Paste otomatis terkirim via {name}.")
+                return PasteResult(
+                    ok=True, tool=name,
+                    message=f"Paste otomatis terkirim via {name}.",
+                    confident=(name != "xdotool"))
             detail = " ".join(filter(None, [
                 (getattr(proc, "stderr", "") or "").strip(),
                 (getattr(proc, "stdout", "") or "").strip(),
@@ -301,7 +312,13 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
             errors.append(f"{name}: {detail or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
-    detail = "; ".join(errors) if errors else "tidak ada tool paste otomatis ditemukan"
+    if errors:
+        detail = "; ".join(errors)
+    elif session == "wayland":
+        detail = ("ydotool tidak ditemukan; di GNOME Wayland hanya ydotool "
+                  "yang dapat mengirim Ctrl+V ke aplikasi Wayland")
+    else:
+        detail = "tidak ada tool paste otomatis ditemukan"
     return PasteResult(
         ok=False, tool="",
         message=(f"Paste otomatis tidak tersedia ({detail}). "
