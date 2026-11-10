@@ -1,5 +1,5 @@
 """Paste Teks — GUI paste teks hierarki untuk Ubuntu (GNOME Wayland/X11)."""
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 __app_name__ = "paste-teks"
 __app_title__ = "Paste Teks"

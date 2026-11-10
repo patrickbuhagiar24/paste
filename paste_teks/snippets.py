@@ -208,7 +208,9 @@ def default_roots() -> list[Path]:
     system_root = Path("/usr/share/paste-teks/snippets")
     # Relatif terhadap paket (terpasang di /usr/share/paste-teks/paste_teks).
     package_root = Path(__file__).resolve().parent.parent / "snippets"
-    user_root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "paste-teks" / "snippets"
+    data_home = Path(os.environ.get("XDG_DATA_HOME",
+                                   Path.home() / ".local" / "share"))
+    user_root = data_home / "paste-teks" / "snippets"
     # Di lingkungan dev (repo), pakai data/snippets bila ada.
     repo_root = Path(__file__).resolve().parent.parent / "data" / "snippets"
     roots: list[Path] = []

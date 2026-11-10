@@ -31,11 +31,6 @@ DEVICE = "/dev/uinput"
 # Letak resminya di $XDG_RUNTIME_DIR (biasanya /run/user/<uid>/ydotool.sock).
 SOCKET_PATHS = ("/run/ydotoold.sock", "/tmp/ydotool.sock")
 
-COMMON_GROUPS = ("sudo", "admin", "wheel", "users", "plugdev", "input",
-                 "audio", "video", "docker", "adm", "staff", "lpadmin",
-                 "netdev", "bluetooth", "scanner", "cdrom", "lp", "dialout",
-                 "floppy", "games", "kvm", "render", "systemd-journal")
-
 MANUAL_COMMAND = (
     "sudo groupadd --system paste-teks\n"
     "echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"paste-teks\", "
@@ -115,21 +110,6 @@ def device_writable(*, access=None) -> bool:
         return bool(access(DEVICE, os.W_OK))
     except OSError:  # pragma: no cover
         return False
-
-
-def device_details(dev: str = DEVICE) -> tuple[int, int, str] | None:
-    """(uid, gid, mode) perangkat bila ada."""
-    from grp import getgrgid
-
-    try:
-        info = os.stat(dev)
-    except OSError:
-        return None
-    try:
-        group = getgrgid(info.st_gid).gr_name
-    except (KeyError, ImportError):
-        group = str(info.st_gid)
-    return info.st_uid, info.st_gid, group
 
 
 def socket_candidates() -> list[str]:
