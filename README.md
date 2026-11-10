@@ -164,8 +164,26 @@ Otomatis* hanya menyalin teks ke clipboard (status bar akan memberi tahu).
 Cek status kapan saja:
 
 ```bash
-paste-teks --check    # menampilkan status grup, izin /dev/uinput, dan ydotoold
+paste-teks --check    # status grup, izin /dev/uinput, ydotoold + langkah perbaikan
 ```
+
+Contoh keluaran saat akun sudah ditambahkan tetapi sesi belum dimulai ulang:
+
+```
+Izin paste otomatis (grup 'paste-teks', akun 'patrick'):
+  ❌ grup 'paste-teks': anggota di sistem — sesi belum memuat
+  ❌ tulis /dev/uinput: /dev/uinput tidak bisa ditulis — muncul setelah login ulang
+  ❌ daemon ydotoold: belum berjalan
+
+Langkah berikutnya:
+  1. Akun 'patrick' sudah menjadi anggota grup 'paste-teks' di sistem, tetapi
+     SESI INI belum memuatnya. Logout lalu login ulang (atau reboot) — wajib.
+  2. ydotoold belum berjalan. Jalankan `systemctl --user start ydotoold`.
+```
+
+Status dibedakan dengan cermat: **anggota di sistem** (`/etc/group`) vs
+**aktif di sesi berjalan** (dibaca dari `/proc/self/status`), sehingga saran
+"login ulang" hanya muncul bila memang itu masalahnya.
 
 Saat paket dihapus (`apt purge`), grup `paste-teks` ikut dihapus bila tidak ada
 anggota tersisa.
@@ -208,7 +226,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.1.0-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.1.1-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 
