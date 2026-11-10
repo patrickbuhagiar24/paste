@@ -116,6 +116,25 @@ enable_daemon() {
     fi
 }
 
+enable_shortcut() {
+    # Pintasan global Ctrl+Alt+V: gsettings harus dijalankan DI DALAM sesi
+    # pengguna (butuh D-Bus & dconf miliknya), bukan sebagai root.
+    _user="$1"
+    _uid="$(id -u "$_user")"
+    _runtime="${PASTE_TEKS_RUNTIME_BASE:-/run/user}/$_uid"
+    if [ ! -d "$_runtime" ]; then
+        say "pintasan Ctrl+Alt+V akan tersedia setelah '$_user' login."
+        return 0
+    fi
+    if command -v gsettings >/dev/null 2>&1; then
+        runuser -u "$_user" -- env XDG_RUNTIME_DIR="$_runtime" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$_runtime/bus" \
+            paste-teks --install-shortcut >/dev/null 2>&1 \
+            && say "pintasan global Ctrl+Alt+V dipasang." \
+            || say "pintasan global belum dipasang (bisa dari menu ⌨ Pintasan)."
+    fi
+}
+
 # ---------- aksi ----------
 
 case "${1:-}" in
@@ -151,6 +170,7 @@ case "${1:-}" in
                 fi
             fi
             enable_daemon "$USER_NAME"
+            enable_shortcut "$USER_NAME"
         done
 
         if ! id -nG "$(echo "$USERS" | head -n1)" 2>/dev/null \

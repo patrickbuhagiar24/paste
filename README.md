@@ -27,6 +27,41 @@ klik** (salin + `Ctrl+V` otomatis).
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE`, serta
   `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan.
 
+## Cara paste (pilih salah satu)
+
+### A. Pintasan global Ctrl+Alt+V — **paling andal**
+
+Tidak bergantung pada fokus jendela, jadi bebas dari masalah "Ctrl+V masuk ke
+aplikasi yang salah".
+
+1. Di Paste Teks, **klik sekali** berkas `.txt` yang ingin dipakai.
+2. **Klik kolom input di aplikasi tujuan** (browser, chat, editor).
+3. Tekan **Ctrl+Alt+V**.
+
+Teks tersalin dan langsung tertempel di tempat kursor Anda berada. Tidak ada
+hitung mundur, tidak ada jendela yang berpindah.
+
+Pasang/hapus pintasan:
+
+```bash
+paste-teks --install-shortcut     # pasang (biasanya sudah otomatis saat instal)
+paste-teks --remove-shortcut      # hapus
+```
+
+Atau lewat tombol **⌨ Pintasan** di aplikasi. Pintasan memakai *keybinding
+kustom GNOME* (`gsettings`), jadi tidak menambah dependensi apa pun.
+
+### B. Tombol di jendela
+
+1. Klik berkas `.txt` → pratinjau tampil.
+2. Klik **⚡ Paste ke Aplikasi Lain**, lalu **klik aplikasi tujuan** selama
+   hitungan mundur (status bar).
+3. Teks tertempel.
+
+Cara ini berfungsi, tetapi bisa terpengaruh window manager: di GNOME Wayland,
+fokus kadang kembali ke jendela Paste Teks saat hitungan selesai. Bila itu
+terjadi, gunakan cara A.
+
 ## Cara pakai
 
 1. Buka **Paste Teks** dari menu Aplikasi (atau jalankan `paste-teks`).
@@ -250,7 +285,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.2.2-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.3.0-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 
