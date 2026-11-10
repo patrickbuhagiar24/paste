@@ -1,3 +1,22 @@
+paste-teks (1.2.2-1) unstable; urgency=medium
+
+  * PERBAIKAN fokus (penyebab Ctrl+V tidak sampai): jendela hitung mundur
+    (Toplevel) dihapus. Saat jendela itu ditutup, GNOME mengembalikan
+    fokus ke jendela utama Paste Teks sehingga Ctrl+V masuk ke aplikasi
+    kita, bukan ke aplikasi tujuan. Hitungan kini hanya di status bar dan
+    jendela utama langsung di-lower.
+  * Clipboard kini DIVERIFIKASI: setelah menyalin, isinya dibaca kembali
+    dan dicocokkan. Bila tool melaporkan sukses tetapi isi clipboard
+    berbeda (mis. salinan tidak benar-benar masuk), status menandainya
+    dan Ctrl+V tidak dikirim ke isi yang salah.
+  * `--test-paste --ctrl-v` menguji jalur lengkap: salin -> verifikasi ->
+    kirim Ctrl+V, dengan teks uji unik agar mudah dikenali.
+  * `--test-paste` menjelaskan arti hasilnya (bila teks uji tidak muncul,
+    compositor mengabaikan perangkat uinput).
+  * Uji: 74 lolos.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.2.1-1) unstable; urgency=medium
 
   * PERBAIKAN: paste otomatis tidak pernah terkirim. ydotool >= 1.0 hanya

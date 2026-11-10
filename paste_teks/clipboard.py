@@ -66,6 +66,7 @@ class ClipboardResult:
     ok: bool
     tool: str = ""
     message: str = ""
+    verified: bool = False
 
 
 @dataclass
@@ -90,6 +91,24 @@ def available_tools() -> dict[str, bool]:
             for name in ("wl-copy", "xclip", "xsel", "ydotool", "xdotool")}
 
 
+def verify_clipboard(expected: str, runner: Runner = _default_runner,
+                     *, attempts: int = 5, delay: float = 0.05) -> bool:
+    """Pastikan clipboard benar-benar berisi ``expected``.
+
+    Tool clipboard di Wayland (wl-copy) mem-fork, jadi isi clipboard bisa
+    belum siap tepat setelah perintah kembali. Dicoba beberapa kali.
+    Mengembalikan False bila pembacaan tidak didukung sama sekali.
+    """
+    target = expected.rstrip("\n")
+    for attempt in range(attempts):
+        current = read_text_from_clipboard(runner=runner)
+        if current is not None and current.rstrip("\n") == target:
+            return True
+        if attempt + 1 < attempts and _sleep is not None:
+            _sleep(delay)
+    return False
+
+
 def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
     """Salin teks ke clipboard sistem. Kembalikan tool yang berhasil."""
     session = detect_session()
@@ -107,17 +126,34 @@ def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
             ("wl-copy", ["wl-copy"]),
         ]
     errors: list[str] = []
+    unverified = None
     for name, cmd in candidates:
         if shutil.which(cmd[0]) is None:
             continue
         try:
             proc = runner(cmd, input=text)
-            if proc.returncode == 0:
-                return ClipboardResult(ok=True, tool=name,
+            if proc.returncode != 0:
+                detail = " ".join(filter(None, [
+                    (getattr(proc, "stderr", "") or "").strip(),
+                    (getattr(proc, "stdout", "") or "").strip()]))
+                errors.append(f"{name}: {detail or proc.returncode}")
+                continue
+            # Exit code 0 belum tentu berarti clipboard benar-benar terisi
+            # (mis. wl-copy tanpa Wayland yang valid). Baca kembali isinya.
+            if verify_clipboard(text, runner=runner):
+                return ClipboardResult(ok=True, tool=name, verified=True,
                                        message=f"Teks disalin dengan {name}.")
-            errors.append(f"{name}: {proc.stderr.strip() or proc.returncode}")
+            if unverified is None:
+                unverified = name
+            errors.append(f"{name}: tersalin tetapi isi clipboard tidak cocok")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
+    if unverified is not None:
+        # Salinan "berhasil" menurut tool walau verifikasi tak bisa dilakukan.
+        return ClipboardResult(
+            ok=True, tool=unverified, verified=False,
+            message=(f"Teks disalin dengan {unverified} (belum terverifikasi — "
+                     "pasang wl-paste/xclip untuk pemeriksaan)."))
     detail = "; ".join(errors) if errors else "tidak ada tool clipboard ditemukan"
     return ClipboardResult(
         ok=False, tool="",
