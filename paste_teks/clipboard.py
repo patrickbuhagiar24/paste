@@ -123,4 +123,5 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
         ok=False, tool="",
         message=(f"Paste otomatis tidak tersedia ({detail}). "
                  "Teks sudah disalin — tekan Ctrl+V di aplikasi tujuan. "
-                 "Untuk Wayland pasang ydotool dan tambahkan pengguna ke grup input."))
+                 "Untuk Wayland pasang ydotool dan aktifkan izin /dev/uinput "
+                 "lewat menu \"Izin Paste Otomatis\" di aplikasi."))

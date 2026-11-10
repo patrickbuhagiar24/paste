@@ -15,6 +15,8 @@ mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" \
   "$STAGE/usr/share/paste-teks" \
   "$STAGE/usr/share/applications" \
   "$STAGE/usr/share/icons/hicolor/scalable/apps" \
+  "$STAGE/usr/lib/paste-teks" \
+  "$STAGE/usr/lib/udev/rules.d" \
   "$STAGE/usr/share/doc/$PKG"
 
 install -m 755 bin/paste-teks "$STAGE/usr/bin/paste-teks"
@@ -26,6 +28,12 @@ install -m 644 usr/share/applications/paste-teks.desktop "$STAGE/usr/share/appli
 install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/"
 install -m 644 README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
+
+# Helper root (dipanggil lewat pkexec) + udev rule grup paste-teks.
+install -m 755 usr/lib/paste-teks/paste-teks-uinput-group "$STAGE/usr/lib/paste-teks/"
+install -m 644 usr/lib/udev/rules.d/70-paste-teks-uinput.rules "$STAGE/usr/lib/udev/rules.d/"
+install -m 755 debian/postinst "$STAGE/DEBIAN/postinst"
+install -m 755 debian/postrm "$STAGE/DEBIAN/postrm"
 gzip -9 -n "$STAGE/usr/share/doc/$PKG/README.md" 2>/dev/null || true
 
 cat > "$STAGE/DEBIAN/control" <<EOF

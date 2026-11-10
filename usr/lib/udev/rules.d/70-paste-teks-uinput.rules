@@ -1,0 +1,7 @@
+# Izin sempit untuk paste otomatis Paste Teks (ydotool).
+#
+# /dev/uinput dimiliki root:input dengan mode 0660, sehingga pengguna biasa
+# tidak bisa memakainya. Aturan ini memindahkan grup perangkat ke grup khusus
+# 'paste-teks' (bukan 'input'), sehingga anggota grup hanya mendapat akses ke
+# perangkat virtual uinput — bukan ke seluruh keyboard/mouse Anda.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"

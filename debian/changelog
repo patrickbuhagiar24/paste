@@ -1,3 +1,17 @@
+paste-teks (1.1.0-1) unstable; urgency=medium
+
+  * Izin paste otomatis tanpa grup 'input': grup sistem 'paste-teks' +
+    udev rule yang hanya membuka /dev/uinput.
+  * postinst mendeteksi akun pemanggil (SUDO_USER -> sesi logind -> akun
+    biasa tunggal) dan menambahkannya ke grup; tidak pernah menebak
+    root; mencetak instruksi bila ragu.
+  * Tombol "Izin Paste Otomatis" di aplikasi + dialog perbaikan otomatis
+    via pkexec (helper /usr/lib/paste-teks/paste-teks-uinput-group).
+  * `paste-teks --check` kini menampilkan status grup & /dev/uinput.
+  * postrm menghapus grup paste-teks bila tidak ada anggota tersisa.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.0.3-1) unstable; urgency=medium
 
   * Perbaikan paste otomatis: keycode ydotool 42 (Shift) menjadi 29 (Ctrl)
