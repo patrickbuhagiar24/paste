@@ -2,8 +2,9 @@
 
 Urutan prioritas disesuaikan Ubuntu 26.10 (GNOME, Wayland default):
 
-  Salin : wl-copy (Wayland) -> xclip -> xsel -> Tk clipboard (fallback GUI)
-  Paste : ydotool (Wayland) -> xdotool (X11) -> salin saja + ingatkan Ctrl+V
+  Salin  : wl-copy (Wayland) -> xclip -> xsel
+  Verifikasi : wl-paste (Wayland) -> xclip -o -> xsel -o  (maks 0,3 detik)
+  Paste  : ydotool (Wayland) -> xdotool (X11)
 
 Semua pemanggilan proses lewat `runner` yang bisa diganti saat pengujian,
 sehingga modul ini bisa diuji tanpa clipboard asli.

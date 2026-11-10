@@ -72,3 +72,73 @@ def test_modules_import_cleanly_without_display(monkeypatch):
     for name in ("app", "clipboard", "snippets", "uinput"):
         importlib.import_module(f"paste_teks.{name}")
     assert paste_teks.__version__
+
+
+# --- Konsistensi metadata paket -------------------------------------------
+ROOT = PKG.parent
+
+
+def _control_recommends(text: str) -> list[str]:
+    for line in text.splitlines():
+        if line.startswith("Recommends:"):
+            return [p.strip() for p in line.split(":", 1)[1].split(",") if p.strip()]
+    return []
+
+
+def test_build_deb_recommends_matches_debian_control():
+    """Dua sumber Recommends (control & build-deb.sh) tidak boleh menyimpang."""
+    control = _control_recommends((ROOT / "debian" / "control").read_text())
+    script = _control_recommends((ROOT / "scripts" / "build-deb.sh").read_text())
+    assert control == script, f"control={control} build-deb={script}"
+
+
+def test_reader_tools_declared_in_recommends():
+    """Setiap tool pembaca/pembuat clipboard yang dipakai kode harus diusulkan
+    sebagai paket, supaya pengguna tidak menemui fitur mati diam-diam."""
+    from paste_teks.clipboard import READER_TOOLS
+
+    recommends = _control_recommends((ROOT / "debian" / "control").read_text())
+    # nama perintah -> paket Debian
+    package_of = {
+        "wl-paste": "wl-clipboard", "wl-copy": "wl-clipboard",
+        "xclip": "xclip", "xsel": "xsel",
+        "xdotool": "xdotool", "ydotool": "ydotool",
+    }
+    needed = {package_of[t] for t in READER_TOOLS if t in package_of}
+    needed |= {"wl-clipboard", "ydotool"}  # salin Wayland + paste Wayland
+    missing = needed - set(recommends)
+    assert not missing, f"paket belum ada di Recommends: {sorted(missing)}"
+
+
+def test_docs_do_not_promise_removed_tk_clipboard():
+    """Fallback clipboard Tk dihapus di v1.4.0; dokumen tidak boleh menjanjikannya."""
+    for name in ("README.md", "debian/control"):
+        text = (ROOT / name).read_text().lower()
+        assert "fallback clipboard" not in text, f"{name} masih menjanjikan fallback clipboard"
+
+
+def test_package_description_matches_between_sources():
+    """build-deb.sh menulis deskripsi sendiri; klaimnya tidak boleh menyimpang
+    dari debian/control (regresi v1.4.2: 'fallback clipboard internal' masih
+    tertinggal di .deb meski sudah dihapus dari control)."""
+    def description_lines(text: str) -> list[str]:
+        lines, capture = [], False
+        for line in text.splitlines():
+            if line.startswith("Description:"):
+                capture = True
+                continue
+            if capture:
+                if line.startswith((" ", "\t")) or not line.strip():
+                    if line.strip():
+                        lines.append(line.strip())
+                else:
+                    break
+        return lines
+
+    control = description_lines((ROOT / "debian" / "control").read_text())
+    script = description_lines((ROOT / "scripts" / "build-deb.sh").read_text())
+    assert control, "deskripsi control tidak terbaca"
+    assert control == script, (
+        "deskripsi di .deb (build-deb.sh) berbeda dari debian/control:\n"
+        f"control   = {control}\nbuild-deb = {script}"
+    )

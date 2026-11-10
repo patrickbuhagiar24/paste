@@ -22,7 +22,8 @@ klik** (salin + `Ctrl+V` otomatis).
   sesi aktif dan menyalakan `ydotoold` otomatis; tanpa grup `input` dan tanpa
   perlu logout.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
-  via `ydotool`/`xdotool`, fallback clipboard internal Tk bila tool tidak ada.
+  via `ydotool`/`xdotool`; tanpa tool clipboard, aplikasi memberi pesan
+  jelas alih-alih diam.
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE`, serta
   `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan.
 
