@@ -1,0 +1,61 @@
+#!/bin/sh
+# Tambahkan satu pengguna ke grup sistem 'paste-teks' agar bisa menulis
+# /dev/uinput untuk paste otomatis (ydotool).
+#
+# Dipanggil aplikasi melalui pkexec (GUI prompt polkit):
+#     pkexec /usr/lib/paste-teks/paste-teks-uinput-group <nama-pengguna>
+#
+# Keamanan: skrip ini hanya menerima SATU argumen berupa nama pengguna yang
+# benar-benar ada di sistem, dan TIDAK pernah menjalankan perintah dari
+# masukan pengguna (tanpa eval). Karena itu ia tidak perlu memvalidasi
+# identitas pemanggil — argumen hanya bisa menambahkan akun ke grup khusus
+# yang haknya terbatas pada perangkat /dev/uinput.
+set -eu
+
+GROUP="paste-teks"
+
+fail() {
+    echo "paste-teks: $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 1 ] || fail "pemakaian: $0 <nama-pengguna>"
+
+USER_NAME="$1"
+
+case "$USER_NAME" in
+    -*) fail "nama pengguna tidak valid" ;;
+esac
+printf '%s' "$USER_NAME" | grep -Eq '^[a-z_][a-z0-9_.-]{0,31}$' \
+    || fail "nama pengguna tidak valid: $USER_NAME"
+[ "$USER_NAME" != "root" ] || fail "root tidak perlu ditambahkan"
+id -u "$USER_NAME" >/dev/null 2>&1 || fail "pengguna tidak ditemukan: $USER_NAME"
+[ "$(id -u)" -eq 0 ] || fail "harus dijalankan sebagai root (lewat pkexec)"
+
+# Akun sistem (mis. daemon) tidak boleh diberi akses perangkat input.
+UID_NUM="$(id -u "$USER_NAME")"
+[ "$UID_NUM" -ge 1000 ] || [ "$UID_NUM" -eq 0 ] \
+    || fail "hanya akun pengguna biasa (uid >= 1000) yang didukung"
+
+if ! getent group "$GROUP" >/dev/null 2>&1; then
+    groupadd --system "$GROUP" || fail "gagal membuat grup $GROUP"
+fi
+
+if id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx "$GROUP"; then
+    echo "Akun '$USER_NAME' sudah menjadi anggota grup '$GROUP'."
+else
+    usermod -aG "$GROUP" "$USER_NAME" \
+        || fail "gagal menambahkan '$USER_NAME' ke grup '$GROUP'"
+    echo "Akun '$USER_NAME' ditambahkan ke grup '$GROUP'."
+fi
+
+# Pastikan izin perangkat langsung berlaku tanpa menunggu reboot.
+if [ -e /dev/uinput ] && command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules >/dev/null 2>&1 || true
+    udevadm trigger --sysname-match=uinput >/dev/null 2>&1 || true
+    chgrp "$GROUP" /dev/uinput >/dev/null 2>&1 || true
+    chmod 0660 /dev/uinput >/dev/null 2>&1 || true
+fi
+
+echo "Selesai. Logout lalu login ulang agar grup baru aktif di sesi Anda."
+exit 0

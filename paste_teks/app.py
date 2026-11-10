@@ -12,10 +12,11 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from pathlib import Path
 
-from . import __version__
+from . import __version__, uinput
 from .clipboard import copy_text, simulate_paste
 from .snippets import (
     Node,
@@ -194,6 +195,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
         ttk.Checkbutton(opts, text="Selalu di atas", variable=self.top_var,
                         command=self._apply_settings).pack(side="left")
+        ttk.Button(opts, text="🔐 Izin Paste Otomatis",
+                   command=self.show_permission_info).pack(side="right")
 
         # Status bar
         self.status_var = tk.StringVar(value="Siap.")
@@ -412,10 +415,79 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             self.status_var.set(f"⚡ {result.message}")
         else:
             self.status_var.set(f"📋 Teks sudah disalin. {result.message}")
-            messagebox.showinfo(
-                "Paste otomatis tidak tersedia",
-                f"{result.message}\n\nTeks sudah ada di clipboard — "
+            self._show_paste_failure(result.message)
+
+    # ---------- izin paste otomatis (grup paste-teks) ----------
+    def _show_paste_failure(self, message: str) -> None:
+        """Dialog kegagalan + tombol untuk memperbaiki izin /dev/uinput."""
+        st = uinput.status()
+        text = (f"{message}\n\nTeks sudah ada di clipboard — "
                 "tekan Ctrl+V di aplikasi tujuan.")
+        if st.ready:
+            messagebox.showinfo("Paste otomatis tidak tersedia", text)
+            return
+        text += "\n\nDiagnosis:\n" + "\n".join(st.summary()) + \
+            "\n\n" + uinput.explain(st)
+        if uinput.can_self_enable(st):
+            if messagebox.askyesno(
+                    "Aktifkan paste otomatis?",
+                    text + "\n\nAktifkan sekarang? Anda akan diminta "
+                    "kata sandi administrator."):
+                self.enable_auto_paste()
+        else:
+            messagebox.showinfo("Paste otomatis tidak tersedia", text)
+
+    def enable_auto_paste(self) -> None:
+        """Minta akses /dev/uinput via pkexec + helper (grup paste-teks)."""
+        st = uinput.status()
+        if st.device_writable:
+            messagebox.showinfo("Paste otomatis", "Izin sudah aktif.")
+            return
+        if not uinput.can_self_enable(st):
+            messagebox.showinfo(
+                "Aktivasi manual diperlukan",
+                "Tidak dapat meminta hak administrator dari aplikasi ini.\n\n"
+                "Jalankan perintah berikut di terminal:\n\n"
+                + uinput.MANUAL_COMMAND)
+            return
+        self.status_var.set("Meminta hak administrator...")
+        threading.Thread(target=self._enable_worker, args=(st.user,),
+                         daemon=True).start()
+
+    def _enable_worker(self, user: str) -> None:
+        code, out, err = uinput.enable_for_user(user)
+        self.after(0, self._enable_done, user, code, out, err)
+
+    def _enable_done(self, user: str, code: int, out: str, err: str) -> None:
+        if code == 0:
+            detail = out or "Akun ditambahkan ke grup 'paste-teks'."
+            messagebox.showinfo(
+                "Berhasil — satu langkah lagi",
+                f"{detail}\n\nLogout lalu login ulang (atau reboot) agar grup "
+                "baru aktif. Setelah itu paste otomatis akan bekerja.")
+            self.status_var.set("✅ Izin diaktifkan — logout & login ulang.")
+            return
+        if code in (126, 127):
+            reason = "Permintaan kata sandi dibatalkan."
+        else:
+            reason = (err or out or f"kode keluar {code}")
+        self.status_var.set("Aktivasi izin gagal.")
+        messagebox.showwarning(
+            "Aktivasi gagal",
+            f"{reason}\n\nAlternatif manual di terminal:\n\n"
+            + uinput.MANUAL_COMMAND)
+
+    def show_permission_info(self) -> None:
+        st = uinput.status()
+        text = ("Status paste otomatis\n\n"
+                + "\n".join(st.summary())
+                + "\n\n" + uinput.explain(st))
+        if uinput.can_self_enable(st):
+            if messagebox.askyesno("Paste otomatis",
+                                   text + "\n\nAktifkan sekarang?"):
+                self.enable_auto_paste()
+        else:
+            messagebox.showinfo("Paste otomatis", text)
 
     # ---------- CRUD ----------
     def _target_dir(self) -> Path:
@@ -608,6 +680,14 @@ def run_check(roots: list[Path]) -> int:
     tools = available_tools()
     print("Tool clipboard/paste: "
           + ", ".join(f"{k}={'ada' if v else 'tidak ada'}" for k, v in tools.items()))
+    try:
+        st = uinput.status()
+        print(f"Izin paste otomatis (grup '{uinput.GROUP}', akun '{st.user}'):")
+        for line in st.summary():
+            print(f"  {line}")
+        print(f"  {uinput.explain(st)}")
+    except Exception as exc:  # pragma: no cover - jangan gagalkan --check
+        print(f"Izin paste otomatis: tidak dapat diperiksa ({exc})")
     print("Folder snippets:")
     for r in roots:
         print(f"  - {r} ({'ada' if r.is_dir() else 'belum ada'})")

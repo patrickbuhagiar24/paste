@@ -1,0 +1,23 @@
+#!/bin/sh
+# postrm Paste Teks — bersihkan jejak konfigurasi sistem saat paket dihapus.
+set -eu
+
+GROUP="paste-teks"
+
+case "${1:-}" in
+    purge|remove)
+        if getent group "$GROUP" >/dev/null 2>&1; then
+            # Hapus grup hanya bila tidak ada anggota tersisa; anggota yang
+            # masih ada berarti akun pengguna belum logout / masih dipakai.
+            MEMBERS="$(getent group "$GROUP" | cut -d: -f4)"
+            if [ -z "$MEMBERS" ]; then
+                groupdel "$GROUP" >/dev/null 2>&1 || true
+            else
+                echo "paste-teks: grup '$GROUP' dipertahankan (anggota: $MEMBERS)."
+                echo "paste-teks: hapus manual dengan: sudo groupdel $GROUP"
+            fi
+        fi
+        ;;
+esac
+
+exit 0

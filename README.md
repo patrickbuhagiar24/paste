@@ -19,6 +19,9 @@ klik** (salin + `Ctrl+V` otomatis).
   hapus, buka folder di Nautilus. Perubahan tersimpan di folder pengguna.
 - ⚙️ **Pengaturan** — jeda sebelum paste otomatis (0,5–5 detik), mode
   double-click, dan *selalu di atas*. Tersimpan di `~/.config/paste-teks/`.
+- 🔐 **Izin otomatis** — paket mengatur grup sempit `paste-teks` + udev rule
+  agar `/dev/uinput` bisa dipakai tanpa masuk grup `input`. Bisa juga
+  diaktifkan dari tombol di aplikasi.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
   via `ydotool`/`xdotool`, fallback clipboard internal Tk bila tool tidak ada.
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE` untuk skrip.
@@ -122,14 +125,50 @@ Dependensi: `python3 (>= 3.10)`, `python3-tk`. Direkomendasikan:
 
 - Clipboard Wayland memakai `wl-copy` (dari `wl-clipboard`); X11 memakai `xclip`.
 - Paste otomatis di Wayland memakai `ydotool`, yang butuh akses `/dev/uinput`.
-  Bila paste otomatis gagal, tambahkan pengguna ke grup `input` lalu login ulang:
+  **Akses ini diatur otomatis saat paket dipasang** — lihat
+  [Izin `/dev/uinput`](#izin-devuinput-grup-paste-teks) di bawah.
+- Di X11, `xdotool` tidak butuh izin khusus.
+
+## Izin `/dev/uinput` (grup `paste-teks`)
+
+`/dev/uinput` dimiliki `root:input` dengan mode `0660`, sehingga pengguna biasa
+tidak bisa memakainya. Paste Teks **tidak** memasukkan Anda ke grup `input`
+(grup itu memberi akses ke *semua* perangkat input — setara keylogger).
+Sebagai gantinya, paket membuat grup sistem sempit `paste-teks` plus udev rule
+yang hanya membuka `/dev/uinput`:
+
+```
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"
+```
+
+Tiga cara mengaktifkannya:
+
+| Cara | Kapan dipakai |
+|---|---|
+| **Otomatis saat `apt install`/`upgrade`** | `postinst` menebak akun Anda dari `SUDO_USER`, lalu sesi grafis aktif (`loginctl`), lalu akun biasa tunggal — lalu menambahkannya ke grup. |
+| **Tombol di aplikasi: 🔐 Izin Paste Otomatis** | Kapan saja, termasuk bila pemasangan lewat GNOME Software. Muncul prompt kata sandi (`pkexec`). |
+| **Terminal** (manual) | Bila tidak ada helper polkit: |
 
   ```bash
-  sudo usermod -aG input "$USER"
+  sudo groupadd --system paste-teks
+  echo 'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"' \
+    | sudo tee /usr/lib/udev/rules.d/70-paste-teks-uinput.rules
+  sudo usermod -aG paste-teks "$USER"
+  sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput
   ```
 
-  Teks tetap tersalin — cukup tekan `Ctrl+V` manual di aplikasi tujuan.
-- Di X11, `xdotool` tidak butuh izin khusus.
+⚠️ **Logout lalu login ulang** (atau reboot) setelah grup berubah — keanggotaan
+grup hanya terbaca saat sesi baru dimulai. Sampai saat itu tombol *Paste
+Otomatis* hanya menyalin teks ke clipboard (status bar akan memberi tahu).
+
+Cek status kapan saja:
+
+```bash
+paste-teks --check    # menampilkan status grup, izin /dev/uinput, dan ydotoold
+```
+
+Saat paket dihapus (`apt purge`), grup `paste-teks` ikut dihapus bila tidak ada
+anggota tersisa.
 
 ## Struktur repo
 
@@ -138,11 +177,15 @@ paste_teks/          Kode Python (GUI + logika + clipboard)
   app.py             GUI Tkinter hierarki + CLI
   snippets.py        Pindai/kelola pohon berkas .txt (tanpa GUI, mudah diuji)
   clipboard.py       Salin (wl-copy/xclip/xsel) + paste otomatis (ydotool/xdotool)
+  uinput.py          Deteksi izin /dev/uinput + aktivasi grup 'paste-teks'
+usr/lib/paste-teks/  Helper root (dipanggil via pkexec untuk menambah grup)
+usr/lib/udev/rules.d/  udev rule grup 'paste-teks' untuk /dev/uinput
+debian/postinst      Deteksi akun & penambahan grup otomatis saat instalasi
 data/snippets/       Contoh teks bawaan per kategori
 debian/              Kemasan Debian (.deb)
 scripts/             build-deb.sh, setup-apt-repo.sh, install.sh
 apt-repo/            Hasil repo APT + contoh sources.list
-tests/               Uji pytest (snippets + clipboard)
+tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 .github/workflows/   CI: uji → bangun .deb → terbitkan repo APT ke gh-pages
 ```
 
@@ -154,15 +197,18 @@ tests/               Uji pytest (snippets + clipboard)
   paste-teks           # jalankan langsung — traceback tampil di terminal
   cat ~/.config/paste-teks/error.log   # log error terakhir
   ```
-- **Paste otomatis tidak bekerja (Wayland)**: tambahkan pengguna ke grup `input`
-  lalu login ulang: `sudo usermod -aG input "$USER"`. Teks tetap tersalin —
-  tekan `Ctrl+V` manual di aplikasi tujuan.
+- **Paste otomatis tidak bekerja (Wayland)**: klik **🔐 Izin Paste Otomatis** di
+  aplikasi, lalu logout & login ulang. Teks tetap tersalin sebelum itu — cukup
+  tekan `Ctrl+V` manual di aplikasi tujuan. Detail di
+  [Izin `/dev/uinput`](#izin-devuinput-grup-paste-teks).
+- **Pesan "ydotoold belum berjalan"**: jalankan `systemctl --user start ydotoold`
+  (ydotool versi baru memakai daemon).
 
 ## Uji & build
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.0.0-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.1.0-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 

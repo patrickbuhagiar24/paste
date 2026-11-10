@@ -12,6 +12,10 @@ override_dh_auto_install:
 	install -m 644 usr/share/applications/paste-teks.desktop debian/paste-teks/usr/share/applications/
 	install -d debian/paste-teks/usr/share/icons/hicolor/scalable/apps
 	install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg debian/paste-teks/usr/share/icons/hicolor/scalable/apps/
+	install -d debian/paste-teks/usr/lib/paste-teks
+	install -m 755 usr/lib/paste-teks/paste-teks-uinput-group debian/paste-teks/usr/lib/paste-teks/
+	install -d debian/paste-teks/usr/lib/udev/rules.d
+	install -m 644 usr/lib/udev/rules.d/70-paste-teks-uinput.rules debian/paste-teks/usr/lib/udev/rules.d/
 	install -d debian/paste-teks/usr/share/doc/paste-teks
 	install -m 644 README.md debian/paste-teks/usr/share/doc/paste-teks/README.md
 	install -m 644 LICENSE debian/paste-teks/usr/share/doc/paste-teks/copyright
