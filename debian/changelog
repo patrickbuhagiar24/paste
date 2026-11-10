@@ -1,3 +1,25 @@
+paste-teks (1.4.1-1) unstable; urgency=medium
+
+  * PERBAIKAN: klik terasa macet / paste tidak pernah terkirim bila
+    penyalinan lambat atau gagal.
+    - Jendela kini DILEPAS (withdraw) lebih dulu, sebelum menyalin.
+      Sebelumnya withdraw baru terjadi setelah salinan berhasil; bila
+      penyalinan lambat atau dianggap gagal, jendela tetap memegang
+      fokus sehingga Ctrl+V tidak pernah terkirim (log berhenti di
+      "[paste] mulai").
+    - Salinan gagal sekarang selalu memunculkan jendela kembali
+      (deiconify + lift) disertai dialog, tidak lagi meninggalkan
+      aplikasi dalam keadaan tanpa jendela.
+  * PERBAIKAN: verifikasi clipboard tidak lagi memblokir sampai 25 detik.
+    Pembacaan clipboard (wl-paste/xclip -o) dibatasi 0,3 detik per
+    percobaan dan verifikasi maksimum 2 percobaan (terukur: 7 detik ->
+    sekitar 1 detik pada kondisi terburuk).
+  * Log mencatat durasi penyalinan dalam milidetik dan tahap menunggu
+    fokus, mempermudah diagnosis.
+  * Uji: 81 lolos.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.4.0-1) unstable; urgency=medium
 
   * PERBAIKAN INTI "paste tidak berfungsi": jendela kini DILEPAS

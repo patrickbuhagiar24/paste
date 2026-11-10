@@ -24,6 +24,14 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 # sampai timeout dan melaporkan GAGAL padahal clipboard sudah terisi.
 _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 
+# Batas waktu untuk MEMBACA clipboard. Tool pembaca dapat menunggu seleksi
+# muncul; bila tidak ada, jangan sampai menahan GUI. Dulu nilai ini mengikuti
+# timeout umum (5 s) sehingga verifikasi 5 percobaan bisa mencapai ~25 detik.
+READ_TIMEOUT = 0.3
+
+# Tool pembaca clipboard (dipakai untuk verifikasi & diagnosis).
+READER_TOOLS = ("wl-paste", "xclip", "xsel")
+
 
 def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     cmd = args[0] if args else kwargs.get("args")
@@ -58,6 +66,11 @@ def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
             code = 0  # masih memegang seleksi — normal, bukan gagal
         return subprocess.CompletedProcess(cmd, code, "", "")
     kwargs.setdefault("capture_output", True)
+    if tool in READER_TOOLS:
+        # Pembacaan clipboard tidak boleh menggantung; kegagalan cepat lebih
+        # baik daripada GUI tampak membeku.
+        if kwargs.get("timeout", 5) > READ_TIMEOUT:
+            kwargs["timeout"] = READ_TIMEOUT
     return subprocess.run(*args, **kwargs)
 
 
@@ -92,12 +105,16 @@ def available_tools() -> dict[str, bool]:
 
 
 def verify_clipboard(expected: str, runner: Runner = _default_runner,
-                     *, attempts: int = 5, delay: float = 0.05) -> bool:
+                     *, attempts: int = 2, delay: float = 0.05) -> bool:
     """Pastikan clipboard benar-benar berisi ``expected``.
 
     Tool clipboard di Wayland (wl-copy) mem-fork, jadi isi clipboard bisa
     belum siap tepat setelah perintah kembali. Dicoba beberapa kali.
     Mengembalikan False bila pembacaan tidak didukung sama sekali.
+
+    Seluruh pemeriksaan dibatasi ±0,5 detik: verifikasi adalah pelengkap,
+    bukan tujuan. Sebelumnya 5 percobaan × timeout 5 detik membuat satu
+    klik terasa seperti hang (terukur 7 detik di mesin pengguna).
     """
     target = expected.rstrip("\n")
     for attempt in range(attempts):

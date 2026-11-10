@@ -263,10 +263,10 @@ def test_verify_clipboard_retries_then_succeeds(monkeypatch):
 
     def runner(cmd, **kw):
         state["n"] += 1
-        return _Proc(0, out="lama" if state["n"] < 3 else "baru")
+        return _Proc(0, out="lama" if state["n"] < 2 else "baru")
 
     assert clipboard.verify_clipboard("baru", runner=runner) is True
-    assert state["n"] == 3
+    assert state["n"] == 2
 
 
 def test_verify_clipboard_mismatch(monkeypatch):
