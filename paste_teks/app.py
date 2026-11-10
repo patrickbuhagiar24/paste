@@ -360,43 +360,29 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.after(0, self._start_countdown, text, delay, result.message)
 
     def _start_countdown(self, text: str, delay: float, copy_msg: str) -> None:
-        """Jendela hitung mundur kecil (selalu di atas) agar terlihat."""
+        """Hitung mundur TANPA jendela tambahan.
+
+        Jendela hitung mundur (Toplevel) ternyata merebut fokus: ketika ia
+        ditutup, GNOME mengembalikan fokus ke jendela utama Paste Teks —
+        sehingga Ctrl+V masuk ke aplikasi kita, bukan ke aplikasi tujuan.
+        Karena itu hitungan ditampilkan di status bar saja, dan jendela
+        utama diturunkan (lower) supaya aplikasi tujuan memegang fokus.
+        """
         self.status_var.set(f"✅ {copy_msg}")
-        win = tk.Toplevel(self)
-        win.title("Paste otomatis")
-        win.attributes("-topmost", True)
-        win.resizable(False, False)
-        label = ttk.Label(win, padding=12)
-        label.pack()
-        cancelled = False
-
-        def cancel() -> None:
-            nonlocal cancelled
-            cancelled = True
-            win.destroy()
-            self.status_var.set("Dibatalkan. Teks sudah disalin — tekan Ctrl+V.")
-
-        ttk.Button(win, text="Batal", command=cancel).pack(pady=(0, 8))
-        win.protocol("WM_DELETE_WINDOW", cancel)
-        win.update_idletasks()
-        x = (win.winfo_screenwidth() - win.winfo_width()) // 2
-        y = (win.winfo_screenheight() - win.winfo_height()) // 3
-        win.geometry(f"+{x}+{y}")
-
+        self.lower()
         remaining = [delay]
+        self._countdown_id = None
 
         def tick() -> None:
-            if cancelled or not win.winfo_exists():
-                return
             if remaining[0] <= 0:
-                win.destroy()
+                self._countdown_id = None
                 self._finish_paste()
                 return
-            label.configure(
-                text=f"Paste dalam {remaining[0]:.1f} detik...\n"
-                     "Klik aplikasi tujuan sekarang (Ctrl+V akan terkirim).")
+            self.status_var.set(
+                f"Paste otomatis dalam {remaining[0]:.1f} detik — klik "
+                "aplikasi tujuan sekarang.")
             remaining[0] -= 0.1
-            win.after(100, tick)
+            self._countdown_id = self.after(100, tick)
 
         tick()
 
@@ -723,7 +709,7 @@ def run_test_paste(ctrl_v: bool = False) -> int:
     daemon, dan ydotool sudah benar — masalahnya murni di clipboard atau
     pada penekanan Ctrl+V.
     """
-    from .clipboard import detect_session, ensure_ydotoold, simulate_paste, type_text
+    from .clipboard import detect_session, ensure_ydotoold, type_text
 
     print(f"Tes paste — sesi grafis: {detect_session()}")
     if ctrl_v:
@@ -734,28 +720,59 @@ def run_test_paste(ctrl_v: bool = False) -> int:
     time.sleep(3)
 
     if ctrl_v:
-        result = simulate_paste()
-        if not result.ok:
-            ensure_ydotoold()
-            result = simulate_paste()
-    else:
-        result = type_text(TEST_PASTE_TEXT)
-        if not result.ok:
-            print("Gagal mengetik; menyalakan ydotoold lalu mengulang ...")
-            ensure_ydotoold()
-            result = type_text(TEST_PASTE_TEXT)
+        return _full_paste_test()
 
+    result = type_text(TEST_PASTE_TEXT)
+    if not result.ok:
+        print("Gagal mengetik; menyalakan ydotoold lalu mengulang ...")
+        ensure_ydotoold()
+        result = type_text(TEST_PASTE_TEXT)
     if not result.ok:
         print(f"❌ {result.message}")
-        print("Jalankan `paste-teks --check` lalu periksa "
-              f"{ERROR_LOG}.")
+        print(f"Periksa {ERROR_LOG} dan `paste-teks --check`.")
         return 2
     print(f"✅ {result.message}")
-    if ctrl_v:
-        print("Bila teks dari clipboard tertempel, semuanya berfungsi.")
+    print("Bila teks uji MUNCUL di jendela tujuan: ydotool + izin + daemon "
+          "benar.")
+    print("Bila TIDAK muncul: compositor mengabaikan perangkat uinput "
+          "(cek `lsinput`/log sistem).")
+    print("Uji jalur lengkap (clipboard + Ctrl+V): "
+          "paste-teks --test-paste --ctrl-v")
+    return 0
+
+
+def _full_paste_test() -> int:
+    """Uji jalur paste sebenarnya: salin -> verifikasi -> Ctrl+V."""
+    from .clipboard import (copy_text, ensure_ydotoold,
+                            read_text_from_clipboard, simulate_paste)
+
+    probe = f"{TEST_PASTE_TEXT}{os.getpid()}"
+    print(f"Menyalin teks uji {probe!r} ...")
+    copied = copy_text(probe)
+    print(("✅ " if copied.ok else "❌ ") + copied.message)
+    back = read_text_from_clipboard()
+    if back is None:
+        print("⚠️ clipboard tidak bisa dibaca kembali — verifikasi dilewati.")
+    elif back.rstrip("\n") == probe:
+        print("✅ isi clipboard terverifikasi")
     else:
-        print("Bila teks uji muncul di jendela tujuan, ydotool berfungsi.")
-        print("Uji Ctrl+V dengan: paste-teks --test-paste --ctrl-v")
+        print(f"❌ isi clipboard berbeda: {back.strip()[:60]!r}")
+        print("   Salinan tidak benar-benar masuk; Ctrl+V akan menempelkan "
+              "isi lama.")
+        return 2
+
+    print("Mengirim Ctrl+V dalam 1 detik — klik jendela tujuan SEKARANG.")
+    time.sleep(1)
+    paste = simulate_paste()
+    if not paste.ok:
+        ensure_ydotoold()
+        paste = simulate_paste()
+    if not paste.ok:
+        print(f"❌ {paste.message}")
+        return 2
+    print(f"✅ {paste.message}")
+    print(f"Bila muncul {probe!r} di jendela tujuan: paste otomatis berfungsi "
+          "sepenuhnya.")
     return 0
 
 

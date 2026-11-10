@@ -240,3 +240,80 @@ def test_read_text_from_clipboard_wayland(monkeypatch):
 def test_read_text_from_clipboard_unavailable(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: None)
     assert clipboard.read_text_from_clipboard() is None
+
+
+def test_verify_clipboard_matches(monkeypatch):
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    assert clipboard.verify_clipboard(
+        "halo", runner=lambda cmd, **kw: _Proc(0, out="halo")) is True
+
+
+def test_verify_clipboard_trailing_newline(monkeypatch):
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    assert clipboard.verify_clipboard(
+        "halo", runner=lambda cmd, **kw: _Proc(0, out="halo\n")) is True
+
+
+def test_verify_clipboard_retries_then_succeeds(monkeypatch):
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    state = {"n": 0}
+
+    def runner(cmd, **kw):
+        state["n"] += 1
+        return _Proc(0, out="lama" if state["n"] < 3 else "baru")
+
+    assert clipboard.verify_clipboard("baru", runner=runner) is True
+    assert state["n"] == 3
+
+
+def test_verify_clipboard_mismatch(monkeypatch):
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    assert clipboard.verify_clipboard(
+        "baru", runner=lambda cmd, **kw: _Proc(0, out="lama")) is False
+
+
+def test_copy_text_marks_verified(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    captured = []
+
+    def runner(cmd, input=None, **kw):
+        captured.append(cmd)
+        if cmd[0] == "wl-paste":
+            return _Proc(0, out=input if input else "halo")
+        return _Proc(0)
+
+    result = clipboard.copy_text("halo", runner=runner)
+    assert result.ok is True and result.verified is True and result.tool == "wl-copy"
+
+
+def test_copy_text_unverified_without_reader(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which",
+                        lambda n: "/usr/bin/" + n if n == "wl-copy" else None)
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    result = clipboard.copy_text("halo", runner=lambda cmd, **kw: _Proc(0))
+    assert result.ok is True
+    assert result.verified is False
+    assert "belum terverifikasi" in result.message
+
+
+def test_copy_text_reports_mismatch(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+
+    def runner(cmd, input=None, **kw):
+        if cmd[0] == "wl-paste":
+            return _Proc(0, out="isi lama")
+        return _Proc(0)
+
+    result = clipboard.copy_text("halo", runner=runner)
+    # Tool "berhasil" tetapi isi clipboard tidak cocok -> ditandai tidak terverifikasi
+    assert result.verified is False
+    assert "tidak cocok" in result.message or "belum terverifikasi" in result.message
