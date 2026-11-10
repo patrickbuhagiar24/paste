@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Launcher Paste Teks — dipakai sebagai /usr/bin/paste-teks di paket .deb."""
 import sys
+import traceback
 from pathlib import Path
 
 # Cari paket paste_teks: dari checkout repo maupun lokasi terpasang (.deb).
@@ -17,7 +18,18 @@ for candidate in _candidates:
         sys.path.insert(0, str(candidate))
         break
 
-from paste_teks.app import main
+try:
+    from paste_teks.app import main
+except Exception:
+    # Import gagal (mis. paket tidak ditemukan) — catat agar bisa didiagnosis.
+    _log = Path.home() / ".config" / "paste-teks" / "error.log"
+    try:
+        _log.parent.mkdir(parents=True, exist_ok=True)
+        _log.write_text(traceback.format_exc(), encoding="utf-8")
+    except OSError:
+        pass
+    print(traceback.format_exc(), file=sys.stderr)
+    raise SystemExit(1)
 
 if __name__ == "__main__":
     main()

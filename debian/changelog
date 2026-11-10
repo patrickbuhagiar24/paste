@@ -1,3 +1,11 @@
+paste-teks (1.0.1-1) unstable; urgency=medium
+
+  * Perbaikan: error saat start dicatat ke ~/.config/paste-teks/error.log
+    dan ditampilkan, tambah mode diagnosis --check, jendela dipastikan
+    tampil/fokus saat diluncurkan dari menu, Exec desktop absolut.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.0.0-1) unstable; urgency=medium
 
   * Rilis awal: GUI hierarki kategori/folder berisi berkas .txt,
