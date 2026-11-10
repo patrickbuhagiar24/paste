@@ -254,7 +254,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         # Hindari iid duplikat bila dua root punya path sama (dev vs sistem).
         if self.tree.exists(iid):
             iid = f"{iid}#{node.source_root}"
-        self.tree.insert(parent, iid, text=f"{icon}{node.name}",
+        self.tree.insert(parent, "end", iid=iid, text=f"{icon}{node.name}",
                          open=node.is_dir, tags=("dir" if node.is_dir else "file"))
         for child in node.children:
             self._insert_node(iid, child)
