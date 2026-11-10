@@ -1,7 +1,18 @@
 # Izin sempit untuk paste otomatis Paste Teks (ydotool).
 #
-# /dev/uinput dimiliki root:input dengan mode 0660, sehingga pengguna biasa
-# tidak bisa memakainya. Aturan ini memindahkan grup perangkat ke grup khusus
-# 'paste-teks' (bukan 'input'), sehingga anggota grup hanya mendapat akses ke
-# perangkat virtual uinput — bukan ke seluruh keyboard/mouse Anda.
-KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"
+# Tujuannya: pengguna sesi grafis bisa menulis /dev/uinput TANPA masuk grup
+# 'input' (grup itu memberi akses ke SELURUH keyboard/mouse — setara keylogger)
+# dan TANPA perlu logout/login.
+#
+# TAG+="uaccess" membuat systemd-logind memberi ACL rw kepada pengguna sesi
+# yang sedang aktif. Ini berlaku seketika saat perangkat muncul / aturan
+# dimuat ulang — tidak perlu sesi baru. Pendekatan ini sama dengan yang
+# dipakai Solaar, Steam, dan game-devices-udev.
+#
+# OPTIONS+="static_node=uinput" wajib agar node sudah ada (dengan ACL) sejak
+# boot, bahkan sebelum modul uinput dimuat.
+#
+# GROUP/MODE tetap ada sebagai cadangan untuk kasus ACL tidak tersedia
+# (mis. sesi SSH, container, sistem tanpa logind) — anggota grup
+# 'paste-teks' hanya mendapat akses ke uinput, bukan ke perangkat lain.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", GROUP="paste-teks", MODE="0660"

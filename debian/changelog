@@ -1,3 +1,21 @@
+paste-teks (1.2.0-1) unstable; urgency=medium
+
+  * Nol konfigurasi: paste otomatis langsung bekerja setelah apt install.
+  * udev rule memakai TAG+="uaccess" sehingga logind memberi ACL rw
+    /dev/uinput kepada pengguna sesi aktif — TANPA logout dan tanpa grup
+    (pendekatan sama dengan Solaar/Steam). Grup 'paste-teks' dipertahankan
+    hanya sebagai cadangan bila ACL tidak tersedia.
+  * Unit systemd pengguna ydotoold.service disertakan; postinst
+    mengaktifkan & menyalakannya untuk pengguna yang sedang login, atau
+    menautkannya agar menyala saat login berikutnya.
+  * ydotool dipanggil dengan satu perintah valid ("ydotool key ctrl+v"),
+    dan daemon dinyalakan otomatis bila percobaan pertama gagal.
+  * postinst memverifikasi hasilnya (runuser test -w /dev/uinput) dan
+    melaporkan apakah paste otomatis sudah aktif.
+  * Uji: 48 lolos.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.1.1-1) unstable; urgency=medium
 
   * Diagnosis lebih akurat: bedakan keanggotaan grup di sistem vs sesi

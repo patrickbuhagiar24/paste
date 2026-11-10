@@ -19,9 +19,9 @@ klik** (salin + `Ctrl+V` otomatis).
   hapus, buka folder di Nautilus. Perubahan tersimpan di folder pengguna.
 - ⚙️ **Pengaturan** — jeda sebelum paste otomatis (0,5–5 detik), mode
   double-click, dan *selalu di atas*. Tersimpan di `~/.config/paste-teks/`.
-- 🔐 **Izin otomatis** — paket mengatur grup sempit `paste-teks` + udev rule
-  agar `/dev/uinput` bisa dipakai tanpa masuk grup `input`. Bisa juga
-  diaktifkan dari tombol di aplikasi.
+- 🔐 **Nol konfigurasi** — paket memberi ACL `/dev/uinput` (`uaccess`) untuk
+  sesi aktif dan menyalakan `ydotoold` otomatis; tanpa grup `input` dan tanpa
+  perlu logout.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
   via `ydotool`/`xdotool`, fallback clipboard internal Tk bila tool tidak ada.
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE` untuk skrip.
@@ -125,68 +125,72 @@ Dependensi: `python3 (>= 3.10)`, `python3-tk`. Direkomendasikan:
 
 - Clipboard Wayland memakai `wl-copy` (dari `wl-clipboard`); X11 memakai `xclip`.
 - Paste otomatis di Wayland memakai `ydotool`, yang butuh akses `/dev/uinput`.
-  **Akses ini diatur otomatis saat paket dipasang** — lihat
-  [Izin `/dev/uinput`](#izin-devuinput-grup-paste-teks) di bawah.
+  **Akses ini diatur otomatis saat paket dipasang** (ACL `uaccess`, tanpa
+  logout) — lihat [Paste otomatis: nol konfigurasi](#paste-otomatis-nol-konfigurasi).
 - Di X11, `xdotool` tidak butuh izin khusus.
 
-## Izin `/dev/uinput` (grup `paste-teks`)
+## Paste otomatis: nol konfigurasi
 
-`/dev/uinput` dimiliki `root:input` dengan mode `0660`, sehingga pengguna biasa
-tidak bisa memakainya. Paste Teks **tidak** memasukkan Anda ke grup `input`
-(grup itu memberi akses ke *semua* perangkat input — setara keylogger).
-Sebagai gantinya, paket membuat grup sistem sempit `paste-teks` plus udev rule
-yang hanya membuka `/dev/uinput`:
+Sejak **1.2.0** tidak ada langkah manual. Saat `apt install`/`apt upgrade`:
 
-```
-KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"
-```
+1. **udev rule dengan `TAG+="uaccess"`** — systemd-logind memberi ACL `rw`
+   pada `/dev/uinput` untuk pengguna sesi grafis yang aktif. **Berlaku
+   seketika, tanpa logout** dan tanpa masuk grup apa pun.
+2. **`ydotoold.service`** (unit systemd pengguna) disertakan dalam paket dan
+   langsung di-`enable --now` untuk pengguna yang sedang login; bila belum
+   login, unit ditautkan agar menyala otomatis pada login berikutnya.
+3. **`postinst` memverifikasi** hasilnya (`runuser … test -w /dev/uinput`) dan
+   melaporkan `siap: '…' bisa menulis /dev/uinput — paste otomatis aktif.`
 
-Tiga cara mengaktifkannya:
+Sebagai lapisan cadangan (mis. sesi SSH, container, sistem tanpa logind),
+paket tetap membuat grup sistem sempit `paste-teks` dan menambahkan akun
+Anda — grup ini hanya membuka `/dev/uinput`, **bukan** seluruh perangkat
+input seperti grup `input`.
 
-| Cara | Kapan dipakai |
+### Jadi apa yang perlu saya lakukan?
+
+Biasanya: **tidak ada**. Pasang, lalu langsung pakai.
+
+| Situasi | Tindakan |
 |---|---|
-| **Otomatis saat `apt install`/`upgrade`** | `postinst` menebak akun Anda dari `SUDO_USER`, lalu sesi grafis aktif (`loginctl`), lalu akun biasa tunggal — lalu menambahkannya ke grup. |
-| **Tombol di aplikasi: 🔐 Izin Paste Otomatis** | Kapan saja, termasuk bila pemasangan lewat GNOME Software. Muncul prompt kata sandi (`pkexec`). |
-| **Terminal** (manual) | Bila tidak ada helper polkit: |
+| `apt install` / `apt upgrade` lewat terminal | Tidak ada — langsung aktif |
+| Dipasang lewat GNOME Software | Buka aplikasi sekali; bila perlu klik **🔐 Izin Paste Otomatis** |
+| `--check` menunjukkan ❌ | Baca blok **Langkah berikutnya** — isinya perintah siap tempel |
+| Daemon mati setelah reboot | `systemctl --user enable ydotoold` (postinst sudah mencoba ini) |
 
-  ```bash
-  sudo groupadd --system paste-teks
-  echo 'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="paste-teks", MODE="0660", OPTIONS+="static_node=uinput"' \
-    | sudo tee /usr/lib/udev/rules.d/70-paste-teks-uinput.rules
-  sudo usermod -aG paste-teks "$USER"
-  sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput
-  ```
-
-⚠️ **Logout lalu login ulang** (atau reboot) setelah grup berubah — keanggotaan
-grup hanya terbaca saat sesi baru dimulai. Sampai saat itu tombol *Paste
-Otomatis* hanya menyalin teks ke clipboard (status bar akan memberi tahu).
-
-Cek status kapan saja:
+Cek kapan saja:
 
 ```bash
-paste-teks --check    # status grup, izin /dev/uinput, ydotoold + langkah perbaikan
+paste-teks --check
 ```
 
-Contoh keluaran saat akun sudah ditambahkan tetapi sesi belum dimulai ulang:
+Contoh keluaran saat semuanya beres:
 
 ```
 Izin paste otomatis (grup 'paste-teks', akun 'patrick'):
-  ❌ grup 'paste-teks': anggota di sistem — sesi belum memuat
-  ❌ tulis /dev/uinput: /dev/uinput tidak bisa ditulis — muncul setelah login ulang
-  ❌ daemon ydotoold: belum berjalan
+  ✅ grup 'paste-teks': anggota, aktif di sesi ini
+  ✅ tulis /dev/uinput: /dev/uinput bisa ditulis
+  ✅ daemon ydotoold: berjalan (proses ydotoold)
 
 Langkah berikutnya:
-  1. Akun 'patrick' sudah menjadi anggota grup 'paste-teks' di sistem, tetapi
-     SESI INI belum memuatnya. Logout lalu login ulang (atau reboot) — wajib.
-  2. ydotoold belum berjalan. Jalankan `systemctl --user start ydotoold`.
+  Paste otomatis siap digunakan.
 ```
 
-Status dibedakan dengan cermat: **anggota di sistem** (`/etc/group`) vs
-**aktif di sesi berjalan** (dibaca dari `/proc/self/status`), sehingga saran
-"login ulang" hanya muncul bila memang itu masalahnya.
+Bila ACL yang dipakai (tanpa grup), barisnya menjadi
+`✅ akses /dev/uinput: ACL sesi aktif (tanpa grup, tanpa logout)`.
 
-Saat paket dihapus (`apt purge`), grup `paste-teks` ikut dihapus bila tidak ada
-anggota tersisa.
+### Kalau ingin manual (opsional)
+
+```bash
+sudo groupadd --system paste-teks
+echo 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", GROUP="paste-teks", MODE="0660"' \
+  | sudo tee /usr/lib/udev/rules.d/70-paste-teks-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput
+systemctl --user enable --now ydotoold
+```
+
+Saat paket dihapus (`apt purge`), grup `paste-teks` ikut dihapus bila tidak
+ada anggota tersisa.
 
 ## Struktur repo
 
@@ -197,7 +201,8 @@ paste_teks/          Kode Python (GUI + logika + clipboard)
   clipboard.py       Salin (wl-copy/xclip/xsel) + paste otomatis (ydotool/xdotool)
   uinput.py          Deteksi izin /dev/uinput + aktivasi grup 'paste-teks'
 usr/lib/paste-teks/  Helper root (dipanggil via pkexec untuk menambah grup)
-usr/lib/udev/rules.d/  udev rule grup 'paste-teks' untuk /dev/uinput
+usr/lib/udev/rules.d/  udev rule uaccess (+grup cadangan) untuk /dev/uinput
+usr/lib/systemd/user/  ydotoold.service (daemon paste otomatis)
 debian/postinst      Deteksi akun & penambahan grup otomatis saat instalasi
 data/snippets/       Contoh teks bawaan per kategori
 debian/              Kemasan Debian (.deb)
@@ -215,10 +220,10 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
   paste-teks           # jalankan langsung — traceback tampil di terminal
   cat ~/.config/paste-teks/error.log   # log error terakhir
   ```
-- **Paste otomatis tidak bekerja (Wayland)**: klik **🔐 Izin Paste Otomatis** di
-  aplikasi, lalu logout & login ulang. Teks tetap tersalin sebelum itu — cukup
-  tekan `Ctrl+V` manual di aplikasi tujuan. Detail di
-  [Izin `/dev/uinput`](#izin-devuinput-grup-paste-teks).
+- **Paste otomatis tidak bekerja (Wayland)**: jalankan `paste-teks --check` dan
+  ikuti blok **Langkah berikutnya**. Biasanya hanya perlu
+  `systemctl --user start ydotoold`. Teks tetap tersalin — tekan `Ctrl+V`
+  manual di aplikasi tujuan.
 - **Pesan "ydotoold belum berjalan"**: jalankan `systemctl --user start ydotoold`
   (ydotool versi baru memakai daemon).
 
@@ -226,7 +231,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.1.1-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.2.0-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 

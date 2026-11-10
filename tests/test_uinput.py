@@ -249,3 +249,60 @@ def test_enable_for_user_handles_exception():
 
     code, _out, err = uinput.enable_for_user("budi", runner=boom)
     assert code == -1 and "pkexec" in err
+
+
+def test_socket_candidates_prefers_xdg_runtime(monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    cands = uinput.socket_candidates()
+    assert cands[0] == "/run/user/1000/ydotool.sock"
+    assert "/run/ydotoold.sock" in cands
+
+
+def test_socket_candidates_without_xdg(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    cands = uinput.socket_candidates()
+    assert cands[0] == f"/run/user/{os.getuid()}/ydotool.sock"
+
+
+def test_acl_granted_parses_getfacl(monkeypatch):
+    import subprocess as sp
+    uid = os.getuid()
+
+    def fake_run(cmd, **kw):
+        return sp.CompletedProcess(cmd, 0, stdout=(
+            "# file: dev/uinput\n"
+            "user::rw-\n"
+            f"user:{uid}:rw-\t\t# effective: rw-\n"
+            "group::---\n"))
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    assert uinput.acl_granted() is True
+
+
+def test_acl_granted_read_only(monkeypatch):
+    import subprocess as sp
+    uid = os.getuid()
+    monkeypatch.setattr(sp, "run", lambda cmd, **kw: sp.CompletedProcess(
+        cmd, 0, stdout=f"user::rw-\nuser:{uid}:r--\n"))
+    assert uinput.acl_granted() is False
+
+
+def test_acl_granted_without_getfacl(monkeypatch):
+    def boom(cmd, **kw):
+        raise OSError("getfacl tidak ada")
+
+    import subprocess as sp
+    monkeypatch.setattr(sp, "run", boom)
+    assert uinput.acl_granted() is False
+
+
+def test_summary_reports_acl_without_group():
+    st = uinput.UinputStatus(
+        user="budi", group_exists=True, in_group=False,
+        device_writable=True, helper=True, pkexec=True,
+        ydotoold_binary=False, socket=None, groups={"budi"},
+        session={"budi"}, daemon=False, rule=True, acl=True)
+    assert st.acl_granted is True
+    labels = " ".join(f"{m} {l} {d}" for m, l, d in st.summary())
+    assert "ACL" in labels
+    assert "tanpa logout" in labels
