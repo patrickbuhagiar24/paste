@@ -1,0 +1,24 @@
+Architectures: all
+Codename: stable
+Components: main
+Date: Tue, 10 Nov 2026 05:03:30 +0000
+Description: Repo APT Paste Teks untuk Ubuntu 26.10
+Label: Paste Teks
+Origin: Paste Teks
+Suite: stable
+MD5Sum:
+ 1d13f74ab0be277285d2e18ffd5e9c33             1128 Packages
+ c1c55ff7c7122092751eecbed4fffa6c              726 Packages.gz
+ 02016d6aee0b204a25670b8b60053fb5              194 Release
+SHA1:
+ ad70b79abd78c2b7f9b779d14f99ce2729008252             1128 Packages
+ be131c25ead5984245ea2f0a93eadf53e009bd91              726 Packages.gz
+ 356d2d4d71da270fa2562ab48e8ee29fbf1af1ef              194 Release
+SHA256:
+ a32d6b1a21a7aab1025c190a6a85a1e36dc2de70df875935c452d6c3327ae711             1128 Packages
+ 5b022382b3197326df2b34a5c84d5493bfb7d843d3b0a7a80f3f0a35658d1119              726 Packages.gz
+ e158e300d166db8495d216328a521a8efc2eca27aefcfbd546979199308261a8              194 Release
+SHA512:
+ 5fe9bb8e2d2d49b105657ecb34f0c050724b36d5b43e2e6b9875850577fe7f08c9fefb966006403af279d7431af6b75c20830f01ae03d1ceca93a2e4f425e3da             1128 Packages
+ 6576d7a5520d0d5f36a8e279ddec238ae3085e434d69acb09ada6684f8b3fe27f5e58b634bf4ccf084c0cf7f0a067a43353f69d24aa442814940cb70ad746dfb              726 Packages.gz
+ 9616bccab0d174a82cbddadb6bb5bd97dc35a2c91087eb3916fd882ece34eb819dbb2f06646f6530b0e982b46f2d215e22106367e8abead9999aa50d8d726227              194 Release
