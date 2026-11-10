@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Launcher Paste Teks — dipakai sebagai /usr/bin/paste-teks di paket .deb."""
+import sys
+from pathlib import Path
+
+# Cari paket paste_teks: dari checkout repo maupun lokasi terpasang (.deb).
+_here = Path(__file__).resolve()
+_candidates = [
+    _here.parent.parent,          # root repo (checkout)
+    _here.parent,                 # folder bin/ (repo)
+    _here.parent.parent / "share" / "paste-teks",  # layout .deb relatif (usr/bin/../share/...)
+    Path("/usr/share/paste-teks"),  # lokasi terpasang (.deb)
+    Path("/usr/share"),           # cadangan
+]
+for candidate in _candidates:
+    if (candidate / "paste_teks" / "__init__.py").exists():
+        sys.path.insert(0, str(candidate))
+        break
+
+from paste_teks.app import main
+
+if __name__ == "__main__":
+    main()

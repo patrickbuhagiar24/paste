@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+%:
+	dh
+
+override_dh_auto_install:
+	install -d debian/paste-teks/usr/bin
+	install -m 755 bin/paste-teks debian/paste-teks/usr/bin/paste-teks
+	install -d debian/paste-teks/usr/share/paste-teks
+	cp -r paste_teks debian/paste-teks/usr/share/paste-teks/
+	cp -r data/snippets debian/paste-teks/usr/share/paste-teks/
+	install -d debian/paste-teks/usr/share/applications
+	install -m 644 usr/share/applications/paste-teks.desktop debian/paste-teks/usr/share/applications/
+	install -d debian/paste-teks/usr/share/icons/hicolor/scalable/apps
+	install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg debian/paste-teks/usr/share/icons/hicolor/scalable/apps/
+	install -d debian/paste-teks/usr/share/doc/paste-teks
+	install -m 644 README.md debian/paste-teks/usr/share/doc/paste-teks/README.md
+	install -m 644 LICENSE debian/paste-teks/usr/share/doc/paste-teks/copyright

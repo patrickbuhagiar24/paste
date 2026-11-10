@@ -1,0 +1,505 @@
+"""GUI Paste Teks — hierarki kategori/folder berisi berkas .txt.
+
+Jalankan:  paste-teks [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
+Antarmuka berbahasa Indonesia. Double-click / Enter pada berkas .txt =
+salin + paste otomatis (Ctrl+V) ke aplikasi lain dalam satu klik.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from . import __version__
+from .clipboard import copy_text, simulate_paste
+from .snippets import (
+    Node,
+    create_category,
+    create_snippet,
+    default_roots,
+    delete_path,
+    read_text,
+    scan_roots,
+    search as search_nodes,
+    writable_root,
+    write_text,
+)
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
+except ImportError:  # pragma: no cover - ditangani saat runtime
+    tk = None  # type: ignore[assignment]
+    filedialog = messagebox = simpledialog = ttk = None  # type: ignore[assignment]
+
+# Basis kelas GUI: object bila tkinter tidak tersedia (CLI tetap bisa dipakai).
+_TkBase = tk.Tk if tk is not None else object  # type: ignore[union-attr]
+_ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-attr]
+
+
+SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "paste-teks"
+SETTINGS_FILE = SETTINGS_DIR / "settings.json"
+
+DEFAULT_SETTINGS = {
+    "delay": 1.5,          # detik sebelum paste otomatis dikirim
+    "auto_paste": True,    # double-click = paste otomatis (bukan sekadar salin)
+    "always_on_top": False,
+}
+
+
+def load_settings() -> dict:
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return {**DEFAULT_SETTINGS, **data}
+    except (OSError, json.JSONDecodeError):
+        return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(settings: dict) -> None:
+    try:
+        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2, ensure_ascii=False),
+                                 encoding="utf-8")
+    except OSError:
+        pass
+
+
+def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
+    """Bangun pohon terfilter: hanya berkas cocok + folder leluhurnya."""
+    hit_paths = {h.path.resolve() for h in hits}
+
+    def keep(node: Node) -> Node | None:
+        if node.is_text:
+            return node if node.path.resolve() in hit_paths else None
+        kept = [k for child in node.children if (k := keep(child)) is not None]
+        if not kept:
+            return None
+        clone = Node(name=node.name, path=node.path, is_dir=True,
+                     children=kept, source_root=node.source_root)
+        return clone
+
+    return [k for n in nodes if (k := keep(n)) is not None]
+
+
+class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
+    """Jendela utama Paste Teks."""
+
+    def __init__(self, roots: list[Path] | None = None):
+        if tk is None:
+            raise RuntimeError("tkinter tidak tersedia. Pasang python3-tk "
+                               "(sudo apt install python3-tk).")
+        super().__init__()
+        self.title(f"Paste Teks v{__version__} — Tempel Cepat Satu Klik")
+        self.geometry("980x620")
+        self.minsize(720, 440)
+        self.settings = load_settings()
+        self.roots: list[Path] = roots or default_roots()
+        self.writable = writable_root(self.roots)
+        self.current_file: Path | None = None
+        self._countdown_id: str | None = None
+        self._build_ui()
+        self.refresh_tree()
+        self._apply_settings()
+
+    # ---------- UI ----------
+    def _build_ui(self) -> None:
+        # Toolbar atas
+        toolbar = ttk.Frame(self, padding=6)
+        toolbar.pack(fill="x")
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_: self.refresh_tree())
+        ttk.Label(toolbar, text="🔍").pack(side="left")
+        ttk.Entry(toolbar, textvariable=self.search_var, width=26).pack(side="left", padx=(2, 6))
+        ttk.Button(toolbar, text="↻ Muat Ulang (F5)", command=self.refresh_tree).pack(side="left")
+        ttk.Button(toolbar, text="📂 Buka Folder", command=self.open_folder).pack(side="left", padx=(4, 0))
+        ttk.Button(toolbar, text="＋ Kategori", command=self.add_category).pack(side="left", padx=(4, 0))
+        ttk.Button(toolbar, text="＋ Teks", command=self.add_text).pack(side="left", padx=(4, 0))
+        ttk.Button(toolbar, text="✏️ Edit", command=self.edit_selected).pack(side="left", padx=(4, 0))
+        ttk.Button(toolbar, text="🗑 Hapus", command=self.delete_selected).pack(side="left", padx=(4, 0))
+
+        # Panel utama: kiri pohon, kanan pratinjau
+        paned = ttk.PanedWindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True, padx=6)
+
+        left = ttk.Frame(paned)
+        ttk.Label(left, text="Kategori / Folder → Berkas .txt").pack(anchor="w")
+        self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
+        scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        paned.add(left, weight=2)
+
+        right = ttk.Frame(paned)
+        ttk.Label(right, text="Pratinjau isi teks:").pack(anchor="w")
+        self.preview = tk.Text(right, wrap="word", font=("Monospace", 11),
+                               state="disabled", height=16)
+        self.preview.pack(fill="both", expand=True)
+        self.info_var = tk.StringVar(value="Pilih berkas .txt di sebelah kiri.")
+        ttk.Label(right, textvariable=self.info_var, wraplength=420,
+                  foreground="gray").pack(anchor="w", pady=(4, 0))
+
+        actions = ttk.Frame(right, padding=(0, 6, 0, 0))
+        actions.pack(fill="x")
+        ttk.Button(actions, text="📋 Salin", command=self.do_copy).pack(side="left")
+        ttk.Button(actions, text="⚡ Paste ke Aplikasi Lain (1 Klik)",
+                   command=self.do_paste).pack(side="left", padx=(6, 0))
+        self.auto_var = tk.BooleanVar(value=bool(self.settings["auto_paste"]))
+        ttk.Checkbutton(actions, text="Double-click = paste otomatis",
+                        variable=self.auto_var,
+                        command=self._save_current_settings).pack(side="left", padx=(8, 0))
+
+        # Baris pengaturan
+        opts = ttk.Frame(self, padding=(6, 0, 6, 4))
+        opts.pack(fill="x")
+        ttk.Label(opts, text="Jeda sebelum paste (detik):").pack(side="left")
+        self.delay_var = tk.DoubleVar(value=float(self.settings["delay"]))
+        ttk.Spinbox(opts, from_=0.5, to=5.0, increment=0.5, width=5,
+                    textvariable=self.delay_var,
+                    command=self._save_current_settings).pack(side="left", padx=(4, 10))
+        self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
+        ttk.Checkbutton(opts, text="Selalu di atas", variable=self.top_var,
+                        command=self._apply_settings).pack(side="left")
+
+        # Status bar
+        self.status_var = tk.StringVar(value="Siap.")
+        ttk.Label(self, textvariable=self.status_var, relief="sunken",
+                  anchor="w", padding=4).pack(fill="x", side="bottom")
+
+        # Menu konteks (klik kanan)
+        self.menu = tk.Menu(self, tearoff=0)
+        self.menu.add_command(label="⚡ Paste otomatis (1 klik)", command=self.do_paste)
+        self.menu.add_command(label="📋 Salin", command=self.do_copy)
+        self.menu.add_separator()
+        self.menu.add_command(label="✏️ Edit", command=self.edit_selected)
+        self.menu.add_command(label="🗑 Hapus", command=self.delete_selected)
+        self.tree.bind("<Button-3>", self._on_right_click)
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
+        self.tree.bind("<Double-1>", lambda _e: self.on_activate())
+        self.tree.bind("<Return>", lambda _e: self.on_activate())
+        self.tree.bind("<Delete>", lambda _e: self.delete_selected())
+        self.tree.bind("<F2>", lambda _e: self.edit_selected())
+        self.bind("<F5>", lambda _e: self.refresh_tree())
+        self.bind("<Control-c>", lambda _e: self.do_copy())
+        self.bind("<Control-f>", lambda _e: self.search_var.set("") or self._focus_search())
+
+    def _focus_search(self) -> None:
+        for child in self.winfo_children():
+            for sub in child.winfo_children():
+                if isinstance(sub, ttk.Entry):
+                    sub.focus_set()
+                    return
+
+    def _on_right_click(self, event) -> None:
+        row = self.tree.identify_row(event.y)
+        if row:
+            self.tree.selection_set(row)
+            self.show_preview()
+        self.menu.post(event.x_root, event.y_root)
+
+    # ---------- Pohon ----------
+    def refresh_tree(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        nodes = scan_roots(self.roots)
+        query = self.search_var.get().strip() if hasattr(self, "search_var") else ""
+        if query:
+            nodes = filter_tree(nodes, search_nodes(nodes, query))
+        total = 0
+        for root_node in nodes:
+            self._insert_node("", root_node)
+            total += root_node.count_texts()
+        self.status_var.set(
+            f"{total} berkas .txt dari {len(self.roots)} folder "
+            f"({', '.join(str(r) for r in self.roots)})")
+        if query:
+            self.status_var.set(f"Hasil pencarian '{query}': {total} berkas cocok.")
+
+    def _insert_node(self, parent: str, node: Node) -> str:
+        icon = "📁 " if node.is_dir else "📄 "
+        iid = str(node.path)
+        # Hindari iid duplikat bila dua root punya path sama (dev vs sistem).
+        if self.tree.exists(iid):
+            iid = f"{iid}#{node.source_root}"
+        self.tree.insert(parent, iid, text=f"{icon}{node.name}",
+                         open=node.is_dir, tags=("dir" if node.is_dir else "file"))
+        for child in node.children:
+            self._insert_node(iid, child)
+        return iid
+
+    def selected_path(self) -> Path | None:
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        # iid bisa ber-suffix #root; ambil bagian path-nya.
+        raw = sel[0].split("#")[0]
+        return Path(raw)
+
+    def show_preview(self) -> None:
+        path = self.selected_path()
+        self.preview.configure(state="normal")
+        self.preview.delete("1.0", "end")
+        if path is None or path.is_dir() or not path.exists():
+            self.current_file = None
+            self.preview.insert("1.0", "Pilih berkas .txt untuk melihat isinya.\n\n"
+                                       "Double-click / Enter = paste otomatis ke aplikasi lain.")
+            self.info_var.set("Pilih berkas .txt di sebelah kiri.")
+            self.preview.configure(state="disabled")
+            return
+        self.current_file = path
+        try:
+            text = read_text(path)
+        except OSError as exc:
+            text = f"(gagal membaca berkas: {exc})"
+        self.preview.insert("1.0", text)
+        self.preview.configure(state="disabled")
+        self.info_var.set(
+            f"{path.name} — {len(text)} karakter, {len(text.split())} kata\n{path}")
+
+    # ---------- Salin & paste ----------
+    def _tk_copy(self, text: str) -> None:
+        """Fallback clipboard internal Tk (selalu tersedia)."""
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
+
+    def do_copy(self) -> None:
+        path = self.selected_path()
+        if path is None or path.is_dir():
+            self.status_var.set("Pilih berkas .txt terlebih dahulu.")
+            return
+        try:
+            text = read_text(path)
+        except OSError as exc:
+            messagebox.showerror("Gagal membaca", str(exc))
+            return
+        result = copy_text(text)
+        if not result.ok:
+            self._tk_copy(text)
+            result.message += " (disalin via clipboard internal)"
+        self.status_var.set(f"✅ {result.message}")
+
+    def on_activate(self) -> None:
+        """Double-click / Enter: paste otomatis bila aktif, else salin."""
+        if self.auto_var.get():
+            self.do_paste()
+        else:
+            self.do_copy()
+
+    def do_paste(self) -> None:
+        """Satu klik: salin → jeda → Ctrl+V otomatis ke aplikasi lain."""
+        path = self.selected_path()
+        if path is None or path.is_dir():
+            self.status_var.set("Pilih berkas .txt terlebih dahulu.")
+            return
+        try:
+            text = read_text(path)
+        except OSError as exc:
+            messagebox.showerror("Gagal membaca", str(exc))
+            return
+        result = copy_text(text)
+        if not result.ok:
+            self._tk_copy(text)
+        delay = float(self.delay_var.get())
+        self._save_current_settings()
+        self.status_var.set(
+            f"✅ Disalin. Dalam {delay:.1f} detik klik aplikasi tujuan — "
+            "paste otomatis akan terkirim (Ctrl+V)...")
+        # Kecilkan jendela agar aplikasi tujuan mendapat fokus.
+        self.iconify()
+        self.after(int(delay * 1000), lambda: self._send_paste(text))
+
+    def _send_paste(self, text: str) -> None:
+        result = simulate_paste()
+        self.deiconify()
+        self.lift()
+        if result.ok:
+            self.status_var.set(f"⚡ {result.message}")
+        else:
+            self.status_var.set(f"📋 Teks sudah disalin. {result.message}")
+            messagebox.showinfo(
+                "Paste otomatis tidak tersedia",
+                f"{result.message}\n\nTeks sudah ada di clipboard — "
+                "tekan Ctrl+V di aplikasi tujuan.")
+
+    # ---------- CRUD ----------
+    def _target_dir(self) -> Path:
+        path = self.selected_path()
+        if path is not None and path.is_dir():
+            return path
+        if path is not None and path.parent.is_dir():
+            return path.parent
+        return self.writable
+
+    def add_category(self) -> None:
+        name = simpledialog.askstring("Kategori baru", "Nama folder kategori:")
+        if not name:
+            return
+        try:
+            create_category(self._target_dir(), name)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Gagal membuat kategori", str(exc))
+            return
+        self.refresh_tree()
+
+    def add_text(self) -> None:
+        name = simpledialog.askstring("Teks baru", "Nama berkas (tanpa .txt juga boleh):")
+        if not name:
+            return
+        try:
+            create_snippet(self._target_dir(), name, "")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Gagal membuat teks", str(exc))
+            return
+        self.refresh_tree()
+        self.edit_selected()
+
+    def edit_selected(self) -> None:
+        path = self.selected_path()
+        if path is None or path.is_dir():
+            self.status_var.set("Pilih berkas .txt untuk diedit.")
+            return
+        editor = EditorWindow(self, path)
+        self.wait_window(editor)
+
+    def delete_selected(self) -> None:
+        path = self.selected_path()
+        if path is None:
+            return
+        if not messagebox.askyesno("Hapus", f"Hapus '{path.name}'?\n{path}"):
+            return
+        try:
+            delete_path(path)
+        except OSError as exc:
+            messagebox.showerror("Gagal menghapus", str(exc))
+            return
+        self.refresh_tree()
+
+    def open_folder(self) -> None:
+        target = self._target_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.Popen(["xdg-open", str(target)])
+        except OSError as exc:
+            messagebox.showerror("Gagal membuka folder", str(exc))
+
+    # ---------- Pengaturan ----------
+    def _save_current_settings(self) -> None:
+        self.settings.update({
+            "delay": float(self.delay_var.get()),
+            "auto_paste": bool(self.auto_var.get()),
+            "always_on_top": bool(self.top_var.get()),
+        })
+        save_settings(self.settings)
+
+    def _apply_settings(self) -> None:
+        self.attributes("-topmost", bool(self.top_var.get()))
+        self._save_current_settings()
+
+
+class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
+    """Editor teks internal untuk satu berkas .txt."""
+
+    def __init__(self, master, path: Path):
+        if tk is None:
+            raise RuntimeError("tkinter tidak tersedia.")
+        super().__init__(master)
+        self.title(f"Edit — {path.name}")
+        self.geometry("640x460")
+        self.path = path
+        try:
+            content = read_text(path)
+        except OSError as exc:
+            content = f"(gagal membaca: {exc})"
+        self.text = tk.Text(self, wrap="word", font=("Monospace", 11))
+        self.text.pack(fill="both", expand=True, padx=8, pady=8)
+        self.text.insert("1.0", content)
+        bar = ttk.Frame(self, padding=8)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="💾 Simpan (Ctrl+S)", command=self.save).pack(side="left")
+        ttk.Button(bar, text="⚡ Simpan & Paste Otomatis",
+                   command=self.save_and_paste).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="Tutup", command=self.destroy).pack(side="right")
+        self.bind("<Control-s>", lambda _e: self.save())
+
+    def save(self) -> None:
+        try:
+            write_text(self.path, self.text.get("1.0", "end-1c"))
+        except OSError as exc:
+            messagebox.showerror("Gagal menyimpan", str(exc))
+            return
+        if isinstance(self.master, PasteTeksApp):
+            self.master.refresh_tree()
+            self.master.status_var.set(f"💾 Tersimpan: {self.path}")
+
+    def save_and_paste(self) -> None:
+        self.save()
+        if isinstance(self.master, PasteTeksApp):
+            self.master.tree.selection_set(str(self.path))
+            self.master.show_preview()
+            self.destroy()
+            self.master.do_paste()
+
+
+def run_cli(argv: list[str] | None = None) -> int:
+    """CLI non-GUI: --list / --copy / --paste untuk skrip & pengujian."""
+    parser = argparse.ArgumentParser(
+        prog="paste-teks",
+        description="Paste teks hierarki dari berkas .txt (GUI + CLI).")
+    parser.add_argument("--dir", action="append", default=[],
+                        help="Folder snippets tambahan (boleh diulang).")
+    parser.add_argument("--list", action="store_true", help="Daftar semua teks lalu keluar.")
+    parser.add_argument("--copy", metavar="FILE", help="Salin isi FILE ke clipboard.")
+    parser.add_argument("--paste", metavar="FILE",
+                        help="Salin FILE lalu kirim Ctrl+V otomatis.")
+    parser.add_argument("--version", action="store_true", help="Tampilkan versi.")
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print(f"paste-teks {__version__}")
+        return 0
+
+    roots = [Path(d) for d in args.dir] or default_roots()
+    if args.list:
+        for node in scan_roots(roots):
+            _print_tree(node, prefix="")
+        return 0
+    if args.copy or args.paste:
+        target = Path(args.copy or args.paste or "")
+        try:
+            text = read_text(target)
+        except OSError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        result = copy_text(text)
+        print(result.message)
+        if args.paste:
+            paste = simulate_paste()
+            print(paste.message)
+            return 0 if paste.ok else 2
+        return 0 if result.ok else 2
+
+    if tk is None:
+        print("Error: tkinter tidak tersedia. Pasang python3-tk "
+              "(sudo apt install python3-tk).", file=sys.stderr)
+        return 1
+    app = PasteTeksApp(roots=roots)
+    app.mainloop()
+    return 0
+
+
+def _print_tree(node: Node, prefix: str) -> None:
+    label = node.name + ("/" if node.is_dir else ".txt")
+    print(f"{prefix}{label}")
+    for child in node.children:
+        _print_tree(child, prefix + "  ")
+
+
+def main() -> None:
+    raise SystemExit(run_cli())
+
+
+if __name__ == "__main__":
+    main()
