@@ -108,89 +108,115 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_foreground_uses_selected_snippet(tmp_path, monkeypatch, capsys):
-    """Pintasan global: salin teks terpilih lalu kirim Ctrl+V."""
-    from paste_teks import app, clipboard
+def test_paste_flow_withdraws_then_pastes():
+    """Inti perbaikan: jendela DILEPAS (withdraw) sebelum Ctrl+V dikirim.
 
-    snippet = _snippet(tmp_path)
-    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
-    (tmp_path / "cfg").mkdir()
-    (tmp_path / "cfg" / "last-selection.txt").write_text(str(snippet))
+    `lower()` tidak memindahkan fokus (jendela kita tetap fokus) dan
+    `iconify()` diabaikan sebagian compositor — hanya withdraw yang
+    benar-benar menyerahkan fokus ke aplikasi tujuan.
+    """
+    from paste_teks.app import PasteTeksApp
 
-    copied = {}
+    calls = []
 
-    def fake_copy(text, runner=None):
-        copied["text"] = text
-        return clipboard.ClipboardResult(ok=True, tool="wl-copy", verified=True,
-                                         message="Teks disalin dengan wl-copy.")
+    class FakeApp:
+        settings = {"focus_delay": 0.6}
+        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
 
-    monkeypatch.setattr(clipboard, "copy_text", fake_copy)
-    monkeypatch.setattr(clipboard, "read_text_from_clipboard",
-                        lambda runner=None: snippet.read_text())
-    monkeypatch.setattr(clipboard, "simulate_paste",
-                        lambda: clipboard.PasteResult(True, "ydotool", "ok"))
+        def withdraw(self):
+            calls.append(("withdraw", None))
 
-    code = app.run_paste_foreground([tmp_path / "Snippets"])
-    assert code == 0
-    assert copied["text"] == "Halo"
-    assert "ok" in capsys.readouterr().out
+        def deiconify(self):
+            calls.append(("deiconify", None))
 
+        def lift(self):
+            calls.append(("lift", None))
 
-def test_paste_foreground_without_selection(tmp_path, monkeypatch, capsys):
-    from paste_teks import app
+        def after(self, ms, fn=None):
+            calls.append(("after", ms))
+            if fn is not None:
+                fn()
 
-    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
-    (tmp_path / "cfg").mkdir()
-    # dua berkas -> tidak bisa menebak
-    d = tmp_path / "Snippets"
-    d.mkdir()
-    (d / "a.txt").write_text("a")
-    (d / "b.txt").write_text("b")
-    assert app.run_paste_foreground([d]) == 4
-    assert "Tidak ada teks terpilih" in capsys.readouterr().err
+        def lower(self):
+            calls.append(("lower", None))
 
+        def _send_paste_after_release(self, text):
+            calls.append(("send", text))
 
-def test_paste_foreground_single_file_fallback(tmp_path, monkeypatch):
-    from paste_teks import app, clipboard
-
-    d = tmp_path / "Snippets"
-    d.mkdir()
-    (d / "satu.txt").write_text("satu-satunya")
-    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
-    (tmp_path / "cfg").mkdir()
-    got = {}
-    monkeypatch.setattr(clipboard, "copy_text",
-                        lambda text, runner=None: got.update(text=text) or
-                        clipboard.ClipboardResult(True, "wl-copy", "ok", True))
-    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: None)
-    monkeypatch.setattr(clipboard, "simulate_paste",
-                        lambda: clipboard.PasteResult(True, "ydotool", "ok"))
-    assert app.run_paste_foreground([d]) == 0
-    assert got["text"] == "satu-satunya"
+    app = FakeApp()
+    PasteTeksApp._release_and_paste(app, "teks")
+    assert ("withdraw", None) in calls
+    assert ("lower", None) not in calls       # lower tidak memindahkan fokus
+    after = [c for c in calls if c[0] == "after"]
+    assert after and after[0][1] == 600        # 0,6 detik
 
 
-def test_paste_foreground_reports_ydotool_failure(tmp_path, monkeypatch, capsys):
-    from paste_teks import app, clipboard
+def test_paste_done_restores_window():
+    from paste_teks.app import PasteTeksApp
+    from paste_teks.clipboard import PasteResult
 
-    snippet = _snippet(tmp_path)
-    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
-    (tmp_path / "cfg").mkdir()
-    (tmp_path / "cfg" / "last-selection.txt").write_text(str(snippet))
-    monkeypatch.setattr(clipboard, "copy_text",
-                        lambda text, runner=None: clipboard.ClipboardResult(
-                            True, "wl-copy", "ok", True))
-    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: "Halo")
-    monkeypatch.setattr(clipboard, "simulate_paste",
-                        lambda: clipboard.PasteResult(False, "", "gagal"))
-    assert app.run_paste_foreground([tmp_path / "Snippets"]) == 2
-    assert "gagal" in capsys.readouterr().err
+    calls = []
+
+    class FakeApp:
+        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
+        _pasting = True
+
+        def deiconify(self):
+            calls.append(("deiconify", None))
+
+        def lift(self):
+            calls.append(("lift", None))
+
+    app = FakeApp()
+    PasteTeksApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
+    assert ("deiconify", None) in calls        # jendela kembali
+    assert app._pasting is False
 
 
-def test_install_shortcut_flags(monkeypatch, capsys):
-    from paste_teks import app, shortcut
-    monkeypatch.setattr(shortcut, "install", lambda binding=None: (True, "dipasang"))
-    assert app.run_cli(["--install-shortcut"]) == 0
-    assert "dipasang" in capsys.readouterr().out
-    monkeypatch.setattr(shortcut, "remove", lambda: (True, "dihapus"))
-    assert app.run_cli(["--remove-shortcut"]) == 0
-    assert "dihapus" in capsys.readouterr().out
+def test_paste_done_failure_raises_window(monkeypatch):
+    from paste_teks.app import PasteTeksApp
+    from paste_teks.clipboard import PasteResult
+
+    calls = []
+
+    class FakeApp:
+        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
+        _pasting = True
+
+        def deiconify(self):
+            calls.append(("deiconify", None))
+
+        def lift(self):
+            calls.append(("lift", None))
+
+        def _show_paste_failure(self, message):
+            calls.append(("dialog", message))
+
+    app = FakeApp()
+    PasteTeksApp._paste_done(app, PasteResult(False, "", "gagal"))
+    assert ("lift", None) in calls             # kegagalan harus terlihat
+    assert ("dialog", "gagal") in calls
+
+
+def test_activate_always_pastes():
+    """Klik/Enter = satu tindakan: paste. Tidak ada mode 'salin saja'."""
+    from paste_teks.app import PasteTeksApp
+
+    calls = []
+
+    class FakeApp:
+        def do_paste(self):
+            calls.append("paste")
+
+    # atribut do_copy sudah tidak ada di versi ini
+    assert not hasattr(PasteTeksApp, "do_copy")
+    PasteTeksApp.on_activate(FakeApp())
+    assert calls == ["paste"]
+
+
+def test_no_legacy_controls_in_source():
+    """Tombol Salin / pintasan / hitung mundur sudah dihapus."""
+    src = (Path(__file__).resolve().parent.parent / "paste_teks" / "app.py").read_text()
+    for gone in ("do_copy", "auto_var", "delay_var", "_start_countdown",
+                 "install-shortcut", "paste-foreground"):
+        assert gone not in src, f"masih ada sisa: {gone}"

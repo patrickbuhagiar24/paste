@@ -17,14 +17,13 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, shortcut, uinput
+from . import __version__, uinput
 from .clipboard import copy_text, simulate_paste
 from .snippets import (
     Node,
     create_category,
     create_snippet,
     default_roots,
-    flatten_texts,
     delete_path,
     read_text,
     scan_roots,
@@ -61,8 +60,9 @@ def log_error(message: str) -> None:
         pass
 
 DEFAULT_SETTINGS = {
-    "delay": 2.5,          # detik sebelum paste otomatis dikirim
-    "auto_paste": True,    # double-click = paste otomatis (bukan sekadar salin)
+    # Jeda setelah jendela dilepas, agar compositor sempat memindahkan fokus
+    # sebelum Ctrl+V dikirim. 0,6 detik cukup di GNOME Wayland.
+    "focus_delay": 0.6,
     "always_on_top": False,
 }
 
@@ -121,7 +121,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.roots: list[Path] = roots or default_roots()
         self.writable = writable_root(self.roots)
         self.current_file: Path | None = None
-        self._countdown_id: str | None = None
+        self._pasting = False
         self._build_ui()
         self.refresh_tree()
         self._apply_settings()
@@ -153,9 +153,6 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         ttk.Button(toolbar, text="＋ Teks", command=self.add_text).pack(side="left", padx=(4, 0))
         ttk.Button(toolbar, text="✏️ Edit", command=self.edit_selected).pack(side="left", padx=(4, 0))
         ttk.Button(toolbar, text="🗑 Hapus", command=self.delete_selected).pack(side="left", padx=(4, 0))
-        ttk.Button(toolbar, text="⌨ Pintasan",
-                   command=self.show_shortcut_info).pack(side="right")
-
         # Panel utama: kiri pohon, kanan pratinjau
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=6)
@@ -180,22 +177,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
 
         actions = ttk.Frame(right, padding=(0, 6, 0, 0))
         actions.pack(fill="x")
-        ttk.Button(actions, text="📋 Salin", command=self.do_copy).pack(side="left")
-        ttk.Button(actions, text="⚡ Paste ke Aplikasi Lain (1 Klik)",
-                   command=self.do_paste).pack(side="left", padx=(6, 0))
-        self.auto_var = tk.BooleanVar(value=bool(self.settings["auto_paste"]))
-        ttk.Checkbutton(actions, text="Double-click = paste otomatis",
-                        variable=self.auto_var,
-                        command=self._save_current_settings).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="⚡ Tempel ke Aplikasi Lain",
+                   command=self.do_paste).pack(side="left")
 
         # Baris pengaturan
         opts = ttk.Frame(self, padding=(6, 0, 6, 4))
         opts.pack(fill="x")
-        ttk.Label(opts, text="Jeda sebelum paste (detik):").pack(side="left")
-        self.delay_var = tk.DoubleVar(value=float(self.settings["delay"]))
-        ttk.Spinbox(opts, from_=0.5, to=5.0, increment=0.5, width=5,
-                    textvariable=self.delay_var,
-                    command=self._save_current_settings).pack(side="left", padx=(4, 10))
         self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
         ttk.Checkbutton(opts, text="Selalu di atas", variable=self.top_var,
                         command=self._apply_settings).pack(side="left")
@@ -209,8 +196,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
 
         # Menu konteks (klik kanan)
         self.menu = tk.Menu(self, tearoff=0)
-        self.menu.add_command(label="⚡ Paste otomatis (1 klik)", command=self.do_paste)
-        self.menu.add_command(label="📋 Salin", command=self.do_copy)
+        self.menu.add_command(label="⚡ Tempel ke Aplikasi Lain",
+                              command=self.do_paste)
         self.menu.add_separator()
         self.menu.add_command(label="✏️ Edit", command=self.edit_selected)
         self.menu.add_command(label="🗑 Hapus", command=self.delete_selected)
@@ -221,7 +208,6 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<F2>", lambda _e: self.edit_selected())
         self.bind("<F5>", lambda _e: self.refresh_tree())
-        self.bind("<Control-c>", lambda _e: self.do_copy())
         self.bind("<Control-f>", lambda _e: self.search_var.set("") or self._focus_search())
 
     def _on_search_changed(self) -> None:
@@ -304,43 +290,27 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             f"{path.name} — {len(text)} karakter, {len(text.split())} kata\n{path}")
 
     # ---------- Salin & paste ----------
-    def _tk_copy(self, text: str) -> None:
-        """Fallback clipboard internal Tk (selalu tersedia)."""
-        self.clipboard_clear()
-        self.clipboard_append(text)
-        self.update()
-
-    def do_copy(self) -> None:
-        path = self.selected_path()
-        if path is None or path.is_dir():
-            self.status_var.set("Pilih berkas .txt terlebih dahulu.")
-            return
-        try:
-            text = read_text(path)
-        except OSError as exc:
-            messagebox.showerror("Gagal membaca", str(exc))
-            return
-        # Salin di thread latar agar GUI tidak freeze bila tool lambat.
-        self.status_var.set("Menyalin...")
-        threading.Thread(target=self._copy_worker, args=(text,),
-                         daemon=True).start()
-
-    def _copy_worker(self, text: str) -> None:
-        result = copy_text(text)
-        if not result.ok:
-            self.after(0, self._tk_copy, text)
-            result.message += " (disalin via clipboard internal)"
-        self.after(0, self.status_var.set, f"✅ {result.message}")
-
     def on_activate(self) -> None:
-        """Double-click / Enter: paste otomatis bila aktif, else salin."""
-        if self.auto_var.get():
-            self.do_paste()
-        else:
-            self.do_copy()
+        """Double-click / Enter: satu tindakan = paste ke aplikasi lain."""
+        self.do_paste()
 
     def do_paste(self) -> None:
-        """Satu klik: salin → hitung mundur terlihat → Ctrl+V otomatis."""
+        """KLIK SATU KALI -> teks tertempel di aplikasi lain.
+
+        Alur (pola yang sama dengan CopyQ/ClipClip):
+
+          1. teks disalin ke clipboard
+          2. jendela Paste Teks DILEPAS (withdraw) — bukan dikecilkan,
+             bukan diturunkan. Hanya withdraw yang benar-benar menyerahkan
+             fokus kembali ke aplikasi yang tadi dipakai.
+          3. tunggu sesaat agar compositor memindahkan fokus
+          4. kirim Ctrl+V -> tertempel di kolom input aplikasi tujuan
+          5. jendela Paste Teks muncul kembali
+
+        Riwayat bug: `iconify()` memindahkan fokus tetapi diabaikan sebagian
+        compositor; `lower()` TIDAK memindahkan fokus sama sekali (jendela
+        kita tetap fokus, sehingga Ctrl+V masuk ke Paste Teks sendiri).
+        """
         path = self.selected_path()
         if path is None or path.is_dir():
             self.status_var.set("Pilih berkas .txt terlebih dahulu.")
@@ -350,72 +320,59 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         except OSError as exc:
             messagebox.showerror("Gagal membaca", str(exc))
             return
-        delay = float(self.delay_var.get())
-        self._save_current_settings()
-        self.status_var.set("Menyalin...")
-        threading.Thread(target=self._paste_worker, args=(text, delay),
+        if self._pasting:
+            self.status_var.set("Paste sedang berjalan...")
+            return
+        self._pasting = True
+        self.status_var.set("Menyiapkan paste...")
+        threading.Thread(target=self._paste_worker, args=(text,),
                          daemon=True).start()
 
-    def _paste_worker(self, text: str, delay: float) -> None:
-        log_error(f"[paste] mulai: {len(text)} karakter, jeda {delay}s")
+    def _paste_worker(self, text: str) -> None:
+        log_error(f"[paste] mulai: {len(text)} karakter")
         result = copy_text(text)
-        if not result.ok:
-            self.after(0, self._tk_copy, text)
-            result.message += " (disalin via clipboard internal)"
         log_error(f"[paste] salin: ok={result.ok} tool={result.tool} "
                   f"verified={result.verified}")
-        self.after(0, self._start_countdown, text, delay, result.message)
+        if not result.ok:
+            # Fallback Tk tidak terbaca aplikasi Wayland; tetap beri tahu.
+            self.after(0, self._paste_failed, result.message)
+            return
+        # Kembali ke thread Tk untuk melepas jendela.
+        self.after(0, self._release_and_paste, text)
 
-    def _start_countdown(self, text: str, delay: float, copy_msg: str) -> None:
-        """Hitung mundur TANPA jendela tambahan.
+    def _release_and_paste(self, text: str) -> None:
+        """Lepas jendela, tunggu fokus berpindah, lalu kirim Ctrl+V."""
+        self.withdraw()
+        log_error("[paste] jendela di-withdraw, menunggu fokus berpindah")
+        delay_ms = int(float(self.settings.get("focus_delay", 0.6)) * 1000)
+        self.after(delay_ms, lambda: self._send_paste_after_release(text))
 
-        Jendela hitung mundur (Toplevel) ternyata merebut fokus: ketika ia
-        ditutup, GNOME mengembalikan fokus ke jendela utama Paste Teks —
-        sehingga Ctrl+V masuk ke aplikasi kita, bukan ke aplikasi tujuan.
-        Karena itu hitungan ditampilkan di status bar saja, dan jendela
-        utama diturunkan (lower) supaya aplikasi tujuan memegang fokus.
-        """
-        self.status_var.set(f"✅ {copy_msg}")
-        self.lower()
-        remaining = [delay]
-        self._countdown_id = None
-
-        def tick() -> None:
-            if remaining[0] <= 0:
-                self._countdown_id = None
-                self._finish_paste()
-                return
-            self.status_var.set(
-                f"Paste otomatis dalam {remaining[0]:.1f} detik — klik "
-                "aplikasi tujuan sekarang.")
-            remaining[0] -= 0.1
-            self._countdown_id = self.after(100, tick)
-
-        tick()
-
-    def _finish_paste(self) -> None:
-        log_error("[paste] hitung mundur selesai, mengirim Ctrl+V")
-        # JANGAN iconify: di Wayland/GNOME hal itu sering diabaikan, memicu
-        # animasi, dan bisa merebut fokus tepat saat Ctrl+V dikirim. Jendela
-        # utama hanya diturunkan (lower) agar aplikasi tujuan tetap fokus.
-        self.lower()
+    def _send_paste_after_release(self, text: str) -> None:
+        self._pasting = False
         threading.Thread(target=self._paste_sender, daemon=True).start()
 
     def _paste_sender(self) -> None:
-        log_error("[paste] simulate_paste dipanggil (thread latar)")
+        log_error("[paste] mengirim Ctrl+V")
         result = simulate_paste()
         log_error(f"[paste] hasil: ok={result.ok} tool={result.tool} "
                   f"pesan={result.message}")
         self.after(0, self._paste_done, result)
 
     def _paste_done(self, result) -> None:
-        # Tidak memunculkan/menaikkan jendela: aplikasi tujuan yang harus
-        # memegang fokus. Status bar sudah cukup sebagai umpan balik.
+        self._pasting = False
+        self.deiconify()
         if result.ok:
+            log_error("[paste] berhasil, jendela muncul kembali")
             self.status_var.set(f"⚡ {result.message}")
         else:
+            self.lift()
             self.status_var.set(f"📋 Teks sudah disalin. {result.message}")
             self._show_paste_failure(result.message)
+
+    def _paste_failed(self, message: str) -> None:
+        self._pasting = False
+        self.status_var.set(f"Gagal menyalin: {message}")
+        self._show_paste_failure(message)
 
     # ---------- izin paste otomatis (grup paste-teks) ----------
     def _show_paste_failure(self, message: str) -> None:
@@ -519,75 +476,6 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             "Atau tanpa daemon, jalankan ydotool dengan \"ydotool key "
             "ctrl+v\" — aplikasi akan memakainya sebagai cadangan.")
 
-    # ---------- pintasan global (bebas masalah fokus) ----------
-    def paste_foreground(self) -> None:
-        """Salin teks terpilih; Ctrl+V dikirim oleh pemanggil (pintasan).
-
-        Dipakai oleh pintasan global: aplikasi tujuan sudah fokus, jadi
-        tidak ada jendela yang bergerak dan tidak ada hitung mundur.
-        """
-        path = self.selected_path()
-        if path is None or path.is_dir():
-            self.status_var.set("Pilih berkas .txt dulu, lalu tekan pintasan.")
-            return
-        try:
-            text = read_text(path)
-        except OSError as exc:
-            self.status_var.set(f"Gagal membaca: {exc}")
-            return
-        threading.Thread(target=self._foreground_worker, args=(text,),
-                         daemon=True).start()
-
-    def _foreground_worker(self, text: str) -> None:
-        log_error("[shortcut] paste ke jendela yang sedang fokus")
-        result = copy_text(text)
-        log_error(f"[shortcut] salin: ok={result.ok} tool={result.tool} "
-                  f"verified={result.verified}")
-        if not result.ok:
-            self.after(0, self._tk_copy, text)
-        paste = simulate_paste()
-        log_error(f"[shortcut] ctrl+v: ok={paste.ok} tool={paste.tool} "
-                  f"pesan={paste.message}")
-        self.after(0, self.status_var.set,
-                   f"⚡ {paste.message}" if paste.ok else f"📋 {paste.message}")
-
-    def install_shortcut(self) -> None:
-        """Pasang pintasan global Ctrl+Alt+V lewat gsettings (GNOME)."""
-        ok, message = shortcut.install()
-        if ok:
-            messagebox.showinfo(
-                "Pintasan aktif",
-                f"{message}\n\nSekarang: pilih berkas di Paste Teks, klik "
-                "kolom input aplikasi tujuan, lalu tekan Ctrl+Alt+V.")
-            self.status_var.set(f"⌨ Pintasan {shortcut.hint()} aktif.")
-        else:
-            messagebox.showwarning(
-                "Gagal memasang pintasan",
-                f"{message}\n\nAlternatif: gunakan tombol ⚡ Paste ke "
-                "Aplikasi Lain.")
-
-    def show_shortcut_info(self) -> None:
-        hint = shortcut.hint()
-        st = shortcut.status()
-        text = (
-            "Cara paste paling andal (tanpa masalah fokus):\n\n"
-            "1. Pilih berkas .txt di daftar (klik sekali).\n"
-            "2. Klik kolom input di aplikasi tujuan.\n"
-            f"3. Tekan pintasan global {hint}\n\n"
-            "Teks langsung tertempel di aplikasi itu — tanpa hitung mundur, "
-            "tanpa jendela berpindah, tanpa rebutan fokus.\n\n"
-            f"Status: {st.summary()}"
-        )
-        if st.supported and not st.installed:
-            if messagebox.askyesno("Aktifkan pintasan?",
-                                   text + "\n\nPasang pintasan sekarang?"):
-                self.install_shortcut()
-                return
-        if not st.supported:
-            text += ("\n\nPintasan membutuhkan sesi GNOME. Di desktop lain, "
-                     "pakai tombol ⚡ Paste ke Aplikasi Lain.")
-        messagebox.showinfo("Pintasan Paste", text)
-
     # ---------- CRUD ----------
     def _target_dir(self) -> Path:
         path = self.selected_path()
@@ -651,11 +539,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
 
     # ---------- Pengaturan ----------
     def _save_current_settings(self) -> None:
-        self.settings.update({
-            "delay": float(self.delay_var.get()),
-            "auto_paste": bool(self.auto_var.get()),
-            "always_on_top": bool(self.top_var.get()),
-        })
+        self.settings["always_on_top"] = bool(self.top_var.get())
         save_settings(self.settings)
 
     def _apply_settings(self) -> None:
@@ -729,13 +613,6 @@ def run_cli(argv: list[str] | None = None) -> int:
                         help="kirim teks uji lewat ydotool (diagnostik)")
     parser.add_argument("--ctrl-v", action="store_true",
                         help="dengan --test-paste: kirim Ctrl+V, bukan teks")
-    parser.add_argument("--paste-foreground", action="store_true",
-                        help="salin teks terpilih lalu kirim Ctrl+V (dipakai "
-                             "pintasan Ctrl+Alt+V)")
-    parser.add_argument("--install-shortcut", action="store_true",
-                        help="pasang pintasan global Ctrl+Alt+V (GNOME)")
-    parser.add_argument("--remove-shortcut", action="store_true",
-                        help="hapus pintasan global")
     parser.add_argument("--check", action="store_true",
                         help="Periksa lingkungan (tkinter, display, tool) lalu keluar.")
     args = parser.parse_args(argv)
@@ -751,10 +628,6 @@ def run_cli(argv: list[str] | None = None) -> int:
         for node in scan_roots(roots):
             _print_tree(node, prefix="")
         return 0
-    if args.install_shortcut:
-        return run_install_shortcut()
-    if args.remove_shortcut:
-        return run_remove_shortcut()
     if args.test_paste:
         return run_test_paste(ctrl_v=args.ctrl_v)
 
@@ -773,10 +646,6 @@ def run_cli(argv: list[str] | None = None) -> int:
             return 0 if paste.ok else 2
         return 0 if result.ok else 2
 
-    # Pintasan global: proses pendek, tanpa GUI (harus dicek sebelum tkinter).
-    if args.paste_foreground:
-        return run_paste_foreground(roots)
-
     if tk is None:
         print("Error: tkinter tidak tersedia. Pasang python3-tk "
               "(sudo apt install python3-tk).", file=sys.stderr)
@@ -793,84 +662,6 @@ def run_cli(argv: list[str] | None = None) -> int:
         return 1
     app.mainloop()
     return 0
-
-
-def _selected_snippet(roots: list[Path]) -> Path | None:
-    """Teks pilihan terakhir (disimpan GUI) atau satu-satunya .txt.
-
-    Dipakai `--paste-foreground`: pintasan global tidak punya jendela untuk
-    menanyakan pilihan, jadi kita memakai pilihan terakhir dari GUI.
-    """
-    state_file = SETTINGS_DIR / "last-selection.txt"
-    try:
-        raw = state_file.read_text(encoding="utf-8").strip()
-        if raw:
-            path = Path(raw)
-            if path.is_file():
-                return path
-    except OSError:
-        pass
-    files = [n.path for n in flatten_texts(scan_roots(roots))]
-    if len(files) == 1:
-        return files[0]
-    return None
-
-
-def run_paste_foreground(roots: list[Path]) -> int:
-    """Salin teks terpilih lalu kirim Ctrl+V ke jendela yang sedang fokus.
-
-    Inilah handler pintasan global: tidak membuat jendela, tidak mengubah
-    fokus. Jalur ini identik dengan `--test-paste --ctrl-v` yang terbukti
-    bekerja.
-    """
-    from .clipboard import copy_text, read_text_from_clipboard, simulate_paste
-
-    path = _selected_snippet(roots)
-    if path is None:
-        print("Tidak ada teks terpilih. Buka Paste Teks, pilih satu berkas, "
-              "lalu tekan pintasan lagi.", file=sys.stderr)
-        return 4
-    try:
-        text = read_text(path)
-    except OSError as exc:
-        print(f"Gagal membaca {path}: {exc}", file=sys.stderr)
-        return 1
-
-    result = copy_text(text)
-    log_error(f"[shortcut] salin: ok={result.ok} tool={result.tool} "
-              f"verified={result.verified}")
-    if not result.ok:
-        print(result.message, file=sys.stderr)
-        return 2
-    back = read_text_from_clipboard()
-    if back is not None and back.rstrip("\n") != text.rstrip("\n"):
-        print("Peringatan: isi clipboard tidak cocok dengan teks terpilih.",
-              file=sys.stderr)
-
-    paste = simulate_paste()
-    log_error(f"[shortcut] ctrl+v: ok={paste.ok} tool={paste.tool} "
-              f"pesan={paste.message}")
-    if not paste.ok:
-        print(paste.message, file=sys.stderr)
-        return 2
-    print(f"{paste.message} ({path.name})")
-    return 0
-
-
-def run_install_shortcut(binding: str | None = None) -> int:
-    """Pasang pintasan global (tanpa GUI, cocok untuk skrip/CI)."""
-    ok, message = shortcut.install(binding or shortcut.DEFAULT_BINDING)
-    print(message)
-    if ok:
-        print(f"Uji: fokuskan aplikasi lain, pilih berkas di Paste Teks, "
-              f"lalu tekan {binding or shortcut.DEFAULT_BINDING}.")
-    return 0 if ok else 2
-
-
-def run_remove_shortcut() -> int:
-    ok, message = shortcut.remove()
-    print(message)
-    return 0 if ok else 2
 
 
 TEST_PASTE_TEXT = "paste-teks-ok "

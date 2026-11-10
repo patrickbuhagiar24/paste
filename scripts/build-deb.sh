@@ -46,7 +46,7 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
-Recommends: wl-clipboard, xclip, xdotool, ydotool, gir1.2-gtk-3.0, xdg-desktop-portal-gnome
+Recommends: wl-clipboard, xclip, xdotool, ydotool
 Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lain satu klik
  Paste Teks menampilkan berkas .txt dalam hierarki kategori/folder (GUI).
  Double-click atau tombol "Paste ke Aplikasi Lain" menyalin teks ke clipboard

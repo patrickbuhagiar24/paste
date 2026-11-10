@@ -1,3 +1,22 @@
+paste-teks (1.4.0-1) unstable; urgency=medium
+
+  * PERBAIKAN INTI "paste tidak berfungsi": jendela kini DILEPAS
+    (withdraw) sebelum Ctrl+V dikirim, bukan dikecilkan atau diturunkan.
+    Hanya withdraw yang benar-benar menyerahkan fokus kembali ke aplikasi
+    tujuan. Versi 1.2.2 memakai lower() yang TIDAK memindahkan fokus,
+    sehingga Ctrl+V masuk ke jendela Paste Teks sendiri.
+  * Alur: klik teks -> salin (terverifikasi) -> withdraw -> jeda fokus
+    0,6 detik -> Ctrl+V -> jendela muncul kembali.
+  * DISEDERHANAKAN sesuai permintaan: tombol Salin, pintasan global
+    (Ctrl+Alt+V beserta pemasangan otomatisnya), hitung mundur, spinbox
+    jeda, dan opsi "double-click = salin" dihapus. Satu tindakan saja.
+  * Pengaturan baru: focus_delay (jeda fokus) di settings.json.
+  * Logging alur paste dipertahankan untuk diagnosis.
+  * Uji: 79 lolos (termasuk uji urutan withdraw -> jeda -> Ctrl+V dan
+    uji bahwa kontrol lama sudah tidak ada).
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.3.0-1) unstable; urgency=medium
 
   * BARU: pintasan global Ctrl+Alt+V — cara paste yang tidak bergantung
