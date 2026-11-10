@@ -17,13 +17,14 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, uinput
+from . import __version__, shortcut, uinput
 from .clipboard import copy_text, simulate_paste
 from .snippets import (
     Node,
     create_category,
     create_snippet,
     default_roots,
+    flatten_texts,
     delete_path,
     read_text,
     scan_roots,
@@ -152,6 +153,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         ttk.Button(toolbar, text="＋ Teks", command=self.add_text).pack(side="left", padx=(4, 0))
         ttk.Button(toolbar, text="✏️ Edit", command=self.edit_selected).pack(side="left", padx=(4, 0))
         ttk.Button(toolbar, text="🗑 Hapus", command=self.delete_selected).pack(side="left", padx=(4, 0))
+        ttk.Button(toolbar, text="⌨ Pintasan",
+                   command=self.show_shortcut_info).pack(side="right")
 
         # Panel utama: kiri pohon, kanan pratinjau
         paned = ttk.PanedWindow(self, orient="horizontal")
@@ -290,6 +293,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             self.preview.configure(state="disabled")
             return
         self.current_file = path
+        self._remember_selection(path)
         try:
             text = read_text(path)
         except OSError as exc:
@@ -353,10 +357,13 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
                          daemon=True).start()
 
     def _paste_worker(self, text: str, delay: float) -> None:
+        log_error(f"[paste] mulai: {len(text)} karakter, jeda {delay}s")
         result = copy_text(text)
         if not result.ok:
             self.after(0, self._tk_copy, text)
             result.message += " (disalin via clipboard internal)"
+        log_error(f"[paste] salin: ok={result.ok} tool={result.tool} "
+                  f"verified={result.verified}")
         self.after(0, self._start_countdown, text, delay, result.message)
 
     def _start_countdown(self, text: str, delay: float, copy_msg: str) -> None:
@@ -387,6 +394,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         tick()
 
     def _finish_paste(self) -> None:
+        log_error("[paste] hitung mundur selesai, mengirim Ctrl+V")
         # JANGAN iconify: di Wayland/GNOME hal itu sering diabaikan, memicu
         # animasi, dan bisa merebut fokus tepat saat Ctrl+V dikirim. Jendela
         # utama hanya diturunkan (lower) agar aplikasi tujuan tetap fokus.
@@ -394,7 +402,10 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         threading.Thread(target=self._paste_sender, daemon=True).start()
 
     def _paste_sender(self) -> None:
+        log_error("[paste] simulate_paste dipanggil (thread latar)")
         result = simulate_paste()
+        log_error(f"[paste] hasil: ok={result.ok} tool={result.tool} "
+                  f"pesan={result.message}")
         self.after(0, self._paste_done, result)
 
     def _paste_done(self, result) -> None:
@@ -507,6 +518,75 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             f"{detail}\n\nCoba jalankan di terminal:\n\n  ydotoold &\n\n"
             "Atau tanpa daemon, jalankan ydotool dengan \"ydotool key "
             "ctrl+v\" — aplikasi akan memakainya sebagai cadangan.")
+
+    # ---------- pintasan global (bebas masalah fokus) ----------
+    def paste_foreground(self) -> None:
+        """Salin teks terpilih; Ctrl+V dikirim oleh pemanggil (pintasan).
+
+        Dipakai oleh pintasan global: aplikasi tujuan sudah fokus, jadi
+        tidak ada jendela yang bergerak dan tidak ada hitung mundur.
+        """
+        path = self.selected_path()
+        if path is None or path.is_dir():
+            self.status_var.set("Pilih berkas .txt dulu, lalu tekan pintasan.")
+            return
+        try:
+            text = read_text(path)
+        except OSError as exc:
+            self.status_var.set(f"Gagal membaca: {exc}")
+            return
+        threading.Thread(target=self._foreground_worker, args=(text,),
+                         daemon=True).start()
+
+    def _foreground_worker(self, text: str) -> None:
+        log_error("[shortcut] paste ke jendela yang sedang fokus")
+        result = copy_text(text)
+        log_error(f"[shortcut] salin: ok={result.ok} tool={result.tool} "
+                  f"verified={result.verified}")
+        if not result.ok:
+            self.after(0, self._tk_copy, text)
+        paste = simulate_paste()
+        log_error(f"[shortcut] ctrl+v: ok={paste.ok} tool={paste.tool} "
+                  f"pesan={paste.message}")
+        self.after(0, self.status_var.set,
+                   f"⚡ {paste.message}" if paste.ok else f"📋 {paste.message}")
+
+    def install_shortcut(self) -> None:
+        """Pasang pintasan global Ctrl+Alt+V lewat gsettings (GNOME)."""
+        ok, message = shortcut.install()
+        if ok:
+            messagebox.showinfo(
+                "Pintasan aktif",
+                f"{message}\n\nSekarang: pilih berkas di Paste Teks, klik "
+                "kolom input aplikasi tujuan, lalu tekan Ctrl+Alt+V.")
+            self.status_var.set(f"⌨ Pintasan {shortcut.hint()} aktif.")
+        else:
+            messagebox.showwarning(
+                "Gagal memasang pintasan",
+                f"{message}\n\nAlternatif: gunakan tombol ⚡ Paste ke "
+                "Aplikasi Lain.")
+
+    def show_shortcut_info(self) -> None:
+        hint = shortcut.hint()
+        st = shortcut.status()
+        text = (
+            "Cara paste paling andal (tanpa masalah fokus):\n\n"
+            "1. Pilih berkas .txt di daftar (klik sekali).\n"
+            "2. Klik kolom input di aplikasi tujuan.\n"
+            f"3. Tekan pintasan global {hint}\n\n"
+            "Teks langsung tertempel di aplikasi itu — tanpa hitung mundur, "
+            "tanpa jendela berpindah, tanpa rebutan fokus.\n\n"
+            f"Status: {st.summary()}"
+        )
+        if st.supported and not st.installed:
+            if messagebox.askyesno("Aktifkan pintasan?",
+                                   text + "\n\nPasang pintasan sekarang?"):
+                self.install_shortcut()
+                return
+        if not st.supported:
+            text += ("\n\nPintasan membutuhkan sesi GNOME. Di desktop lain, "
+                     "pakai tombol ⚡ Paste ke Aplikasi Lain.")
+        messagebox.showinfo("Pintasan Paste", text)
 
     # ---------- CRUD ----------
     def _target_dir(self) -> Path:
@@ -649,6 +729,13 @@ def run_cli(argv: list[str] | None = None) -> int:
                         help="kirim teks uji lewat ydotool (diagnostik)")
     parser.add_argument("--ctrl-v", action="store_true",
                         help="dengan --test-paste: kirim Ctrl+V, bukan teks")
+    parser.add_argument("--paste-foreground", action="store_true",
+                        help="salin teks terpilih lalu kirim Ctrl+V (dipakai "
+                             "pintasan Ctrl+Alt+V)")
+    parser.add_argument("--install-shortcut", action="store_true",
+                        help="pasang pintasan global Ctrl+Alt+V (GNOME)")
+    parser.add_argument("--remove-shortcut", action="store_true",
+                        help="hapus pintasan global")
     parser.add_argument("--check", action="store_true",
                         help="Periksa lingkungan (tkinter, display, tool) lalu keluar.")
     args = parser.parse_args(argv)
@@ -664,6 +751,10 @@ def run_cli(argv: list[str] | None = None) -> int:
         for node in scan_roots(roots):
             _print_tree(node, prefix="")
         return 0
+    if args.install_shortcut:
+        return run_install_shortcut()
+    if args.remove_shortcut:
+        return run_remove_shortcut()
     if args.test_paste:
         return run_test_paste(ctrl_v=args.ctrl_v)
 
@@ -682,10 +773,15 @@ def run_cli(argv: list[str] | None = None) -> int:
             return 0 if paste.ok else 2
         return 0 if result.ok else 2
 
+    # Pintasan global: proses pendek, tanpa GUI (harus dicek sebelum tkinter).
+    if args.paste_foreground:
+        return run_paste_foreground(roots)
+
     if tk is None:
         print("Error: tkinter tidak tersedia. Pasang python3-tk "
               "(sudo apt install python3-tk).", file=sys.stderr)
         return 1
+
     try:
         app = PasteTeksApp(roots=roots)
     except Exception:
@@ -697,6 +793,84 @@ def run_cli(argv: list[str] | None = None) -> int:
         return 1
     app.mainloop()
     return 0
+
+
+def _selected_snippet(roots: list[Path]) -> Path | None:
+    """Teks pilihan terakhir (disimpan GUI) atau satu-satunya .txt.
+
+    Dipakai `--paste-foreground`: pintasan global tidak punya jendela untuk
+    menanyakan pilihan, jadi kita memakai pilihan terakhir dari GUI.
+    """
+    state_file = SETTINGS_DIR / "last-selection.txt"
+    try:
+        raw = state_file.read_text(encoding="utf-8").strip()
+        if raw:
+            path = Path(raw)
+            if path.is_file():
+                return path
+    except OSError:
+        pass
+    files = [n.path for n in flatten_texts(scan_roots(roots))]
+    if len(files) == 1:
+        return files[0]
+    return None
+
+
+def run_paste_foreground(roots: list[Path]) -> int:
+    """Salin teks terpilih lalu kirim Ctrl+V ke jendela yang sedang fokus.
+
+    Inilah handler pintasan global: tidak membuat jendela, tidak mengubah
+    fokus. Jalur ini identik dengan `--test-paste --ctrl-v` yang terbukti
+    bekerja.
+    """
+    from .clipboard import copy_text, read_text_from_clipboard, simulate_paste
+
+    path = _selected_snippet(roots)
+    if path is None:
+        print("Tidak ada teks terpilih. Buka Paste Teks, pilih satu berkas, "
+              "lalu tekan pintasan lagi.", file=sys.stderr)
+        return 4
+    try:
+        text = read_text(path)
+    except OSError as exc:
+        print(f"Gagal membaca {path}: {exc}", file=sys.stderr)
+        return 1
+
+    result = copy_text(text)
+    log_error(f"[shortcut] salin: ok={result.ok} tool={result.tool} "
+              f"verified={result.verified}")
+    if not result.ok:
+        print(result.message, file=sys.stderr)
+        return 2
+    back = read_text_from_clipboard()
+    if back is not None and back.rstrip("\n") != text.rstrip("\n"):
+        print("Peringatan: isi clipboard tidak cocok dengan teks terpilih.",
+              file=sys.stderr)
+
+    paste = simulate_paste()
+    log_error(f"[shortcut] ctrl+v: ok={paste.ok} tool={paste.tool} "
+              f"pesan={paste.message}")
+    if not paste.ok:
+        print(paste.message, file=sys.stderr)
+        return 2
+    print(f"{paste.message} ({path.name})")
+    return 0
+
+
+def run_install_shortcut(binding: str | None = None) -> int:
+    """Pasang pintasan global (tanpa GUI, cocok untuk skrip/CI)."""
+    ok, message = shortcut.install(binding or shortcut.DEFAULT_BINDING)
+    print(message)
+    if ok:
+        print(f"Uji: fokuskan aplikasi lain, pilih berkas di Paste Teks, "
+              f"lalu tekan {binding or shortcut.DEFAULT_BINDING}.")
+    return 0 if ok else 2
+
+
+def run_remove_shortcut() -> int:
+    ok, message = shortcut.remove()
+    print(message)
+    return 0 if ok else 2
 
 
 TEST_PASTE_TEXT = "paste-teks-ok "

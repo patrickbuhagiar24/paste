@@ -98,3 +98,99 @@ def test_test_paste_flag_exists():
         assert status["ctrl_v"] is True
     finally:
         app.run_test_paste = original
+
+
+def _snippet(tmp_path, text="Halo"):
+    d = tmp_path / "Snippets"
+    d.mkdir(exist_ok=True)
+    f = d / "Sapaan.txt"
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def test_paste_foreground_uses_selected_snippet(tmp_path, monkeypatch, capsys):
+    """Pintasan global: salin teks terpilih lalu kirim Ctrl+V."""
+    from paste_teks import app, clipboard
+
+    snippet = _snippet(tmp_path)
+    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
+    (tmp_path / "cfg").mkdir()
+    (tmp_path / "cfg" / "last-selection.txt").write_text(str(snippet))
+
+    copied = {}
+
+    def fake_copy(text, runner=None):
+        copied["text"] = text
+        return clipboard.ClipboardResult(ok=True, tool="wl-copy", verified=True,
+                                         message="Teks disalin dengan wl-copy.")
+
+    monkeypatch.setattr(clipboard, "copy_text", fake_copy)
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard",
+                        lambda runner=None: snippet.read_text())
+    monkeypatch.setattr(clipboard, "simulate_paste",
+                        lambda: clipboard.PasteResult(True, "ydotool", "ok"))
+
+    code = app.run_paste_foreground([tmp_path / "Snippets"])
+    assert code == 0
+    assert copied["text"] == "Halo"
+    assert "ok" in capsys.readouterr().out
+
+
+def test_paste_foreground_without_selection(tmp_path, monkeypatch, capsys):
+    from paste_teks import app
+
+    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
+    (tmp_path / "cfg").mkdir()
+    # dua berkas -> tidak bisa menebak
+    d = tmp_path / "Snippets"
+    d.mkdir()
+    (d / "a.txt").write_text("a")
+    (d / "b.txt").write_text("b")
+    assert app.run_paste_foreground([d]) == 4
+    assert "Tidak ada teks terpilih" in capsys.readouterr().err
+
+
+def test_paste_foreground_single_file_fallback(tmp_path, monkeypatch):
+    from paste_teks import app, clipboard
+
+    d = tmp_path / "Snippets"
+    d.mkdir()
+    (d / "satu.txt").write_text("satu-satunya")
+    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
+    (tmp_path / "cfg").mkdir()
+    got = {}
+    monkeypatch.setattr(clipboard, "copy_text",
+                        lambda text, runner=None: got.update(text=text) or
+                        clipboard.ClipboardResult(True, "wl-copy", "ok", True))
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: None)
+    monkeypatch.setattr(clipboard, "simulate_paste",
+                        lambda: clipboard.PasteResult(True, "ydotool", "ok"))
+    assert app.run_paste_foreground([d]) == 0
+    assert got["text"] == "satu-satunya"
+
+
+def test_paste_foreground_reports_ydotool_failure(tmp_path, monkeypatch, capsys):
+    from paste_teks import app, clipboard
+
+    snippet = _snippet(tmp_path)
+    monkeypatch.setattr(app, "SETTINGS_DIR", tmp_path / "cfg")
+    (tmp_path / "cfg").mkdir()
+    (tmp_path / "cfg" / "last-selection.txt").write_text(str(snippet))
+    monkeypatch.setattr(clipboard, "copy_text",
+                        lambda text, runner=None: clipboard.ClipboardResult(
+                            True, "wl-copy", "ok", True))
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: "Halo")
+    monkeypatch.setattr(clipboard, "simulate_paste",
+                        lambda: clipboard.PasteResult(False, "", "gagal"))
+    assert app.run_paste_foreground([tmp_path / "Snippets"]) == 2
+    assert "gagal" in capsys.readouterr().err
+
+
+def test_install_shortcut_flags(monkeypatch, capsys):
+    from paste_teks import app, shortcut
+    monkeypatch.setattr(shortcut, "install", lambda binding=None: (True, "dipasang"))
+    assert app.run_cli(["--install-shortcut"]) == 0
+    assert "dipasang" in capsys.readouterr().out
+    monkeypatch.setattr(shortcut, "remove", lambda: (True, "dihapus"))
+    assert app.run_cli(["--remove-shortcut"]) == 0
+    assert "dihapus" in capsys.readouterr().out

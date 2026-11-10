@@ -1,3 +1,23 @@
+paste-teks (1.3.0-1) unstable; urgency=medium
+
+  * BARU: pintasan global Ctrl+Alt+V — cara paste yang tidak bergantung
+    pada fokus jendela. Pilih teks di Paste Teks, klik kolom input
+    aplikasi tujuan, tekan Ctrl+Alt+V: teks tersalin dan Ctrl+V dikirim
+    tanpa jendela berpindah, tanpa hitung mundur, tanpa rebutan fokus.
+    Dipasang lewat keybinding kustom GNOME (gsettings), idempoten,
+    pintasan pengguna lain dipertahankan.
+  * BARU: `paste-teks --paste-foreground` (handler pintasan, tanpa GUI)
+    dan `--install-shortcut` / `--remove-shortcut`.
+  * postinst memasang pintasan untuk pengguna yang sedang login.
+  * GUI: tombol "⌨ Pintasan" + penyimpanan pilihan terakhir
+    (~/.config/paste-teks/last-selection.txt) agar pintasan tahu teks
+    mana yang ditempel.
+  * Logging alur paste ke error.log ([paste]/[shortcut]) untuk diagnosis.
+  * PERBAIKAN: `--paste-foreground` tidak lagi gagal saat tkinter absen.
+  * Uji: 93 lolos (+19).
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.2.2-1) unstable; urgency=medium
 
   * PERBAIKAN fokus (penyebab Ctrl+V tidak sampai): jendela hitung mundur
