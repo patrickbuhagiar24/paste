@@ -146,6 +146,18 @@ tests/               Uji pytest (snippets + clipboard)
 .github/workflows/   CI: uji → bangun .deb → terbitkan repo APT ke gh-pages
 ```
 
+## Pemecahan masalah
+
+- **Jendela tidak muncul saat klik ikon**: jalankan di terminal untuk melihat error:
+  ```bash
+  paste-teks --check   # laporan lingkungan (tkinter, display, tool, folder)
+  paste-teks           # jalankan langsung — traceback tampil di terminal
+  cat ~/.config/paste-teks/error.log   # log error terakhir
+  ```
+- **Paste otomatis tidak bekerja (Wayland)**: tambahkan pengguna ke grup `input`
+  lalu login ulang: `sudo usermod -aG input "$USER"`. Teks tetap tersalin —
+  tekan `Ctrl+V` manual di aplikasi tujuan.
+
 ## Uji & build
 
 ```bash

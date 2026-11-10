@@ -7,10 +7,12 @@ salin + paste otomatis (Ctrl+V) ke aplikasi lain dalam satu klik.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 from . import __version__
@@ -42,6 +44,18 @@ _ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-
 
 SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "paste-teks"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
+ERROR_LOG = SETTINGS_DIR / "error.log"
+
+
+def log_error(message: str) -> None:
+    """Catat error ke ~/.config/paste-teks/error.log (untuk diagnosis)."""
+    try:
+        SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        with ERROR_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(f"[{stamp}] {message}\n")
+    except OSError:
+        pass
 
 DEFAULT_SETTINGS = {
     "delay": 1.5,          # detik sebelum paste otomatis dikirim
@@ -91,7 +105,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         if tk is None:
             raise RuntimeError("tkinter tidak tersedia. Pasang python3-tk "
                                "(sudo apt install python3-tk).")
-        super().__init__()
+        try:
+            super().__init__()
+        except Exception as exc:
+            raise RuntimeError(
+                "Gagal membuka jendela (display tidak tersedia?). "
+                f"Detail: {exc}") from exc
         self.title(f"Paste Teks v{__version__} — Tempel Cepat Satu Klik")
         self.geometry("980x620")
         self.minsize(720, 440)
@@ -103,6 +122,18 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self._build_ui()
         self.refresh_tree()
         self._apply_settings()
+        # Pastikan jendela terlihat & fokus (penting saat diluncurkan dari menu).
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self._center_window()
+
+    def _center_window(self) -> None:
+        self.update_idletasks()
+        w, h = self.winfo_width(), self.winfo_height()
+        x = max(0, (self.winfo_screenwidth() - w) // 2)
+        y = max(0, (self.winfo_screenheight() - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     # ---------- UI ----------
     def _build_ui(self) -> None:
@@ -455,6 +486,8 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--paste", metavar="FILE",
                         help="Salin FILE lalu kirim Ctrl+V otomatis.")
     parser.add_argument("--version", action="store_true", help="Tampilkan versi.")
+    parser.add_argument("--check", action="store_true",
+                        help="Periksa lingkungan (tkinter, display, tool) lalu keluar.")
     args = parser.parse_args(argv)
 
     if args.version:
@@ -462,6 +495,8 @@ def run_cli(argv: list[str] | None = None) -> int:
         return 0
 
     roots = [Path(d) for d in args.dir] or default_roots()
+    if args.check:
+        return run_check(roots)
     if args.list:
         for node in scan_roots(roots):
             _print_tree(node, prefix="")
@@ -485,8 +520,37 @@ def run_cli(argv: list[str] | None = None) -> int:
         print("Error: tkinter tidak tersedia. Pasang python3-tk "
               "(sudo apt install python3-tk).", file=sys.stderr)
         return 1
-    app = PasteTeksApp(roots=roots)
+    try:
+        app = PasteTeksApp(roots=roots)
+    except Exception:
+        tb = traceback.format_exc()
+        log_error(f"Gagal memulai GUI:\n{tb}")
+        print(f"Error: gagal memulai Paste Teks. Detail di {ERROR_LOG}",
+              file=sys.stderr)
+        print(tb, file=sys.stderr)
+        return 1
     app.mainloop()
+    return 0
+
+
+def run_check(roots: list[Path]) -> int:
+    """Cetak laporan diagnosis lingkungan (untuk pemecahan masalah)."""
+    from .clipboard import available_tools, detect_session
+
+    print(f"paste-teks {__version__}")
+    print(f"Python: {sys.version.split()[0]} ({sys.executable})")
+    print(f"Sesi grafis: {detect_session()} "
+          f"(DISPLAY={os.environ.get('DISPLAY', '-')}, "
+          f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')})")
+    print(f"tkinter: {'tersedia' if tk is not None else 'TIDAK tersedia — pasang python3-tk'}")
+    tools = available_tools()
+    print("Tool clipboard/paste: "
+          + ", ".join(f"{k}={'ada' if v else 'tidak ada'}" for k, v in tools.items()))
+    print("Folder snippets:")
+    for r in roots:
+        print(f"  - {r} ({'ada' if r.is_dir() else 'belum ada'})")
+    print(f"Pengaturan: {SETTINGS_FILE}")
+    print(f"Log error: {ERROR_LOG}")
     return 0
 
 
@@ -498,7 +562,15 @@ def _print_tree(node: Node, prefix: str) -> None:
 
 
 def main() -> None:
-    raise SystemExit(run_cli())
+    try:
+        code = run_cli()
+    except Exception:
+        tb = traceback.format_exc()
+        log_error(tb)
+        print(f"Error tak terduga. Detail di {ERROR_LOG}", file=sys.stderr)
+        print(tb, file=sys.stderr)
+        raise SystemExit(1)
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":
