@@ -28,8 +28,8 @@ UDEV_RULE = "/usr/lib/udev/rules.d/70-paste-teks-uinput.rules"
 DEVICE = "/dev/uinput"
 
 # ydotool >= 1.0 berbicara dengan daemon ydotoold lewat socket Unix.
+# Letak resminya di $XDG_RUNTIME_DIR (biasanya /run/user/<uid>/ydotool.sock).
 SOCKET_PATHS = ("/run/ydotoold.sock", "/tmp/ydotool.sock")
-USER_SOCKET = "/run/user/{uid}/ydotool.sock"
 
 COMMON_GROUPS = ("sudo", "admin", "wheel", "users", "plugdev", "input",
                  "audio", "video", "docker", "adm", "staff", "lpadmin",
@@ -132,10 +132,39 @@ def device_details(dev: str = DEVICE) -> tuple[int, int, str] | None:
     return info.st_uid, info.st_gid, group
 
 
+def socket_candidates() -> list[str]:
+    """Semua lokasi socket yang mungkin dipakai ydotoold."""
+    uid = os.getuid()
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    return [f"{runtime}/ydotool.sock",
+            f"{runtime}/.ydotool_socket",
+            *SOCKET_PATHS]
+
+
+def acl_granted(dev: str = DEVICE, *, uid: int | None = None) -> bool:
+    """Apakah ACL memberi izin tulis kepada pengguna ini di ``dev``?
+
+    TAG+="uaccess" membuat logind menambahkan ACL ``user:<uid>:rw-`` pada
+    perangkat. Karena itu akses bisa ada tanpa keanggotaan grup apa pun.
+    """
+    try:
+        import subprocess
+
+        out = subprocess.run(["getfacl", "--absolute-names", "-p", dev],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, Exception):
+        return False
+    want = f"user:{uid if uid is not None else os.getuid()}:"
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith(want) and "w" in line.rsplit(":", 1)[-1]:
+            return True
+    return False
+
+
 def ydotoold_socket() -> str | None:
     """Lokasi socket ydotoold bila ada (untuk ydotool >= 1.0)."""
-    candidates = list(SOCKET_PATHS) + [USER_SOCKET.format(uid=os.getuid())]
-    for path in candidates:
+    for path in socket_candidates():
         if os.path.exists(path):
             return path
     return None
@@ -198,6 +227,7 @@ class UinputStatus:
     session: set[str] | None = None
     daemon: bool = False
     rule: bool = False
+    acl: bool = False
 
     # --- turunan -------------------------------------------------------
     @property
@@ -211,6 +241,11 @@ class UinputStatus:
     def account_ready(self) -> bool:
         """Akun sudah tercatat di grup (mungkin sesi belum memuat)."""
         return self.in_group or self.in_session
+
+    @property
+    def acl_granted(self) -> bool:
+        """Akses berasal dari ACL uaccess (tanpa perlu grup / logout)."""
+        return self.device_writable and self.acl
 
     @property
     def needs_relogin(self) -> bool:
@@ -252,10 +287,17 @@ class UinputStatus:
         else:
             group_detail = "grup belum ada — paket belum terpasang benar?"
 
-        # Bila perangkat sudah bisa ditulis, grup pasti aktif — /proc
-        # mungkin tidak terbaca (container, NSS khusus), jadi jangan salah tanda.
-        group_ok = self.account_ready and (self.in_session or self.device_writable)
-        rows.append((state(group_ok), f"{prefix}grup '{GROUP}'", group_detail))
+        if self.acl_granted and not self.account_ready:
+            rows.append(("✅", f"{prefix}akses {DEVICE}",
+                         "ACL sesi aktif (tanpa grup, tanpa logout)"))
+        else:
+            # Bila perangkat sudah bisa ditulis, akses pasti aktif — /proc
+            # mungkin tidak terbaca (container, NSS khusus), jadi jangan
+            # salah memberi tanda.
+            group_ok = self.account_ready and (self.in_session
+                                               or self.device_writable)
+            rows.append((state(group_ok), f"{prefix}grup '{GROUP}'",
+                         group_detail))
 
         if self.device_writable:
             device_detail = f"{DEVICE} bisa ditulis"
@@ -303,6 +345,7 @@ def status(user: str | None = None) -> UinputStatus:
         session=session_groups(),
         daemon=ydotoold_running(),
         rule=udev_rule_installed(),
+        acl=acl_granted(),
     )
 
 

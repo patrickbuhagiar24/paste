@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from paste_teks import clipboard
 
 
+def _mk(count=0, stderr=""):
+    return subprocess.CompletedProcess(["x"], count, stdout="", stderr=stderr)
+
+
 def _fake_runner(captured, returncode=0):
     def run(cmd, input=None, **kwargs):
         captured.append((cmd, input))
@@ -47,8 +51,9 @@ def test_simulate_paste_uses_ydotool_on_wayland(monkeypatch):
     result = clipboard.simulate_paste(runner=_fake_runner(captured))
     assert result.ok and result.tool == "ydotool"
     assert captured[0][0][0] == "ydotool"
-    # Keycode Ctrl=29, V=47 (42=Shift — bug lama mengirim Shift+V).
-    assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
+    # `ydotool key` hanya menerima SATU argumen kunci: "ctrl+v" (bukan
+    # rangkaian keycode, dan bukan keycode 42=Shift seperti bug v1.0.2).
+    assert captured[0][0] == ["ydotool", "key", "ctrl+v"]
 
 
 def test_detect_session(monkeypatch):
@@ -57,3 +62,48 @@ def test_detect_session(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY")
     monkeypatch.setenv("DISPLAY", ":0")
     assert clipboard.detect_session() == "x11"
+
+
+def test_ensure_ydotoold_starts_service(monkeypatch):
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: True)
+    calls = []
+
+    def runner(cmd, **kw):
+        calls.append(cmd)
+        return _mk(count=0)
+
+    assert clipboard.ensure_ydotoold(runner=runner) is True
+    assert calls == [["systemctl", "--user", "start", "ydotoold.service"]]
+
+
+def test_ensure_ydotoold_failure_returns_false():
+    assert clipboard.ensure_ydotoold(
+        runner=lambda cmd, **kw: _mk(count=4, stderr="no systemd")) is False
+
+
+def test_ensure_ydotoold_handles_missing_systemctl():
+    def boom(cmd, **kw):
+        raise OSError("systemctl tidak ada")
+
+    assert clipboard.ensure_ydotoold(runner=boom) is False
+
+
+def test_paste_retries_once_after_starting_daemon(monkeypatch):
+    """Percobaan pertama gagal (daemon mati), lalu berhasil setelah start."""
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: True)
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    seq = []
+
+    def runner(cmd, **kw):
+        seq.append(cmd)
+        if cmd[0] == "systemctl":
+            return _mk(count=0)
+        # gagal pada percobaan pertama, berhasil setelahnya
+        return _mk(count=0 if len([c for c in seq if c[0] == "ydotool"]) > 1 else 3)
+
+    result = clipboard.simulate_paste(runner=runner)
+    assert result.ok and result.tool == "ydotool"
+    names = [c[0] for c in seq]
+    assert names == ["ydotool", "systemctl", "ydotool"]

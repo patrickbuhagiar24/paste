@@ -91,13 +91,52 @@ def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
                  "atau gunakan tombol Salin di aplikasi (fallback internal)."))
 
 
+def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
+    """Nyalakan daemon ydotoold bila belum jalan. True bila tampak siap.
+
+    Dipakai otomatis saat `ydotool key` gagal, sehingga pengguna tidak perlu
+    menyiapkan apa pun lebih dulu. Tidak fatal bila systemd tidak tersedia.
+    """
+    try:
+        proc = runner(["systemctl", "--user", "start", "ydotoold.service"])
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if getattr(proc, "returncode", 1) == 0:
+        # Beri kesempatan socket muncul sebelum percobaan berikutnya.
+        for _ in range(20):
+            if _ydotoold_socket_exists():
+                return True
+            if _sleep is not None:
+                _sleep(0.05)
+        return True
+    return False
+
+
+def _ydotoold_socket_exists() -> bool:
+    uid = getattr(os, "getuid", lambda: 0)()
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+    for path in (f"{runtime}/ydotool.sock", "/run/ydotoold.sock",
+                 "/tmp/ydotool.sock"):
+        if os.path.exists(path):
+            return True
+    return False
+
+
+try:  # mempermudah pengujian: waktu bisa dipalsukan
+    from time import sleep as _sleep
+except ImportError:  # pragma: no cover
+    _sleep = None
+
+
 def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
     """Kirim Ctrl+V ke aplikasi yang sedang fokus (paste otomatis)."""
     session = detect_session()
+    # Keycode Linux: 29=LeftCtrl, 47=V → Ctrl+V (42=Shift, JANGAN dipakai).
+    # Satu perintah per tool: `ydotool key` hanya menerima SATU argumen
+    # spesifikasi kunci, jadi "ctrl+v" (nama kunci) lebih andal daripada
+    # rangkaian keycode yang bisa ditolak sebagai argumen berlebih.
     if session == "wayland":
         candidates = [
-            # Keycode Linux: 29=LeftCtrl, 47=V → Ctrl+V (42=Shift, JANGAN dipakai).
-            ("ydotool", ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]),
             ("ydotool", ["ydotool", "key", "ctrl+v"]),
             ("xdotool", ["xdotool", "key", "ctrl+v"]),
         ]
@@ -107,15 +146,22 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
             ("ydotool", ["ydotool", "key", "ctrl+v"]),
         ]
     errors: list[str] = []
+    daemon_tried = False
     for name, cmd in candidates:
         if shutil.which(cmd[0]) is None:
             continue
         try:
             proc = runner(cmd)
+            # ydotool butuh daemon; bila gagal, nyalakan sekali lalu ulangi.
+            if proc.returncode != 0 and name == "ydotool" and not daemon_tried:
+                daemon_tried = True
+                if ensure_ydotoold(runner=runner):
+                    proc = runner(cmd)
             if proc.returncode == 0:
                 return PasteResult(ok=True, tool=name,
                                    message=f"Paste otomatis terkirim via {name}.")
-            errors.append(f"{name}: {proc.stderr.strip() or proc.returncode}")
+            stderr = (getattr(proc, "stderr", "") or "").strip()
+            errors.append(f"{name}: {stderr or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
     detail = "; ".join(errors) if errors else "tidak ada tool paste otomatis ditemukan"
