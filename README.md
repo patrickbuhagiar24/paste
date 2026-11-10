@@ -24,7 +24,8 @@ klik** (salin + `Ctrl+V` otomatis).
   perlu logout.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
   via `ydotool`/`xdotool`, fallback clipboard internal Tk bila tool tidak ada.
-- 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE` untuk skrip.
+- 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE`, serta
+  `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan.
 
 ## Cara pakai
 
@@ -220,10 +221,28 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
   paste-teks           # jalankan langsung — traceback tampil di terminal
   cat ~/.config/paste-teks/error.log   # log error terakhir
   ```
-- **Paste otomatis tidak bekerja (Wayland)**: jalankan `paste-teks --check` dan
-  ikuti blok **Langkah berikutnya**. Biasanya hanya perlu
-  `systemctl --user start ydotoold`. Teks tetap tersalin — tekan `Ctrl+V`
-  manual di aplikasi tujuan.
+- **Paste otomatis tidak bekerja**: lakukan dua uji ini untuk memisahkan
+  penyebabnya.
+
+  1. **Apakah ydotool benar-benar mengirim ke aplikasi lain?**
+     ```bash
+     paste-teks --test-paste
+     ```
+     Klik jendela tujuan dalam 3 detik. Bila teks `paste-teks-ok` muncul,
+     ydotool + izin + daemon sudah benar → masalahnya di clipboard.
+  2. **Apakah Ctrl+V sampai?**
+     ```bash
+     paste-teks --test-paste --ctrl-v
+     ```
+     Bila tidak ada yang tertempel, isi clipboard mungkin kosong/basi — lihat
+     baris **Clipboard:** pada `paste-teks --check` (salin + baca kembali).
+
+  Kedua uji ini memakai jalur kode yang sama dengan tombol di GUI, jadi
+  hasilnya mewakili aplikasi.
+
+  Catatan teknis: `ydotool` versi ≥ 1.0 **hanya** menerima keycode pada
+  `key` (`29:1 47:1 47:0 29:0` = Ctrl+V), sedangkan 0.1.x memakai nama
+  kunci (`ctrl+v`). Aplikasi mencoba keycode lebih dulu lalu nama kunci.
 - **Pesan "ydotoold belum berjalan"**: jalankan `systemctl --user start ydotoold`
   (ydotool versi baru memakai daemon).
 
@@ -231,7 +250,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.2.0-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.2.1-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 

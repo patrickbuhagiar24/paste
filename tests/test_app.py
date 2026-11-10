@@ -60,3 +60,41 @@ def test_insert_node_uses_end_index(tmp_path):
     assert len(app.tree.calls) == 2
     assert app.tree.calls[0][1] == "end"
     assert app.tree.calls[0][2] == str(tmp_path)
+
+
+def test_check_reports_clipboard(capsys):
+    """--check harus memeriksa clipboard, bukan hanya tool yang ada."""
+    assert run_cli(["--check"]) == 0
+    out = capsys.readouterr().out
+    assert "Clipboard:" in out
+    assert "tool:" in out
+
+
+def test_clipboard_status_without_session(monkeypatch):
+    from paste_teks import app
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr("paste_teks.clipboard.shutil.which", lambda n: None)
+    lines = app.clipboard_status()
+    assert any("tidak terdeteksi" in line for line in lines)
+
+
+def test_test_paste_flag_exists():
+    from paste_teks import app
+    status = {"called": False}
+
+    def fake(**kw):
+        status["called"] = True
+        status.update(kw)
+        return 0
+
+    original = app.run_test_paste
+    app.run_test_paste = fake
+    try:
+        assert app.run_cli(["--test-paste"]) == 0
+        assert status["called"] is True
+        assert status["ctrl_v"] is False
+        app.run_cli(["--test-paste", "--ctrl-v"])
+        assert status["ctrl_v"] is True
+    finally:
+        app.run_test_paste = original

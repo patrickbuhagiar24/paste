@@ -51,9 +51,10 @@ def test_simulate_paste_uses_ydotool_on_wayland(monkeypatch):
     result = clipboard.simulate_paste(runner=_fake_runner(captured))
     assert result.ok and result.tool == "ydotool"
     assert captured[0][0][0] == "ydotool"
-    # `ydotool key` hanya menerima SATU argumen kunci: "ctrl+v" (bukan
-    # rangkaian keycode, dan bukan keycode 42=Shift seperti bug v1.0.2).
-    assert captured[0][0] == ["ydotool", "key", "ctrl+v"]
+    # ydotool >= 1.0: `key` HANYA menerima keycode (<kode>:<1|0>).
+    # 29=LeftCtrl, 47=V — bukan 42 (Shift) seperti bug v1.0.2, dan bukan
+    # "ctrl+v" (nama kunci ditolak) seperti bug v1.2.0.
+    assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
 
 
 def test_detect_session(monkeypatch):
@@ -107,3 +108,135 @@ def test_paste_retries_once_after_starting_daemon(monkeypatch):
     assert result.ok and result.tool == "ydotool"
     names = [c[0] for c in seq]
     assert names == ["ydotool", "systemctl", "ydotool"]
+
+
+class _Proc:
+    def __init__(self, rc=0, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+class _FakePopen:
+    def __init__(self, cmd, **kw):
+        self.cmd, self.kw = cmd, kw
+        self.stdin = _FakeStdin() if kw.get("stdin") else None
+        _FakePopen.last = self
+
+    def wait(self, timeout=None):
+        if _FakePopen.hang:
+            raise clipboard.subprocess.TimeoutExpired(self.cmd, timeout)
+        return 0
+
+
+class _FakeStdin:
+    def __init__(self):
+        self.written = []
+        self.closed = False
+
+    def write(self, data):
+        self.written.append(data)
+
+    def close(self):
+        self.closed = True
+
+
+def test_forking_tool_is_not_waited_on(monkeypatch):
+    """wl-copy mem-fork & tetap hidup: jangan tunggu, jangan tangkap output."""
+    _FakePopen.hang = True
+    monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
+    proc = clipboard._default_runner(["wl-copy"], input="halo")
+    assert proc.returncode == 0          # menggantung = normal, bukan gagal
+    kw = _FakePopen.last.kw
+    assert kw["stdout"] == clipboard.subprocess.DEVNULL
+    assert kw["stderr"] == clipboard.subprocess.DEVNULL
+    assert kw["start_new_session"] is True
+    assert kw["text"] is True
+    # Masukan benar-benar ditulis lalu stdin ditutup.
+    assert _FakePopen.last.stdin.written == ["halo"]
+    assert _FakePopen.last.stdin.closed is True
+
+
+def test_forking_tool_finishing_returns_exit_code(monkeypatch):
+    _FakePopen.hang = False
+    monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
+    proc = clipboard._default_runner(["xclip", "-selection", "clipboard"],
+                                     input="halo")
+    assert proc.returncode == 0
+
+
+def test_forking_tool_survives_broken_pipe(monkeypatch):
+    _FakePopen.hang = True
+    monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
+
+    def boom(_data):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(_FakeStdin, "write", lambda self, d: boom(d))
+    assert clipboard._default_runner(["wl-copy"], input="x").returncode == 0
+
+
+def test_non_forking_tool_captures_output(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return _Proc(0)
+
+    monkeypatch.setattr(clipboard.subprocess, "run", fake_run)
+    clipboard._default_runner(["ydotool", "key", "29:1"])
+    assert seen["capture_output"] is True
+
+
+def test_ydotool_name_syntax_used_as_fallback(monkeypatch):
+    """ydotool 0.1.x memakai nama kunci; dicoba setelah keycode."""
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
+    seq = []
+
+    def runner(cmd, **kw):
+        seq.append(cmd)
+        # keycode ditolak, nama kunci diterima
+        return _Proc(0 if cmd[-1] == "ctrl+v" else 1, err="")
+
+    result = clipboard.simulate_paste(runner=runner)
+    assert result.ok is True
+    assert len(seq) == 2
+    assert seq[0][2] == "29:1"      # percobaan pertama: keycode
+    assert seq[1][2] == "ctrl+v"    # cadangan: nama kunci
+
+
+def test_type_text_uses_ydotool_type(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    seen = []
+    result = clipboard.type_text("halo", runner=lambda cmd, **kw: seen.append(cmd) or _Proc(0))
+    assert result.ok is True
+    assert seen == [["ydotool", "type", "halo"]]
+
+
+def test_type_text_reports_failure(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    result = clipboard.type_text("x", runner=lambda cmd, **kw: _Proc(1, "", "no socket"))
+    assert result.ok is False and "no socket" in result.message
+
+
+def test_type_text_without_ydotool(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: None)
+    assert clipboard.type_text("x").ok is False
+
+
+def test_read_text_from_clipboard_wayland(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
+    seen = []
+
+    def runner(cmd, **kw):
+        seen.append(cmd)
+        return _Proc(0, out="isi-clipboard")
+
+    assert clipboard.read_text_from_clipboard(runner=runner) == "isi-clipboard"
+    assert seen == [["wl-paste", "--no-newline"]]
+
+
+def test_read_text_from_clipboard_unavailable(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda n: None)
+    assert clipboard.read_text_from_clipboard() is None
