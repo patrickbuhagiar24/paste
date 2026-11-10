@@ -1,3 +1,17 @@
+paste-teks (1.1.1-1) unstable; urgency=medium
+
+  * Diagnosis lebih akurat: bedakan keanggotaan grup di sistem vs sesi
+    berjalan (dibaca dari /proc/self/status), sehingga pesan "logout lalu
+    login ulang" hanya muncul saat benar-benar diperlukan.
+  * `--check` kini selalu menampilkan blok "Langkah berikutnya" berisi
+    perbaikan konkret (login ulang, nyalakan ydotoold, muat ulang udev).
+  * Deteksi ydotoold via socket ATAU proses (bukan hanya socket).
+  * Paste otomatis menuntut ydotoold berjalan bila ydotool terpasang;
+    tombol "Nyalakan ydotoold" (systemctl --user) di dialog aplikasi.
+  * Baris status kini menyertakan keterangan sebab, bukan sekadar tanda.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.1.0-1) unstable; urgency=medium
 
   * Izin paste otomatis tanpa grup 'input': grup sistem 'paste-teks' +

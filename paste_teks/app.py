@@ -426,7 +426,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         if st.ready:
             messagebox.showinfo("Paste otomatis tidak tersedia", text)
             return
-        text += "\n\nDiagnosis:\n" + "\n".join(st.summary()) + \
+        text += "\n\nDiagnosis:\n" + "\n".join(_status_lines(st)) + \
             "\n\n" + uinput.explain(st)
         if uinput.can_self_enable(st):
             if messagebox.askyesno(
@@ -480,14 +480,44 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     def show_permission_info(self) -> None:
         st = uinput.status()
         text = ("Status paste otomatis\n\n"
-                + "\n".join(st.summary())
+                + "\n".join(_status_lines(st))
                 + "\n\n" + uinput.explain(st))
+        if st.daemon_missing:
+            if messagebox.askyesno(
+                    "Daemon ydotoold",
+                    text + "\n\nNyalakan daemon ydotoold sekarang?"):
+                self.start_ydotoold()
+                return
         if uinput.can_self_enable(st):
             if messagebox.askyesno("Paste otomatis",
                                    text + "\n\nAktifkan sekarang?"):
                 self.enable_auto_paste()
         else:
             messagebox.showinfo("Paste otomatis", text)
+
+    def start_ydotoold(self) -> None:
+        """Nyalakan ydotoold lewat systemd --user (tanpa hak root)."""
+        self.status_var.set("Menyalakan ydotoold...")
+        threading.Thread(target=self._daemon_worker, daemon=True).start()
+
+    def _daemon_worker(self) -> None:
+        code, out, err = uinput.start_daemon()
+        self.after(0, self._daemon_done, code, out, err)
+
+    def _daemon_done(self, code: int, out: str, err: str) -> None:
+        if code == 0 and uinput.ydotoold_running():
+            self.status_var.set("✅ ydotoold berjalan.")
+            messagebox.showinfo("ydotoold", "Daemon ydotoold sudah berjalan. "
+                                "Silakan coba Paste Otomatis lagi.")
+            return
+        detail = err or out or (f"kode keluar {code}"
+                                if code else "daemon belum terdeteksi")
+        self.status_var.set("Gagal menyalakan ydotoold.")
+        messagebox.showwarning(
+            "ydotoold tidak bisa dinyalakan",
+            f"{detail}\n\nCoba jalankan di terminal:\n\n  ydotoold &\n\n"
+            "Atau tanpa daemon, jalankan ydotool dengan \"ydotool key "
+            "ctrl+v\" — aplikasi akan memakainya sebagai cadangan.")
 
     # ---------- CRUD ----------
     def _target_dir(self) -> Path:
@@ -562,6 +592,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     def _apply_settings(self) -> None:
         self.attributes("-topmost", bool(self.top_var.get()))
         self._save_current_settings()
+
+
+def _status_lines(st: "uinput.UinputStatus", *, prefix: str = "") -> list[str]:
+    """Baris status izin siap tampil (dipakai GUI dan --check)."""
+    return [f"{mark} {label}: {detail}" for mark, label, detail
+            in st.summary(prefix=prefix)]
 
 
 class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
@@ -683,9 +719,11 @@ def run_check(roots: list[Path]) -> int:
     try:
         st = uinput.status()
         print(f"Izin paste otomatis (grup '{uinput.GROUP}', akun '{st.user}'):")
-        for line in st.summary():
+        for line in _status_lines(st):
             print(f"  {line}")
-        print(f"  {uinput.explain(st)}")
+        print("\nLangkah berikutnya:")
+        for line in uinput.explain(st).splitlines():
+            print(f"  {line}")
     except Exception as exc:  # pragma: no cover - jangan gagalkan --check
         print(f"Izin paste otomatis: tidak dapat diperiksa ({exc})")
     print("Folder snippets:")

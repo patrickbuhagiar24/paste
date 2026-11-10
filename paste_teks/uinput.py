@@ -7,6 +7,11 @@ punya akses — dan inilah penyebab paling umum "paste otomatis tidak jalan".
 Alih-alih memasukkan pengguna ke grup ``input`` (yang memberi akses ke
 SEMUA perangkat input, setara keylogger), paket ini memakai grup khusus
 ``paste-teks`` + udev rule yang hanya membuka ``/dev/uinput``.
+
+Catatan penting: keanggotaan grup **di sistem** (``/etc/group``) berbeda
+dengan keanggotaan **di sesi berjalan**. Bila akun sudah ditambahkan tetapi
+sesi belum dimulai ulang, proses masih memakai daftar grup yang lama — dan
+itulah yang diperiksa ``session_groups()``.
 """
 from __future__ import annotations
 
@@ -26,6 +31,11 @@ DEVICE = "/dev/uinput"
 SOCKET_PATHS = ("/run/ydotoold.sock", "/tmp/ydotool.sock")
 USER_SOCKET = "/run/user/{uid}/ydotool.sock"
 
+COMMON_GROUPS = ("sudo", "admin", "wheel", "users", "plugdev", "input",
+                 "audio", "video", "docker", "adm", "staff", "lpadmin",
+                 "netdev", "bluetooth", "scanner", "cdrom", "lp", "dialout",
+                 "floppy", "games", "kvm", "render", "systemd-journal")
+
 MANUAL_COMMAND = (
     "sudo groupadd --system paste-teks\n"
     "echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"paste-teks\", "
@@ -39,30 +49,28 @@ MANUAL_COMMAND = (
 
 def current_user() -> str:
     """Nama pengguna yang menjalankan aplikasi (bukan root)."""
-    user = os.environ.get("PKEXEC_UID") or os.environ.get("USER") \
-        or os.environ.get("LOGNAME")
-    if user and user.isidentifier():
-        pass
     try:
         return pwd.getpwuid(os.getuid()).pw_name
     except KeyError:  # pragma: no cover - sangat jarang
-        return user or "unknown"
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
 
 
 def user_groups(user: str | None = None, *, grouplist=None) -> set[str]:
-    """Semua grup efektif milik ``user`` (termasuk dari NSS/LDAP)."""
+    """Semua grup yang tercatat untuk ``user`` di sistem (NSS/LDAP)."""
+    import grp
+
     name = user or current_user()
-    if grouplist is None:
-        grouplist = os.getgrouplist
     try:
         entry = pwd.getpwnam(name)
     except KeyError:
         return set()
+    if grouplist is None:
+        grouplist = os.getgrouplist
     try:
         gids = grouplist(name, entry.pw_gid)
-    except (KeyError, OSError):
+    except KeyError:
+        # Basis grup NSS tidak bisa diakses (mis. sedang offline).
         gids = [entry.pw_gid]
-    import grp
     names = set()
     for gid in gids:
         try:
@@ -70,6 +78,33 @@ def user_groups(user: str | None = None, *, grouplist=None) -> set[str]:
         except KeyError:
             continue
     return names
+
+
+def _proc_groups(*, path: str = "/proc/self/status") -> set[str] | None:
+    """Grup yang dimiliki proses saat ini (sesi berjalan), dibaca dari /proc."""
+    import grp
+
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not line.startswith("Groups:"):
+                    continue
+                gids = [int(part) for part in line.split()[1:]]
+                names = set()
+                for gid in gids:
+                    try:
+                        names.add(grp.getgrgid(gid).gr_name)
+                    except KeyError:
+                        continue
+                return names
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def session_groups() -> set[str] | None:
+    """Grup yang BENAR-BENAR aktif di proses ini (bukan hanya di /etc/group)."""
+    return _proc_groups()
 
 
 def device_writable(*, access=None) -> bool:
@@ -82,6 +117,21 @@ def device_writable(*, access=None) -> bool:
         return False
 
 
+def device_details(dev: str = DEVICE) -> tuple[int, int, str] | None:
+    """(uid, gid, mode) perangkat bila ada."""
+    from grp import getgrgid
+
+    try:
+        info = os.stat(dev)
+    except OSError:
+        return None
+    try:
+        group = getgrgid(info.st_gid).gr_name
+    except (KeyError, ImportError):
+        group = str(info.st_gid)
+    return info.st_uid, info.st_gid, group
+
+
 def ydotoold_socket() -> str | None:
     """Lokasi socket ydotoold bila ada (untuk ydotool >= 1.0)."""
     candidates = list(SOCKET_PATHS) + [USER_SOCKET.format(uid=os.getuid())]
@@ -89,6 +139,32 @@ def ydotoold_socket() -> str | None:
         if os.path.exists(path):
             return path
     return None
+
+
+def ydotoold_running() -> bool:
+    """Daemon berjalan — terlihat dari socket atau prosesnya."""
+    if ydotoold_socket() is not None:
+        return True
+    for pid in ("/proc",):
+        try:
+            entries = os.listdir(pid)
+        except OSError:  # pragma: no cover
+            continue
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/comm", encoding="utf-8",
+                          errors="replace") as handle:
+                    if handle.read().strip() == "ydotoold":
+                        return True
+            except OSError:
+                continue
+    return False
+
+
+def udev_rule_installed(rule: str = UDEV_RULE) -> bool:
+    return os.path.exists(rule)
 
 
 def helper_available() -> bool:
@@ -119,33 +195,89 @@ class UinputStatus:
     ydotoold_binary: bool
     socket: str | None
     groups: set[str] = field(default_factory=set)
+    session: set[str] | None = None
+    daemon: bool = False
+    rule: bool = False
+
+    # --- turunan -------------------------------------------------------
+    @property
+    def in_session(self) -> bool:
+        """Grup paste-teks aktif di sesi berjalan (bukan hanya di sistem)."""
+        if self.session is None:
+            return self.device_writable
+        return GROUP in self.session
+
+    @property
+    def account_ready(self) -> bool:
+        """Akun sudah tercatat di grup (mungkin sesi belum memuat)."""
+        return self.in_group or self.in_session
+
+    @property
+    def needs_relogin(self) -> bool:
+        """Sudah jadi anggota di sistem, tetapi sesi belum memuatnya."""
+        return self.account_ready and not self.in_session
+
+    @property
+    def daemon_ready(self) -> bool:
+        return self.daemon or self.socket is not None
 
     @property
     def ready(self) -> bool:
         """Semua yang dibutuhkan untuk mengirim Ctrl+V sudah tersedia?"""
         if self.device_writable:
-            return True
-        return self.ydotoold_binary and self.socket is not None
+            if not self.ydotoold_binary:
+                return True
+            return self.daemon_ready
+        return self.ydotoold_binary and self.daemon_ready
 
     @property
-    def needs_relogin(self) -> bool:
-        """Sudah masuk grup tetapi sesi belum memuatnya."""
-        return self.in_group and not self.device_writable
+    def daemon_missing(self) -> bool:
+        return self.ydotoold_binary and not self.daemon_ready
 
-    def summary(self) -> list[str]:
-        def mark(ok: bool) -> str:
+    def summary(self, prefix: str = "") -> list[tuple[str, str, str]]:
+        """(tanda, label, keterangan) untuk ditampilkan berbaris rapi."""
+        def state(ok: bool) -> str:
             return "✅" if ok else "❌"
 
-        lines = [
-            f"{mark(self.in_group)} grup '{GROUP}'"
-            + (" (anggota)" if self.in_group else " (belum jadi anggota)"),
-            f"{mark(self.device_writable)} tulis {DEVICE}",
-        ]
+        rows: list[tuple[str, str, str]] = []
+
+        if self.device_writable and self.account_ready:
+            group_detail = "anggota, aktif di sesi ini"
+        elif self.needs_relogin:
+            group_detail = "anggota di sistem — sesi belum memuat"
+        elif self.in_group or self.in_session:
+            group_detail = "anggota, aktif di sesi ini"
+        elif self.group_exists:
+            group_detail = "belum jadi anggota"
+        else:
+            group_detail = "grup belum ada — paket belum terpasang benar?"
+
+        # Bila perangkat sudah bisa ditulis, grup pasti aktif — /proc
+        # mungkin tidak terbaca (container, NSS khusus), jadi jangan salah tanda.
+        group_ok = self.account_ready and (self.in_session or self.device_writable)
+        rows.append((state(group_ok), f"{prefix}grup '{GROUP}'", group_detail))
+
+        if self.device_writable:
+            device_detail = f"{DEVICE} bisa ditulis"
+        elif not self.rule:
+            device_detail = f"{DEVICE} tidak bisa ditulis — udev rule belum ada"
+        elif self.needs_relogin:
+            device_detail = (f"{DEVICE} tidak bisa ditulis — muncul setelah "
+                             "login ulang")
+        else:
+            device_detail = f"{DEVICE} tidak bisa ditulis"
+        rows.append((state(self.device_writable), f"{prefix}tulis {DEVICE}",
+                     device_detail))
+
         if self.ydotoold_binary:
-            lines.append(
-                f"{mark(self.socket is not None)} daemon ydotoold"
-                + (f" ({self.socket})" if self.socket else " (belum berjalan)"))
-        return lines
+            if self.daemon_ready:
+                where = self.socket or "proses ydotoold"
+                rows.append(("✅", f"{prefix}daemon ydotoold",
+                             f"berjalan ({where})"))
+            else:
+                rows.append(("❌", f"{prefix}daemon ydotoold",
+                             "belum berjalan"))
+        return rows
 
 
 def status(user: str | None = None) -> UinputStatus:
@@ -153,9 +285,10 @@ def status(user: str | None = None) -> UinputStatus:
     groups = user_groups(name)
     try:
         import grp
-        group_exists = True
+
         grp.getgrnam(GROUP)
-    except (KeyError, ImportError):  # pragma: no cover - dipanggil di root
+        group_exists = True
+    except (KeyError, ImportError):
         group_exists = False
     return UinputStatus(
         user=name,
@@ -167,6 +300,9 @@ def status(user: str | None = None) -> UinputStatus:
         ydotoold_binary=shutil.which("ydotoold") is not None,
         socket=ydotoold_socket(),
         groups=groups,
+        session=session_groups(),
+        daemon=ydotoold_running(),
+        rule=udev_rule_installed(),
     )
 
 
@@ -204,24 +340,62 @@ def enable_for_user(user: str | None = None, *,
         return -1, "", str(exc)
 
 
+def daemon_command() -> list[str]:
+    return ["systemctl", "--user", "start", "ydotoold"]
+
+
+def start_daemon(*, runner: Callable[..., object] | None = None,
+                 timeout: int = 20) -> tuple[int, str, str]:
+    """Nyalakan ydotoold (systemd --user). Kembalikan (kode, out, err)."""
+    if runner is None:
+        import subprocess
+
+        def runner(cmd, **kw):
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout, **kw)
+    try:
+        proc = runner(daemon_command())
+        return (getattr(proc, "returncode", -1),
+                (getattr(proc, "stdout", "") or "").strip(),
+                (getattr(proc, "stderr", "") or "").strip())
+    except (OSError, Exception) as exc:
+        return -1, "", str(exc)
+
+
 def explain(st: UinputStatus | None = None) -> str:
-    """Penjelasan ramah dalam bahasa Indonesia untuk dialog aplikasi."""
+    """Langkah perbaikan berikutnya, dalam bahasa Indonesia.
+
+    Urutan sengaja: login ulang dulu (persyaratan sesi), baru daemon, lalu
+    aktivasi grup. Bila semuanya siap, kembalikan pesan positif.
+    """
     st = st or status()
     if st.ready:
         return "Paste otomatis siap digunakan."
+
+    steps: list[str] = []
+    if not st.account_ready:
+        steps.append(
+            f"Akun '{st.user}' belum menjadi anggota grup '{GROUP}'. Klik "
+            "\"Aktifkan sekarang\" (atau pakai perintah manual di README).")
     if st.needs_relogin:
-        return (
-            f"Akun '{st.user}' sudah menjadi anggota grup '{GROUP}', tetapi "
-            "sesi ini belum memuatnya. Logout lalu login ulang (atau reboot) "
-            "agar paste otomatis aktif."
-        )
-    if st.ydotoold_binary and st.socket is None:
-        return (
+        steps.append(
+            f"Akun '{st.user}' sudah menjadi anggota grup '{GROUP}' di "
+            "sistem, tetapi SESI INI belum memuatnya. Logout lalu login "
+            "ulang (atau reboot) — langkah ini wajib.")
+    if st.daemon_missing:
+        steps.append(
             "ydotoold belum berjalan. Jalankan `systemctl --user start "
-            "ydotoold` (atau `ydotoold &`), lalu coba lagi."
-        )
-    return (
-        f"Akun '{st.user}' belum punya izin menulis {DEVICE}, sehingga "
-        "ydotool tidak bisa mengirim Ctrl+V. Klik \"Aktifkan sekarang\" untuk "
-        f"menambahkan akun ke grup '{GROUP}'."
-    )
+            "ydotoold` (atau `ydotoold &`) lalu coba lagi.")
+    if st.in_session and not st.device_writable and not st.needs_relogin:
+        if not st.rule:
+            steps.append(
+                "udev rule grup 'paste-teks' tidak ditemukan. Pasang ulang "
+                "paket: `sudo apt install --reinstall paste-teks`.")
+        else:
+            steps.append(
+                f"Izin {DEVICE} belum berlaku. Muat ulang aturan udev:\n"
+                "sudo udevadm control --reload-rules && "
+                "sudo udevadm trigger --sysname-match=uinput")
+    if not steps:  # pragma: no cover - jaring pengaman
+        steps.append("Periksa `paste-teks --check` untuk detail.")
+    return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

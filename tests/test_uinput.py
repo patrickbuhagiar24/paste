@@ -77,6 +77,7 @@ def _status(**kw):
         user="budi", group_exists=True, in_group=False,
         device_writable=False, helper=True, pkexec=True,
         ydotoold_binary=False, socket=None, groups={"budi"},
+        session={"budi"}, daemon=False, rule=True,
     )
     base.update(kw)
     return uinput.UinputStatus(**base)
@@ -116,13 +117,96 @@ def test_explain_mentions_group_and_relogin():
 
 
 def test_summary_marks_missing_permission():
-    lines = _status().summary()
-    assert any("paste-teks" in line for line in lines)
+    rows = _status().summary()
+    labels = " ".join(label for _m, label, _d in rows)
+    assert "paste-teks" in labels
     # Belum jadi anggota & perangkat tak bisa ditulis => keduanya ❌.
-    assert all(not line.startswith("✅") for line in lines)
+    assert all(mark != "✅" for mark, _l, _d in rows)
 
     ok = _status(in_group=True, device_writable=True).summary()
-    assert all(line.startswith("✅") for line in ok)
+    assert all(mark == "✅" for mark, _l, _d in ok)
+
+
+def test_summary_reports_stale_session_after_group_add():
+    """Kasus nyata: anggota di sistem, sesi berjalan belum memuat grup."""
+    st = _status(in_group=True, session={"budi"})
+    assert st.needs_relogin is True
+    assert st.in_session is False
+    row = [r for r in st.summary() if "grup" in r[1]][0]
+    assert "sesi belum memuat" in row[2]
+    assert row[0] == "❌"
+
+
+def test_session_groups_active_when_loaded():
+    st = _status(in_group=True, session={"budi", "paste-teks"},
+                 device_writable=True)
+    assert st.in_session is True
+    assert st.needs_relogin is False
+
+
+def test_ready_requires_daemon_when_ydotool_installed():
+    # Izin perangkat ada tetapi ydotool butuh ydotoold → belum siap.
+    assert _status(device_writable=True, ydotoold_binary=True).ready is False
+    assert _status(device_writable=True, ydotoold_binary=True,
+                   daemon=True).ready is True
+    # Tanpa ydotool (mis. X11 + xdotool) izin perangkat sudah cukup.
+    assert _status(device_writable=True).ready is True
+
+
+def test_daemon_missing_flag():
+    assert _status(ydotoold_binary=True).daemon_missing is True
+    assert _status(ydotoold_binary=True, daemon=True).daemon_missing is False
+    assert _status().daemon_missing is False
+
+
+def test_explain_orders_relogin_before_daemon():
+    text = uinput.explain(_status(
+        in_group=True, session={"budi"}, ydotoold_binary=True))
+    assert "login ulang" in text
+    assert "ydotoold" in text
+    assert text.index("login ulang") < text.index("ydotoold")
+
+
+def test_explain_mentions_udev_when_rule_missing():
+    text = uinput.explain(_status(in_group=True, session={"budi", "paste-teks"},
+                                  rule=False))
+    assert "reinstall" in text
+
+
+def _proc_file(tmp_path, groups_line):
+    f = tmp_path / "status"
+    f.write_text(f"Name:\tbudi\nGroups:\t{groups_line}\n", encoding="utf-8")
+    return str(f)
+
+
+def test_proc_groups_parsed(tmp_path):
+    import grp as real_grp
+    gid = real_grp.getgrnam("root").gr_gid
+    path = _proc_file(tmp_path, f"{gid} 0")
+    assert uinput._proc_groups(path=path) == {"root"}
+
+
+def test_proc_groups_missing(tmp_path):
+    assert uinput._proc_groups(path=str(tmp_path / "nope")) is None
+
+
+def test_daemon_command_and_start(tmp_path):
+    assert uinput.daemon_command() == ["systemctl", "--user", "start", "ydotoold"]
+    seen = []
+
+    def runner(cmd, **kw):
+        seen.append(cmd)
+        return _Proc(0, "", "")
+
+    code, out, err = uinput.start_daemon(runner=runner)
+    assert (code, out, err) == (0, "", "")
+    assert seen == [["systemctl", "--user", "start", "ydotoold"]]
+
+
+def test_start_daemon_handles_failure():
+    code, _o, err = uinput.start_daemon(
+        runner=lambda cmd, **kw: _Proc(5, "", "Unit ydotoold.service not found"))
+    assert code == 5 and "not found" in err
 
 
 def test_manual_command_is_complete():
