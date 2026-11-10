@@ -1,3 +1,11 @@
+paste-teks (1.0.2-1) unstable; urgency=medium
+
+  * Perbaikan kritis: crash saat start karena Treeview.insert dipanggil
+    dengan iid di posisi index (TclError: expected integer). Kini memakai
+    insert(parent, "end", iid=iid, ...). Tambah uji regresi.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.0.1-1) unstable; urgency=medium
 
   * Perbaikan: error saat start dicatat ke ~/.config/paste-teks/error.log
