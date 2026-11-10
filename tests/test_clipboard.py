@@ -47,6 +47,8 @@ def test_simulate_paste_uses_ydotool_on_wayland(monkeypatch):
     result = clipboard.simulate_paste(runner=_fake_runner(captured))
     assert result.ok and result.tool == "ydotool"
     assert captured[0][0][0] == "ydotool"
+    # Keycode Ctrl=29, V=47 (42=Shift — bug lama mengirim Shift+V).
+    assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
 
 
 def test_detect_session(monkeypatch):

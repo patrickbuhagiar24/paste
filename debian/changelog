@@ -1,3 +1,13 @@
+paste-teks (1.0.3-1) unstable; urgency=medium
+
+  * Perbaikan paste otomatis: keycode ydotool 42 (Shift) menjadi 29 (Ctrl)
+    sehingga Ctrl+V benar-benar terkirim; hitung mundur kini tampil di
+    jendela kecil selalu-di-atas dengan tombol Batal; salin/paste berjalan
+    di thread latar agar GUI tidak freeze; pencarian di-debounce 300 ms;
+    jeda bawaan 2,5 detik.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+
 paste-teks (1.0.2-1) unstable; urgency=medium
 
   * Perbaikan kritis: crash saat start karena Treeview.insert dipanggil

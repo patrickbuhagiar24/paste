@@ -58,7 +58,7 @@ def log_error(message: str) -> None:
         pass
 
 DEFAULT_SETTINGS = {
-    "delay": 1.5,          # detik sebelum paste otomatis dikirim
+    "delay": 2.5,          # detik sebelum paste otomatis dikirim
     "auto_paste": True,    # double-click = paste otomatis (bukan sekadar salin)
     "always_on_top": False,
 }
@@ -217,6 +217,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.bind("<Control-c>", lambda _e: self.do_copy())
         self.bind("<Control-f>", lambda _e: self.search_var.set("") or self._focus_search())
 
+    def _on_search_changed(self) -> None:
+        """Debounce pencarian 300 ms agar tidak memindai file tiap ketikan."""
+        if self._search_after_id is not None:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(300, self.refresh_tree)
+
     def _focus_search(self) -> None:
         for child in self.winfo_children():
             for sub in child.winfo_children():
@@ -306,11 +312,17 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         except OSError as exc:
             messagebox.showerror("Gagal membaca", str(exc))
             return
+        # Salin di thread latar agar GUI tidak freeze bila tool lambat.
+        self.status_var.set("Menyalin...")
+        threading.Thread(target=self._copy_worker, args=(text,),
+                         daemon=True).start()
+
+    def _copy_worker(self, text: str) -> None:
         result = copy_text(text)
         if not result.ok:
-            self._tk_copy(text)
+            self.after(0, self._tk_copy, text)
             result.message += " (disalin via clipboard internal)"
-        self.status_var.set(f"✅ {result.message}")
+        self.after(0, self.status_var.set, f"✅ {result.message}")
 
     def on_activate(self) -> None:
         """Double-click / Enter: paste otomatis bila aktif, else salin."""
@@ -320,7 +332,7 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             self.do_copy()
 
     def do_paste(self) -> None:
-        """Satu klik: salin → jeda → Ctrl+V otomatis ke aplikasi lain."""
+        """Satu klik: salin → hitung mundur terlihat → Ctrl+V otomatis."""
         path = self.selected_path()
         if path is None or path.is_dir():
             self.status_var.set("Pilih berkas .txt terlebih dahulu.")
@@ -330,20 +342,70 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         except OSError as exc:
             messagebox.showerror("Gagal membaca", str(exc))
             return
-        result = copy_text(text)
-        if not result.ok:
-            self._tk_copy(text)
         delay = float(self.delay_var.get())
         self._save_current_settings()
-        self.status_var.set(
-            f"✅ Disalin. Dalam {delay:.1f} detik klik aplikasi tujuan — "
-            "paste otomatis akan terkirim (Ctrl+V)...")
-        # Kecilkan jendela agar aplikasi tujuan mendapat fokus.
-        self.iconify()
-        self.after(int(delay * 1000), lambda: self._send_paste(text))
+        self.status_var.set("Menyalin...")
+        threading.Thread(target=self._paste_worker, args=(text, delay),
+                         daemon=True).start()
 
-    def _send_paste(self, text: str) -> None:
+    def _paste_worker(self, text: str, delay: float) -> None:
+        result = copy_text(text)
+        if not result.ok:
+            self.after(0, self._tk_copy, text)
+            result.message += " (disalin via clipboard internal)"
+        self.after(0, self._start_countdown, text, delay, result.message)
+
+    def _start_countdown(self, text: str, delay: float, copy_msg: str) -> None:
+        """Jendela hitung mundur kecil (selalu di atas) agar terlihat."""
+        self.status_var.set(f"✅ {copy_msg}")
+        win = tk.Toplevel(self)
+        win.title("Paste otomatis")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        label = ttk.Label(win, padding=12)
+        label.pack()
+        cancelled = False
+
+        def cancel() -> None:
+            nonlocal cancelled
+            cancelled = True
+            win.destroy()
+            self.status_var.set("Dibatalkan. Teks sudah disalin — tekan Ctrl+V.")
+
+        ttk.Button(win, text="Batal", command=cancel).pack(pady=(0, 8))
+        win.protocol("WM_DELETE_WINDOW", cancel)
+        win.update_idletasks()
+        x = (win.winfo_screenwidth() - win.winfo_width()) // 2
+        y = (win.winfo_screenheight() - win.winfo_height()) // 3
+        win.geometry(f"+{x}+{y}")
+
+        remaining = [delay]
+
+        def tick() -> None:
+            if cancelled or not win.winfo_exists():
+                return
+            if remaining[0] <= 0:
+                win.destroy()
+                self._finish_paste()
+                return
+            label.configure(
+                text=f"Paste dalam {remaining[0]:.1f} detik...\n"
+                     "Klik aplikasi tujuan sekarang (Ctrl+V akan terkirim).")
+            remaining[0] -= 0.1
+            win.after(100, tick)
+
+        tick()
+
+    def _finish_paste(self) -> None:
+        # Kecilkan jendela agar aplikasi tujuan mendapat fokus, lalu kirim Ctrl+V.
+        self.iconify()
+        threading.Thread(target=self._paste_sender, daemon=True).start()
+
+    def _paste_sender(self) -> None:
         result = simulate_paste()
+        self.after(0, self._paste_done, result)
+
+    def _paste_done(self, result) -> None:
         self.deiconify()
         self.lift()
         if result.ok:

@@ -23,7 +23,7 @@ def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     kwargs.setdefault("input", None)
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
-    kwargs.setdefault("timeout", 10)
+    kwargs.setdefault("timeout", 5)
     return subprocess.run(*args, **kwargs)
 
 
@@ -96,7 +96,8 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
     session = detect_session()
     if session == "wayland":
         candidates = [
-            ("ydotool", ["ydotool", "key", "42:1", "47:1", "47:0", "42:0"]),
+            # Keycode Linux: 29=LeftCtrl, 47=V → Ctrl+V (42=Shift, JANGAN dipakai).
+            ("ydotool", ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]),
             ("ydotool", ["ydotool", "key", "ctrl+v"]),
             ("xdotool", ["xdotool", "key", "ctrl+v"]),
         ]
