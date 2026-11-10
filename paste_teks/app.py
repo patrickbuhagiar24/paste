@@ -325,30 +325,33 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         self._pasting = True
         self.status_var.set("Menyiapkan paste...")
+        # LEPAS JENDELA LEBIH DULU, sebelum menyalin. Sebelumnya jendela baru
+        # dilepas setelah penyalinan selesai; bila penyalinan lambat/gagal,
+        # jendela tetap memegang fokus dan Ctrl+V tidak pernah terkirim
+        # (gejala: log berhenti di "[paste] mulai").
+        self.withdraw()
+        log_error("[paste] jendela di-withdraw, menyalin di latar")
         threading.Thread(target=self._paste_worker, args=(text,),
                          daemon=True).start()
 
     def _paste_worker(self, text: str) -> None:
-        log_error(f"[paste] mulai: {len(text)} karakter")
+        started = time.monotonic()
         result = copy_text(text)
+        elapsed_ms = (time.monotonic() - started) * 1000
         log_error(f"[paste] salin: ok={result.ok} tool={result.tool} "
-                  f"verified={result.verified}")
+                  f"verified={result.verified} ({elapsed_ms:.0f} ms)")
+        self.after(0, self._after_copy, result)
+
+    def _after_copy(self, result) -> None:
+        """Setelah salinan selesai: tunggu fokus, lalu kirim Ctrl+V."""
         if not result.ok:
-            # Fallback Tk tidak terbaca aplikasi Wayland; tetap beri tahu.
-            self.after(0, self._paste_failed, result.message)
+            self._paste_failed(result.message)
             return
-        # Kembali ke thread Tk untuk melepas jendela.
-        self.after(0, self._release_and_paste, text)
-
-    def _release_and_paste(self, text: str) -> None:
-        """Lepas jendela, tunggu fokus berpindah, lalu kirim Ctrl+V."""
-        self.withdraw()
-        log_error("[paste] jendela di-withdraw, menunggu fokus berpindah")
         delay_ms = int(float(self.settings.get("focus_delay", 0.6)) * 1000)
-        self.after(delay_ms, lambda: self._send_paste_after_release(text))
+        log_error(f"[paste] menunggu fokus {delay_ms} ms")
+        self.after(delay_ms, self._send_paste_after_release)
 
-    def _send_paste_after_release(self, text: str) -> None:
-        self._pasting = False
+    def _send_paste_after_release(self) -> None:
         threading.Thread(target=self._paste_sender, daemon=True).start()
 
     def _paste_sender(self) -> None:
@@ -371,6 +374,9 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
+        # Jendela sudah dilepas: WAJIB dimunculkan kembali apa pun hasilnya.
+        self.deiconify()
+        self.lift()
         self.status_var.set(f"Gagal menyalin: {message}")
         self._show_paste_failure(message)
 

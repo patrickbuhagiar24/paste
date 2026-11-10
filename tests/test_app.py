@@ -108,23 +108,83 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_flow_withdraws_then_pastes():
-    """Inti perbaikan: jendela DILEPAS (withdraw) sebelum Ctrl+V dikirim.
+def test_paste_withdraws_before_copying():
+    """Jendela dilepas SEBELUM menyalin.
 
-    `lower()` tidak memindahkan fokus (jendela kita tetap fokus) dan
-    `iconify()` diabaikan sebagian compositor — hanya withdraw yang
-    benar-benar menyerahkan fokus ke aplikasi tujuan.
+    Bug 1.4.0: withdraw baru dilakukan setelah penyalinan berhasil. Bila
+    penyalinan lambat atau gagal, jendela tetap memegang fokus dan Ctrl+V
+    tidak pernah terkirim (log berhenti di "[paste] mulai").
     """
+    from paste_teks.app import PasteTeksApp
+
+    order = []
+
+    class FakePath:
+        name = "Sapaan.txt"
+
+        def is_dir(self):
+            return False
+
+    class FakeApp:
+        settings = {"focus_delay": 0.6}
+        _pasting = False
+        status_var = type("V", (), {"set": staticmethod(lambda v: order.append("status"))})()
+
+        def selected_path(self):
+            return FakePath()
+
+        def withdraw(self):
+            order.append("withdraw")
+
+        def after(self, ms, fn=None):
+            order.append("after")
+
+        def _paste_worker(self, text):
+            order.append("copy")
+
+    app = FakeApp()
+    monkey = __import__("paste_teks.app", fromlist=["read_text"])
+    original = monkey.read_text
+    monkey.read_text = lambda p: "isi"
+    try:
+        PasteTeksApp.do_paste(app)
+    finally:
+        monkey.read_text = original
+    # withdraw harus muncul sebelum pekerjaan salin dimulai
+    assert order.index("withdraw") < order.index("copy")
+
+
+def test_after_copy_schedules_focus_delay():
+    from paste_teks.app import PasteTeksApp
+    from paste_teks.clipboard import ClipboardResult
+
+    calls = []
+
+    class FakeApp:
+        settings = {"focus_delay": 0.8}
+        status_var = type("V", (), {"set": staticmethod(lambda v: None)})()
+
+        def after(self, ms, fn=None):
+            calls.append(("after", ms))
+
+        def _send_paste_after_release(self):
+            calls.append(("send", None))
+            return 0
+
+    PasteTeksApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "ok", True))
+    assert calls[0] == ("after", 800)
+
+
+def test_copy_failure_restores_window():
+    """Salinan gagal: jendela yang sudah dilepas WAJIB dimunculkan lagi."""
     from paste_teks.app import PasteTeksApp
 
     calls = []
 
     class FakeApp:
-        settings = {"focus_delay": 0.6}
-        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
-
-        def withdraw(self):
-            calls.append(("withdraw", None))
+        _pasting = True
+        status_var = type("V", (), {"set": staticmethod(lambda v: calls.append(("status", v)))})()
+        settings = {}
 
         def deiconify(self):
             calls.append(("deiconify", None))
@@ -132,23 +192,13 @@ def test_paste_flow_withdraws_then_pastes():
         def lift(self):
             calls.append(("lift", None))
 
-        def after(self, ms, fn=None):
-            calls.append(("after", ms))
-            if fn is not None:
-                fn()
-
-        def lower(self):
-            calls.append(("lower", None))
-
-        def _send_paste_after_release(self, text):
-            calls.append(("send", text))
+        def _show_paste_failure(self, message):
+            calls.append(("dialog", message))
 
     app = FakeApp()
-    PasteTeksApp._release_and_paste(app, "teks")
-    assert ("withdraw", None) in calls
-    assert ("lower", None) not in calls       # lower tidak memindahkan fokus
-    after = [c for c in calls if c[0] == "after"]
-    assert after and after[0][1] == 600        # 0,6 detik
+    PasteTeksApp._paste_failed(app, "tidak ada tool clipboard")
+    assert ("deiconify", None) in calls
+    assert app._pasting is False
 
 
 def test_paste_done_restores_window():
