@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Paste Teks
+GenericName=Paste Teks Hierarki
+Comment=Tempel teks dari berkas .txt per kategori ke aplikasi lain dalam satu klik
+Exec=paste-teks
+Icon=paste-teks
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=paste;clipboard;teks;snippet;tempel;
+StartupWMClass=PasteTeks
+X-GNOME-Autostart-enabled=false

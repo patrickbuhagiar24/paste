@@ -1,0 +1,6 @@
+LAPORAN KEGIATAN
+Tanggal   : [tanggal]
+Kegiatan  : [deskripsi singkat]
+Hasil     : [hasil yang dicapai]
+Kendala   : [kendala, bila ada]
+Tindak lanjut: [langkah berikutnya]

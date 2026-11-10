@@ -1,0 +1,4 @@
+sudo apt update && sudo apt upgrade -y
+ls -la
+pwd
+cat nama-berkas.txt
