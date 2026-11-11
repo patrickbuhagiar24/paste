@@ -1,3 +1,10 @@
+paste-teks (1.5.2-1) unstable; urgency=medium
+
+  * Sesuaikan StartupWMClass dengan kelas jendela Tk yang teramati di Ubuntu.
+  * Tambah uji identitas jendela X11 menggunakan Xvfb dan xprop.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+
 paste-teks (1.5.1-1) unstable; urgency=medium
 
   * Perbarui ikon dokumen dan panah di menu dan jendela.

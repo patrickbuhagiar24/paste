@@ -52,12 +52,12 @@ SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) 
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 ERROR_LOG = SETTINGS_DIR / "error.log"
 
-# Nama ikon tema (usr/share/icons/hicolor/*/apps/<nama>.png / .svg) sekaligus
-# kelas jendela. Nilainya WAJIB sama dengan "Icon=" dan "StartupWMClass=" di
-# paste-teks.desktop; kalau berbeda, GNOME menganggap jendela yang sedang
-# berjalan sebagai aplikasi lain dan menampilkan ikon generik.
+# Tk dapat menormalisasi className saat membuat WM_CLASS X11. Nilai aktual
+# pada Tk Ubuntu (diverifikasi dengan xprop) adalah "Pasteteks", bukan string
+# className yang diberikan. StartupWMClass di desktop harus cocok nilai aktual.
 APP_ID = "paste-teks"
-WM_CLASS = "PasteTeks"
+TK_CLASS_NAME = "PasteTeks"
+WM_CLASS = "Pasteteks"
 ICON_NAME = APP_ID
 
 
@@ -242,10 +242,9 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             raise RuntimeError("tkinter tidak tersedia. Pasang python3-tk "
                                "(sudo apt install python3-tk).")
         try:
-            # className menentukan WM_CLASS jendela. Harus sama dengan
-            # StartupWMClass di paste-teks.desktop agar GNOME memasangkan
-            # jendela dengan entri menu (ikon & pengelompokan taskbar benar).
-            super().__init__(className=WM_CLASS)
+            # Tk menormalisasi className menjadi WM_CLASS; uji integrasi
+            # membandingkan hasil xprop dengan StartupWMClass desktop.
+            super().__init__(className=TK_CLASS_NAME)
         except Exception as exc:
             raise RuntimeError(
                 "Gagal membuka jendela (display tidak tersedia?). "
@@ -1116,7 +1115,7 @@ def run_check(roots: list[Path]) -> int:
     tools = available_tools()
     print("Tool clipboard/paste: "
           + ", ".join(f"{k}={'ada' if v else 'tidak ada'}" for k, v in tools.items()))
-    print(f"Ikon aplikasi: {ICON_NAME} (WM_CLASS '{WM_CLASS}')")
+    print(f"Ikon aplikasi: {ICON_NAME} (WM_CLASS yang diharapkan '{WM_CLASS}')")
     found_icons = icon_files()
     if found_icons:
         for path in found_icons:

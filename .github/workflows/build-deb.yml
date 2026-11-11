@@ -21,9 +21,11 @@ jobs:
           fetch-depth: 0
 
       - name: Pasang dependensi build
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils python3-tk xvfb xauth x11-utils
 
       - name: Uji
+        env:
+          PASTE_REQUIRE_X11_TEST: "1"
         run: |
           python3 -m pip install pytest -q
           python3 -m pytest tests/ -q

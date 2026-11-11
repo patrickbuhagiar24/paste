@@ -8,5 +8,5 @@ Icon=paste-teks
 Terminal=false
 Categories=Utility;TextEditor;
 Keywords=paste;clipboard;teks;snippet;tempel;
-StartupWMClass=PasteTeks
+StartupWMClass=Pasteteks
 X-GNOME-Autostart-enabled=false
