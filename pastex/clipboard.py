@@ -1,13 +1,13 @@
-"""Clipboard + paste otomatis (satu klik ke aplikasi lain).
+"""Clipboard and automatic paste into another app with one click.
 
-Urutan prioritas disesuaikan Ubuntu 26.10 (GNOME, Wayland default):
+Tool priority for Ubuntu 26.10 (GNOME, Wayland by default):
 
-  Salin  : wl-copy (Wayland) -> xclip -> xsel
-  Verifikasi : wl-paste (Wayland) -> xclip -o -> xsel -o  (maks 0,3 detik)
+  Copy   : wl-copy (Wayland) -> xclip -> xsel
+  Verify : wl-paste (Wayland) -> xclip -o -> xsel -o (max 0.3 seconds)
   Paste  : ydotool (Wayland) -> xdotool (X11)
 
-Semua pemanggilan proses lewat `runner` yang bisa diganti saat pengujian,
-sehingga modul ini bisa diuji tanpa clipboard asli.
+All subprocess calls use an injectable ``runner``, allowing tests to run
+without access to a real clipboard.
 """
 from __future__ import annotations
 
@@ -20,17 +20,17 @@ from typing import Callable
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-# Tool clipboard yang mem-fork lalu tetap hidup untuk memegang seleksi.
-# Bila output-nya ditangkap, pipe tidak pernah EOF -> subprocess menunggu
-# sampai timeout dan melaporkan GAGAL padahal clipboard sudah terisi.
+# Clipboard tools that fork and remain alive to own the selection.
+# Capturing their output keeps the pipe open, so the subprocess waits
+# until timeout and reports failure even though the clipboard is populated.
 _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 
-# Batas waktu untuk MEMBACA clipboard. Tool pembaca dapat menunggu seleksi
-# muncul; bila tidak ada, jangan sampai menahan GUI. Dulu nilai ini mengikuti
-# timeout umum (5 s) sehingga verifikasi 5 percobaan bisa mencapai ~25 detik.
+# Clipboard read timeout. Reader tools can wait for a selection
+# to appear; never let this block the GUI. This used to match
+# the default 5-second timeout, making five verification attempts take 25 seconds.
 READ_TIMEOUT = 0.3
 
-# Tool pembaca clipboard (dipakai untuk verifikasi & diagnosis).
+# Clipboard reader tools used for verification and diagnostics.
 READER_TOOLS = ("wl-paste", "xclip", "xsel")
 
 
@@ -41,9 +41,9 @@ def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     kwargs.setdefault("text", True)
     kwargs.setdefault("timeout", 5)
     if tool in _FORKING_TOOLS:
-        # Jangan tunggu proses selesai: wl-copy/xclip sengaja tetap hidup.
-        # Tulis masukan, tutup stdin, beri tenggang singkat, lalu anggap
-        # berhasil bila proses masih hidup (itu memang perilaku normalnya).
+        # Do not wait for wl-copy/xclip to exit; they intentionally remain alive.
+        # Write the input, close stdin, wait briefly, then consider it successful
+        # if the process is still alive (this is normal behavior).
         text = kwargs.pop("input", None)
         timeout = kwargs.pop("timeout", 5) or 5
         kwargs.pop("capture_output", None)
@@ -64,12 +64,12 @@ def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         try:
             code = proc.wait(timeout=min(1.0, timeout))
         except subprocess.TimeoutExpired:
-            code = 0  # masih memegang seleksi — normal, bukan gagal
+            code = 0  # The process still owns the selection; this is normal.
         return subprocess.CompletedProcess(cmd, code, "", "")
     kwargs.setdefault("capture_output", True)
     if tool in READER_TOOLS:
-        # Pembacaan clipboard tidak boleh menggantung; kegagalan cepat lebih
-        # baik daripada GUI tampak membeku.
+        # Clipboard reads must not hang; a quick failure is better
+        # than making the GUI appear frozen.
         if kwargs.get("timeout", 5) > READ_TIMEOUT:
             kwargs["timeout"] = READ_TIMEOUT
     return subprocess.run(*args, **kwargs)
@@ -88,14 +88,14 @@ class PasteResult:
     ok: bool
     tool: str = ""
     message: str = ""
-    # False bila perintah berhasil tetapi efeknya tidak dapat dipastikan
-    # (mis. xdotool di sesi Wayland: hanya menjangkau jendela XWayland,
-    # aplikasi Wayland asli tidak menerima Ctrl+V walau exit code 0).
+    # False when the command succeeds but its effect cannot be confirmed
+    # (for example, xdotool on Wayland only reaches XWayland windows,
+    # and native Wayland apps may not receive Ctrl+V even with exit code 0).
     confident: bool = True
 
 
 def detect_session() -> str:
-    """Deteksi sesi grafis: 'wayland', 'x11', atau 'unknown'."""
+    """Detect the graphical session: wayland, x11, or unknown."""
     if os.environ.get("WAYLAND_DISPLAY"):
         return "wayland"
     if os.environ.get("DISPLAY"):
@@ -104,22 +104,22 @@ def detect_session() -> str:
 
 
 def available_tools() -> dict[str, bool]:
-    """Cek ketersediaan tool clipboard/paste di PATH."""
+    """Check which clipboard and paste tools are available on PATH."""
     return {name: shutil.which(name) is not None
             for name in ("wl-copy", "xclip", "xsel", "ydotool", "xdotool")}
 
 
 def verify_clipboard(expected: str, runner: Runner = _default_runner,
                      *, attempts: int = 2, delay: float = 0.05) -> bool:
-    """Pastikan clipboard benar-benar berisi ``expected``.
+    """Verify that the clipboard actually contains ``expected``.
 
-    Tool clipboard di Wayland (wl-copy) mem-fork, jadi isi clipboard bisa
-    belum siap tepat setelah perintah kembali. Dicoba beberapa kali.
-    Mengembalikan False bila pembacaan tidak didukung sama sekali.
+    On Wayland, wl-copy forks, so clipboard contents may not be
+    available immediately when the command returns. Retry a few times.
+    Return False if clipboard reading is not supported.
 
-    Seluruh pemeriksaan dibatasi ±0,5 detik: verifikasi adalah pelengkap,
-    bukan tujuan. Sebelumnya 5 percobaan × timeout 5 detik membuat satu
-    klik terasa seperti hang (terukur 7 detik di mesin pengguna).
+    Keep the whole check within about 0.5 seconds; verification is optional,
+    not the goal. Five attempts with a 5-second timeout once made a single
+    click appear to hang (measured at 7 seconds on a user machine).
     """
     target = expected.rstrip("\n")
     for attempt in range(attempts):
@@ -132,9 +132,9 @@ def verify_clipboard(expected: str, runner: Runner = _default_runner,
 
 
 def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
-    """Salin teks ke clipboard sistem. Kembalikan tool yang berhasil."""
+    """Copy text to the system clipboard and return the tool that succeeded."""
     session = detect_session()
-    # Urutan kandidat: Wayland dulu bila sesi Wayland, sebaliknya X11 dulu.
+    # Prefer Wayland tools in Wayland sessions and X11 tools otherwise.
     if session == "wayland":
         candidates = [
             ("wl-copy", ["wl-copy"]),
@@ -160,41 +160,41 @@ def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
                     (getattr(proc, "stdout", "") or "").strip()]))
                 errors.append(f"{name}: {detail or proc.returncode}")
                 continue
-            # Exit code 0 belum tentu berarti clipboard benar-benar terisi
-            # (mis. wl-copy tanpa Wayland yang valid). Baca kembali isinya.
+            # Exit code 0 does not guarantee that the clipboard contains the text
+            # (for example, wl-copy without a valid Wayland session); read it back.
             if verify_clipboard(text, runner=runner):
                 return ClipboardResult(ok=True, tool=name, verified=True,
-                                       message=f"Teks disalin dengan {name}.")
+                                       message=f"Text copied with {name}.")
             if unverified is None:
                 unverified = name
-            errors.append(f"{name}: tersalin tetapi isi clipboard tidak cocok")
+            errors.append(f"{name}: copied, but clipboard contents do not match")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
     if unverified is not None:
-        # Salinan "berhasil" menurut tool walau verifikasi tak bisa dilakukan.
+        # The tool reports success even though verification was unavailable.
         return ClipboardResult(
             ok=True, tool=unverified, verified=False,
-            message=(f"Teks disalin dengan {unverified} (belum terverifikasi — "
-                     "pasang wl-paste/xclip untuk pemeriksaan)."))
-    detail = "; ".join(errors) if errors else "tidak ada tool clipboard ditemukan"
+            message=(f"Text copied with {unverified} (not verified — "
+                     "install wl-paste or xclip to verify)."))
+    detail = "; ".join(errors) if errors else "no clipboard tools found"
     return ClipboardResult(
         ok=False, tool="",
-        message=(f"Gagal menyalin ({detail}). Pasang wl-clipboard/xclip, "
-                 "atau gunakan tombol Salin di aplikasi (fallback internal)."))
+        message=(f"Could not copy ({detail}). Install wl-clipboard or xclip, "
+                 "or use the app’s Copy button (internal fallback)."))
 
 
 def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
-    """Nyalakan daemon ydotoold bila belum jalan. True bila tampak siap.
+    """Start ydotoold if it is not running; return True if it appears ready.
 
-    Dipakai otomatis saat `ydotool key` gagal, sehingga pengguna tidak perlu
-    menyiapkan apa pun lebih dulu. Tidak fatal bila systemd tidak tersedia.
+    This is called automatically after `ydotool key` fails, so users do not
+    need to configure it in advance. Lack of systemd is not fatal.
     """
     try:
         proc = runner(["systemctl", "--user", "start", "ydotoold.service"])
     except (OSError, subprocess.SubprocessError):
         return False
     if getattr(proc, "returncode", 1) == 0:
-        # Beri kesempatan socket muncul sebelum percobaan berikutnya.
+        # Allow time for the socket to appear before retrying.
         for _ in range(20):
             if _ydotoold_socket_exists():
                 return True
@@ -214,14 +214,14 @@ def _ydotoold_socket_exists() -> bool:
     return False
 
 
-try:  # mempermudah pengujian: waktu bisa dipalsukan
+try:  # Allow tests to replace the sleep function.
     from time import sleep as _sleep
 except ImportError:  # pragma: no cover
     _sleep = None
 
 
 def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
-    """Baca isi clipboard (untuk diagnosis). None bila tidak didukung."""
+    """Read clipboard contents for diagnostics, or return None if unsupported."""
     session = detect_session()
     if session == "wayland":
         candidates = [["wl-paste", "--no-newline"],
@@ -242,42 +242,41 @@ def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
 
 
 def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
-    """Ketik teks apa adanya lewat ydotool (untuk diagnosis).
+    """Type text directly through ydotool for diagnostics.
 
-    Berbeda dari Ctrl+V: tidak bergantung pada clipboard sama sekali.
+    Unlike Ctrl+V, this does not depend on the clipboard.
     """
     if shutil.which("ydotool") is None:
         return PasteResult(ok=False, tool="",
-                          message="ydotool tidak terpasang.")
+                          message="ydotool is not installed.")
     try:
         proc = runner(["ydotool", "type", text])
         if proc.returncode == 0:
             return PasteResult(ok=True, tool="ydotool",
-                               message=f"Teks uji terkirim via ydotool: {text!r}")
+                               message=f"Test text sent through ydotool: {text!r}")
         detail = " ".join(filter(None, [
             (getattr(proc, "stderr", "") or "").strip(),
             (getattr(proc, "stdout", "") or "").strip()]))
         return PasteResult(ok=False, tool="ydotool",
-                          message=f"ydotool type gagal: {detail or proc.returncode}")
+                          message=f"ydotool type failed: {detail or proc.returncode}")
     except (OSError, subprocess.SubprocessError) as exc:
         return PasteResult(ok=False, tool="", message=str(exc))
 
 
 def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
-    """Kirim Ctrl+V ke aplikasi yang sedang fokus (paste otomatis)."""
+    """Send Ctrl+V to the focused application."""
     session = detect_session()
-    # ydotool >= 1.0 (breaking change): `key` HANYA menerima keycode, ditulis
-    # sebagai <keycode>:<tekan/lepas>. Linux: 29=LeftCtrl, 47=V, 42=Shift.
+    # ydotool >= 1.0 (breaking change): `key` accepts only keycodes, written
+    # as <keycode>:<press/release>. Linux: 29=LeftCtrl, 47=V, 42=Shift.
     # Urutan: tekan Ctrl, tekan V, lepas V, lepas Ctrl.
     KEYCODE_CTRL_V = ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
-    # ydotool 0.1.x memakai nama kunci; tetap dicoba sebagai cadangan.
+    # ydotool 0.1.x uses key names; try those as a fallback.
     NAME_CTRL_V = ["ydotool", "key", "ctrl+v"]
     if session == "wayland":
-        # xdotool SENGAJA tidak dipakai di Wayland: ia memakai XTEST sehingga
-        # hanya menjangkau jendela XWayland, dan tetap mengembalikan kode 0
-        # walau aplikasi Wayland asli tidak menerima apa pun. Melaporkan
-        # "berhasil" di kondisi itu menyesatkan (persis jenis kebohongan yang
-        # menyulitkan diagnosis versi sebelumnya).
+        # Do not use xdotool on Wayland: it uses XTEST and only reaches
+        # XWayland windows, while still returning exit code 0 even when
+        # native Wayland apps receive nothing. Claiming success in this case
+        # would be misleading and make diagnosis harder.
         candidates = [
             ("ydotool", KEYCODE_CTRL_V),
             ("ydotool", NAME_CTRL_V),
@@ -295,7 +294,7 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
             continue
         try:
             proc = runner(cmd)
-            # ydotool butuh daemon; bila gagal, nyalakan sekali lalu ulangi.
+            # ydotool needs its daemon; if it fails, start it once and retry.
             if proc.returncode != 0 and name == "ydotool" and not daemon_tried:
                 daemon_tried = True
                 if ensure_ydotoold(runner=runner):
@@ -303,7 +302,7 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
             if proc.returncode == 0:
                 return PasteResult(
                     ok=True, tool=name,
-                    message=f"Paste otomatis terkirim via {name}.",
+                    message=f"Automatic paste sent through {name}.",
                     confident=(name != "xdotool"))
             detail = " ".join(filter(None, [
                 (getattr(proc, "stderr", "") or "").strip(),
@@ -315,12 +314,12 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
     if errors:
         detail = "; ".join(errors)
     elif session == "wayland":
-        detail = ("ydotool tidak ditemukan; di GNOME Wayland hanya ydotool "
-                  "yang dapat mengirim Ctrl+V ke aplikasi Wayland")
+        detail = ("ydotool was not found; on GNOME Wayland, only ydotool "
+                  "can send Ctrl+V to native Wayland apps")
     else:
-        detail = "tidak ada tool paste otomatis ditemukan"
+        detail = "no automatic-paste tools were found"
     return PasteResult(
         ok=False, tool="",
-        message=(f"Paste otomatis tidak tersedia ({detail}). "
-                 "Teks sudah disalin — tekan Ctrl+V di aplikasi tujuan. "
-                 "Jalankan `paste-teks --check` untuk diagnosis."))
+        message=(f"Automatic paste is unavailable ({detail}). "
+                 "The text was copied; press Ctrl+V in the target app. "
+                 "Run `pastex --check` for diagnostics."))

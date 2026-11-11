@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from paste_teks import app as app_module  # noqa: E402
-from paste_teks.app import PasteTeksApp  # noqa: E402
+from pastex import app as app_module  # noqa: E402
+from pastex.app import PastexApp  # noqa: E402
 
 
 class FakeTree:
@@ -109,8 +109,8 @@ class FakeVar:
 
 
 def make_app(roots=None, settings=None, *, transient_roots=False):
-    """Buat PasteTeksApp tiruan (tanpa __init__, tanpa display)."""
-    app = PasteTeksApp.__new__(PasteTeksApp)
+    """Buat PastexApp tiruan (tanpa __init__, tanpa display)."""
+    app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree()
     app.tree_area = FakeWidget()
     app.empty_frame = FakeWidget()
@@ -192,8 +192,8 @@ def gui(monkeypatch):
 def sample_root(tmp_path):
     """Folder sumber berisi dua kategori + dua berkas .txt."""
     root = tmp_path / "sumber"
-    (root / "Umum").mkdir(parents=True)
+    (root / "General").mkdir(parents=True)
     (root / "Email").mkdir(parents=True)
-    (root / "Umum" / "Sapaan.txt").write_text("halo", encoding="utf-8")
+    (root / "General" / "Greeting.txt").write_text("halo", encoding="utf-8")
     (root / "Email" / "Balas.txt").write_text("terima kasih", encoding="utf-8")
     return root

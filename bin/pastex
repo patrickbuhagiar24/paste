@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Pastex launcher installed as /usr/bin/pastex by the Debian package."""
+import sys
+import traceback
+from pathlib import Path
+
+# Locate the pastex package in a checkout or Debian installation.
+_here = Path(__file__).resolve()
+_candidates = [
+    _here.parent.parent,          # repository root (checkout)
+    _here.parent,                 # repository bin/ folder
+    _here.parent.parent / "share" / "pastex",  # relative Debian package layout (usr/bin/../share/...)
+    Path("/usr/share/pastex"),  # installed Debian package location
+    Path("/usr/share"),           # fallback
+]
+for candidate in _candidates:
+    if (candidate / "pastex" / "__init__.py").exists():
+        sys.path.insert(0, str(candidate))
+        break
+
+try:
+    from pastex.app import main
+except Exception:
+    # Log import errors (for example, if the package cannot be found).
+    _log = Path.home() / ".config" / "pastex" / "error.log"
+    try:
+        _log.parent.mkdir(parents=True, exist_ok=True)
+        _log.write_text(traceback.format_exc(), encoding="utf-8")
+    except OSError:
+        pass
+    print(traceback.format_exc(), file=sys.stderr)
+    raise SystemExit(1)
+
+if __name__ == "__main__":
+    main()

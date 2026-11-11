@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Pastex
+GenericName=Snippet Manager
+Comment=Browse and paste text snippets from categorized .txt files with one click
+Exec=/usr/bin/pastex
+Icon=pastex
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=paste;clipboard;text;snippet;
+StartupWMClass=Pastex
+X-GNOME-Autostart-enabled=false

@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from paste_teks.snippets import (
+from pastex.snippets import (
     create_category,
     create_snippet,
     delete_path,
@@ -20,10 +20,10 @@ from paste_teks.snippets import (
 
 def _make_tree(tmp: Path) -> Path:
     root = tmp / "snippets"
-    (root / "Umum").mkdir(parents=True)
+    (root / "General").mkdir(parents=True)
     (root / "Email").mkdir(parents=True)
-    write_text(root / "Umum" / "Sapaan.txt", "Halo, apa kabar?")
-    write_text(root / "Email" / "Balas.txt", "Terima kasih atas lamaran Anda.")
+    write_text(root / "General" / "Greeting.txt", "Hello, how are you?")
+    write_text(root / "Email" / "Balas.txt", "Thank you for your application.")
     write_text(root / "Email" / "abaikan.md", "bukan txt")
     write_text(root / ".tersembunyi.txt", "jangan tampil")
     return root
@@ -34,7 +34,7 @@ def test_scan_hierarchy(tmp_path):
     tree = scan_dir(root)
     assert tree.is_dir and tree.name == "snippets"
     names = [c.name for c in tree.children]
-    assert names == ["Email", "Umum"]  # folder dulu, alfabetis
+    assert names == ["Email", "General"]  # folder dulu, alfabetis
     email = next(c for c in tree.children if c.name == "Email")
     assert [c.name for c in email.children] == ["Balas"]
     assert email.children[0].is_text
@@ -45,14 +45,14 @@ def test_scan_roots_and_flatten(tmp_path):
     root = _make_tree(tmp_path)
     nodes = scan_roots([root])
     texts = flatten_texts(nodes)
-    assert {t.name for t in texts} == {"Sapaan", "Balas"}
+    assert {t.name for t in texts} == {"Greeting", "Balas"}
 
 
 def test_search_by_name_and_content(tmp_path):
     root = _make_tree(tmp_path)
     nodes = scan_roots([root])
-    assert [n.name for n in search(nodes, "sapaan")] == ["Sapaan"]
-    assert [n.name for n in search(nodes, "lamaran")] == ["Balas"]
+    assert [n.name for n in search(nodes, "greeting")] == ["Greeting"]
+    assert [n.name for n in search(nodes, "application")] == ["Balas"]
     assert search(nodes, "tidak-ada") == []
 
 
@@ -130,11 +130,11 @@ def test_creation_never_follows_existing_symlink(tmp_path):
 
 
 def test_filter_tree_keeps_only_matching_branches_without_resolving(tmp_path, monkeypatch):
-    from paste_teks.app import filter_tree
+    from pastex.app import filter_tree
 
     root = _make_tree(tmp_path)
     nodes = scan_roots([root])
-    hits = search(nodes, "lamaran")
+    hits = search(nodes, "application")
 
     def unexpected_resolve(*args, **kwargs):
         raise AssertionError("pemfilteran tidak perlu resolve path")

@@ -1,16 +1,16 @@
-"""Logika pemindaian & pengelolaan berkas .txt hierarki.
+"""Scan and manage hierarchical .txt snippet files.
 
-Modul ini murni logika (tanpa GUI) sehingga mudah diuji dan dipakai ulang
-dari CLI maupun GUI. Hierarki = struktur folder di disk:
+This module contains filesystem logic only, so it can be tested and reused by
+both the CLI and GUI. The folder structure defines the hierarchy:
 
     snippets/
-      Umum/
-        Sapaan.txt
+      General/
+        Greeting.txt
       Email/
-        Balas Lamaran.txt
-        Tindak Lanjut.txt
+        Application Reply.txt
+        Follow Up.txt
 
-Setiap folder adalah kategori, setiap berkas .txt adalah satu teks siap paste.
+Each folder is a category, and each .txt file is a text snippet ready to paste.
 """
 from __future__ import annotations
 
@@ -22,26 +22,26 @@ from pathlib import Path
 
 @dataclass
 class Node:
-    """Satu simpul dalam pohon kategori/teks."""
+    """A node in the category and text tree."""
 
     name: str
     path: Path
     is_dir: bool
     children: list["Node"] = field(default_factory=list)
-    source_root: Path | None = None  # root asal (sistem vs pengguna)
+    source_root: Path | None = None  # Origin root (system vs. user)
 
     @property
     def is_text(self) -> bool:
         return not self.is_dir
 
     def count_texts(self) -> int:
-        """Hitung total berkas .txt di bawah simpul ini (termasuk diri)."""
+        """Count .txt files under this node, including the node itself if it is a file."""
         if self.is_text:
             return 1
         return sum(c.count_texts() for c in self.children)
 
     def find(self, target: Path) -> "Node | None":
-        """Cari simpul berdasarkan path absolut."""
+        """Find a node by its absolute path."""
         try:
             target = target.resolve()
         except OSError:
@@ -60,14 +60,13 @@ def is_text_file(path: Path) -> bool:
 
 
 def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
-    """Pindai satu folder secara rekursif menjadi pohon Node.
+    """Recursively scan a folder into a Node tree.
 
-    Hanya berkas .txt yang dimasukkan. Folder kosong tetap ditampilkan
-    (sebagai kategori) agar pengguna tahu strukturnya. Berkas/folder
-    tersembunyi (diawali '.') dan symlink di dalam folder sumber dilewati,
-    agar tidak mengikuti tautan ke luar sumber atau siklus. Folder sumber
-    sendiri boleh berupa symlink. Urutan: folder dulu, lalu berkas, masing-
-    masing alfabetis (case-insensitive).
+    Only .txt files are included. Empty folders remain visible as categories.
+    Hidden files/folders (names beginning with '.') and symlinks inside the
+    source folder are skipped to avoid traversing outside the source or creating
+    cycles. The source folder itself may be a symlink. Sort folders first, then
+    files; sort both groups alphabetically without regard to case.
     """
     directory = Path(directory)
     node = Node(name=directory.name or str(directory), path=directory,
@@ -95,7 +94,7 @@ def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
 
 
 def scan_roots(roots: list[Path]) -> list[Node]:
-    """Pindai beberapa root (mis. sistem + pengguna) menjadi daftar pohon."""
+    """Scan multiple roots (for example, system and user folders) into trees."""
     result: list[Node] = []
     for root in roots:
         root = Path(root)
@@ -105,7 +104,7 @@ def scan_roots(roots: list[Path]) -> list[Node]:
 
 
 def flatten_texts(nodes: list[Node]) -> list[Node]:
-    """Kumpulkan semua simpul berkas .txt dari daftar pohon."""
+    """Collect all .txt file nodes from a list of trees."""
     out: list[Node] = []
 
     def walk(n: Node) -> None:
@@ -120,10 +119,10 @@ def flatten_texts(nodes: list[Node]) -> list[Node]:
 
 
 def search(nodes: list[Node], query: str) -> list[Node]:
-    """Cari berkas .txt berdasarkan nama file atau isi teksnya.
+    """Search .txt files by filename or text content.
 
-    Pencarian isi membaca berkas; berkas yang gagal dibaca dilewati.
-    Hasil berupa daftar simpul berkas yang cocok (tanpa duplikat).
+    Unreadable files are skipped during content searches. Return matching file
+    nodes without duplicates.
     """
     q = query.strip().lower()
     if not q:
@@ -147,7 +146,7 @@ def search(nodes: list[Node], query: str) -> list[Node]:
 
 
 def read_text(path: Path) -> str:
-    """Baca berkas .txt sebagai UTF-8 (fallback latin-1 bila perlu)."""
+    """Read a .txt file as UTF-8, falling back to latin-1 when necessary."""
     path = Path(path)
     try:
         return path.read_text(encoding="utf-8")
@@ -156,7 +155,7 @@ def read_text(path: Path) -> str:
 
 
 def write_text(path: Path, content: str) -> Path:
-    """Tulis teks ke berkas .txt (buat folder induk bila belum ada)."""
+    """Write text to a .txt file, creating its parent folder if needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -164,15 +163,15 @@ def write_text(path: Path, content: str) -> Path:
 
 
 def _single_name(name: str) -> str:
-    """Terima hanya satu nama, bukan path absolut atau relatif."""
+    """Accept one name only, not an absolute or relative path."""
     name = name.strip()
     if not name or name in {".", ".."} or any(c in name for c in "/\\\0"):
-        raise ValueError("Masukkan satu nama tanpa pemisah folder, '.' atau '..'.")
+        raise ValueError("Enter one name without a folder separator, '.', or '..'.")
     return name
 
 
 def ensure_txt_suffix(name: str) -> str:
-    """Pastikan nama berkas aman dan berakhiran .txt."""
+    """Validate a filename and ensure it ends in .txt."""
     name = _single_name(name)
     if not name.lower().endswith(".txt"):
         name += ".txt"
@@ -180,16 +179,16 @@ def ensure_txt_suffix(name: str) -> str:
 
 
 def create_category(parent: Path, name: str) -> Path:
-    """Buat folder kategori baru di bawah parent."""
+    """Create a category folder under parent."""
     target = Path(parent) / _single_name(name)
     if target.is_symlink():
-        raise ValueError("Kategori tidak boleh berupa symlink.")
+        raise ValueError("A category cannot be a symbolic link.")
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def create_snippet(parent: Path, filename: str, content: str = "") -> Path:
-    """Buat berkas .txt baru secara eksklusif; gagal bila sudah ada."""
+    """Create a new .txt file exclusively; fail if it already exists."""
     target = Path(parent) / ensure_txt_suffix(filename)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("x", encoding="utf-8") as file:
@@ -198,7 +197,7 @@ def create_snippet(parent: Path, filename: str, content: str = "") -> Path:
 
 
 def delete_path(path: Path) -> None:
-    """Hapus berkas .txt atau folder kategori (rekursif)."""
+    """Delete a .txt file or category folder recursively."""
     path = Path(path)
     if path.is_dir():
         shutil.rmtree(path)
@@ -209,19 +208,27 @@ def delete_path(path: Path) -> None:
 
 
 def user_root() -> Path:
-    """Folder pengguna tempat teks pribadi disimpan (selalu writable)."""
+    """Return the user folder for personal snippets (always writable)."""
     data_home = Path(os.environ.get("XDG_DATA_HOME",
                                    Path.home() / ".local" / "share"))
-    return data_home / "paste-teks" / "snippets"
+    new_root = data_home / "pastex" / "snippets"
+    legacy_root = data_home / "paste-teks" / "snippets"
+    if not new_root.exists() and legacy_root.is_dir():
+        try:
+            shutil.copytree(legacy_root, new_root)
+        except OSError:
+            # Keep the old directory usable if migration is blocked by permissions.
+            return legacy_root
+    return new_root
 
 
 def default_roots() -> list[Path]:
-    """Daftar root bawaan: sistem (read-only) lalu pengguna (writable).
+    """Return default roots: system (read-only), followed by the writable user root.
 
-    Urutan penting: root terakhir adalah tempat penulisan (tambah/edit/hapus).
+    The final root is the write destination for newly created or edited files.
     """
-    system_root = Path("/usr/share/paste-teks/snippets")
-    # Relatif terhadap paket (terpasang di /usr/share/paste-teks/paste_teks).
+    system_root = Path("/usr/share/pastex/snippets")
+    # Relatif terhadap paket (terpasang di /usr/share/pastex/pastex).
     package_root = Path(__file__).resolve().parent.parent / "snippets"
     roots: list[Path] = []
     for candidate in (system_root, package_root):
@@ -232,22 +239,22 @@ def default_roots() -> list[Path]:
 
 
 def writable_root(roots: list[Path] | None = None) -> Path:
-    """Root tempat berkas baru disimpan (root terakhir / folder pengguna)."""
+    """Return the root where new files are stored (the final, user-writable root)."""
     if roots:
         return Path(roots[-1])
     return default_roots()[-1]
 
 
 def root_label(root: Path, index: int | None = None) -> str:
-    """Label ramah untuk sebuah root (dipakai GUI tanpa membocorkan path).
+    """Return a friendly GUI label for a root without exposing its full path.
 
-    Nama folder mentah tidak berguna di GUI: root sistem, paket, dan pengguna
-    semuanya bernama "snippets". Label di sini menjelaskan perannya. ``index``
-    diterima agar pemanggil bisa meneruskan posisi root tanpa berubah.
+    The system, package, and user folders may all be named "snippets", so use
+    a label that describes each root's role. ``index`` is accepted for callers
+    that pass the root position.
     """
     root = Path(root)
     system_roots = {
-        Path("/usr/share/paste-teks/snippets"),
+        Path("/usr/share/pastex/snippets"),
         Path(__file__).resolve().parent.parent / "snippets",
     }
     try:
@@ -255,38 +262,38 @@ def root_label(root: Path, index: int | None = None) -> str:
     except OSError:  # pragma: no cover - path aneh
         resolved = root
     if resolved in {p.resolve() for p in system_roots}:
-        return "Contoh bawaan"
+        return "Built-in samples"
     if resolved == user_root().resolve():
-        return "Teks saya"
+        return "My Texts"
     return root.name or str(root)
 
 
-# --- Contoh bawaan -------------------------------------------------------
+# --- Built-in samples ----------------------------------------------------
 #
-# Sejak 1.5.0 repo tidak lagi menyertakan data/snippets/ dan .deb tidak lagi
-# menyalinnya. Mesin yang sudah punya contoh terpasang di
-# /usr/share/paste-teks/snippets tetap memakainya (tidak dihapus).
+# Since 1.5.0, the repository and Debian package no longer include sample data.
+# Existing samples installed at
+# /usr/share/pastex/snippets remain available and are not removed.
 #
-# Pemasangan baru TIDAK diisi contoh otomatis: GUI menampilkan petunjuk
-# "Pilih Folder Sumber" lebih dulu. Contoh di bawah hanya ditulis bila
-# pengguna memintanya lewat `paste-teks --ekspor-data [FOLDER]`.
+# New installations do not include samples by default. The GUI asks users to
+# choose a source folder first. Samples below are exported only when
+# requested with `pastex --export-data [FOLDER]`.
 
 DEFAULT_SAMPLES: dict[str, dict[str, str]] = {
-    "Umum": {
-        "Sapaan": "Halo, apa kabar? Semoga sehat selalu.\n",
-        "Tanda Tangan": "Salam,\nNama Anda\nJabatan — Perusahaan\n",
+    "General": {
+        "Greeting": "Hello, how are you? I hope you are doing well.\n",
+        "Signature": "Best regards,\nYour Name\nTitle — Company\n",
     },
     "Email": {
-        "Balas Lamaran": (
-            "Terima kasih atas lamaran Anda. Kami akan menghubungi Anda "
-            "kembali setelah proses seleksi selesai.\n"),
-        "Tindak Lanjut": (
-            "Menindaklanjuti pesan sebelumnya, apakah ada perkembangan yang "
-            "bisa kami ketahui?\n"),
+        "Application Reply": (
+            "Thank you for your application. We will contact you "
+            "when the selection process is complete.\n"),
+        "Follow Up": (
+            "I am following up on my previous message. Is there any update "
+            "you can share?\n"),
     },
-    "Kerja": {
-        "Format Laporan": (
-            "Laporan Mingguan\n\nRingkasan:\n- \n\nKendala:\n- \n\n"
-            "Rencana berikutnya:\n- \n"),
+    "Work": {
+        "Report Template": (
+            "Weekly Report\n\nSummary:\n- \n\nChallenges:\n- \n\n"
+            "Next steps:\n- \n"),
     },
 }

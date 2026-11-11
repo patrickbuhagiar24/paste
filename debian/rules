@@ -3,26 +3,26 @@
 	dh
 
 override_dh_auto_install:
-	install -d debian/paste-teks/usr/bin
-	install -m 755 bin/paste-teks debian/paste-teks/usr/bin/paste-teks
-	install -d debian/paste-teks/usr/share/paste-teks
-	cp -r paste_teks debian/paste-teks/usr/share/paste-teks/
-	# Sejak 1.5.0 tidak ada contoh bawaan yang dipasang (data/snippets/ dihapus).
-	install -d debian/paste-teks/usr/share/applications
-	install -m 644 usr/share/applications/paste-teks.desktop debian/paste-teks/usr/share/applications/
-	install -d debian/paste-teks/usr/share/icons/hicolor/scalable/apps
-	install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg debian/paste-teks/usr/share/icons/hicolor/scalable/apps/
+	install -d debian/pastex/usr/bin
+	install -m 755 bin/pastex debian/pastex/usr/bin/pastex
+	install -d debian/pastex/usr/share/pastex
+	cp -r pastex debian/pastex/usr/share/pastex/
+	# Since 1.5.0, sample data is not bundled (data/snippets/ was removed).
+	install -d debian/pastex/usr/share/applications
+	install -m 644 usr/share/applications/pastex.desktop debian/pastex/usr/share/applications/
+	install -d debian/pastex/usr/share/icons/hicolor/scalable/apps
+	install -m 644 usr/share/icons/hicolor/scalable/apps/pastex.svg debian/pastex/usr/share/icons/hicolor/scalable/apps/
 	for size in 64 128 256; do \
-	  install -d debian/paste-teks/usr/share/icons/hicolor/$${size}x$${size}/apps; \
-	  install -m 644 usr/share/icons/hicolor/$${size}x$${size}/apps/paste-teks.png \
-	    debian/paste-teks/usr/share/icons/hicolor/$${size}x$${size}/apps/; \
+	  install -d debian/pastex/usr/share/icons/hicolor/$${size}x$${size}/apps; \
+	  install -m 644 usr/share/icons/hicolor/$${size}x$${size}/apps/pastex.png \
+	    debian/pastex/usr/share/icons/hicolor/$${size}x$${size}/apps/; \
 	done
-	install -d debian/paste-teks/usr/lib/paste-teks
-	install -m 755 usr/lib/paste-teks/paste-teks-uinput-group debian/paste-teks/usr/lib/paste-teks/
-	install -d debian/paste-teks/usr/lib/udev/rules.d
-	install -m 644 usr/lib/udev/rules.d/70-paste-teks-uinput.rules debian/paste-teks/usr/lib/udev/rules.d/
-	install -d debian/paste-teks/usr/lib/systemd/user
-	install -m 644 usr/lib/systemd/user/ydotoold.service debian/paste-teks/usr/lib/systemd/user/
-	install -d debian/paste-teks/usr/share/doc/paste-teks
-	install -m 644 README.md debian/paste-teks/usr/share/doc/paste-teks/README.md
-	install -m 644 LICENSE debian/paste-teks/usr/share/doc/paste-teks/copyright
+	install -d debian/pastex/usr/lib/pastex
+	install -m 755 usr/lib/pastex/pastex-uinput-group debian/pastex/usr/lib/pastex/
+	install -d debian/pastex/usr/lib/udev/rules.d
+	install -m 644 usr/lib/udev/rules.d/70-pastex-uinput.rules debian/pastex/usr/lib/udev/rules.d/
+	install -d debian/pastex/usr/lib/systemd/user
+	install -m 644 usr/lib/systemd/user/ydotoold.service debian/pastex/usr/lib/systemd/user/
+	install -d debian/pastex/usr/share/doc/pastex
+	install -m 644 README.md debian/pastex/usr/share/doc/pastex/README.md
+	install -m 644 LICENSE debian/pastex/usr/share/doc/pastex/copyright

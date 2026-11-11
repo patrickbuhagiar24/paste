@@ -1,9 +1,9 @@
 """Uji ikon: ikon jendela harus SAMA dengan ikon di menu aplikasi.
 
-Bug asli: `PasteTeksApp` tidak pernah memanggil `iconphoto`, sehingga jendela
+Bug asli: `PastexApp` tidak pernah memanggil `iconphoto`, sehingga jendela
 memakai ikon generik bawaan Tk — berbeda dengan ikon di dash/menu GNOME.
 Ditambah WM_CLASS Tk ("Tk") tidak sama dengan StartupWMClass di
-paste-teks.desktop, jadi GNOME bahkan tidak memasangkan jendela ke entri menu.
+pastex.desktop, jadi GNOME bahkan tidak memasangkan jendela ke entri menu.
 """
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from paste_teks import app as app_module
+from pastex import app as app_module
 
 ROOT = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT / "usr" / "share" / "icons" / "hicolor"
-SVG = ICON_DIR / "scalable" / "apps" / "paste-teks.svg"
-DESKTOP = ROOT / "usr" / "share" / "applications" / "paste-teks.desktop"
+SVG = ICON_DIR / "scalable" / "apps" / "pastex.svg"
+DESKTOP = ROOT / "usr" / "share" / "applications" / "pastex.desktop"
 PNG_SIZES = (64, 128, 256)
 
 
@@ -66,7 +66,7 @@ def test_svg_exists_and_is_square():
 @pytest.mark.parametrize("size", PNG_SIZES)
 def test_png_exists_for_each_size(size):
     """Tk hanya bisa memuat raster: PNG wajib ada di tema hicolor."""
-    path = ICON_DIR / f"{size}x{size}" / "apps" / "paste-teks.png"
+    path = ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
     assert path.is_file(), f"ikon jendela {size}px tidak ada"
     assert _png_size(path) == (size, size)
 
@@ -74,7 +74,7 @@ def test_png_exists_for_each_size(size):
 @pytest.mark.parametrize("size", (64, 128, 256))
 def test_png_actually_drawn_not_blank(size):
     """PNG tidak boleh kanvas kosong (mis. render gagal tapi tetap ditulis)."""
-    path = ICON_DIR / f"{size}x{size}" / "apps" / "paste-teks.png"
+    path = ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
     width, height, pixels = _png_rgba(path)
     opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] > 200)
     ratio = opaque / (width * height)
@@ -85,7 +85,7 @@ def test_png_matches_svg_colors():
     """Warna PNG harus berasal dari SVG yang sama (bukan digambar ulang)."""
     svg_text = SVG.read_text(encoding="utf-8").lower()
     width, height, pixels = _png_rgba(
-        ICON_DIR / "64x64" / "apps" / "paste-teks.png")
+        ICON_DIR / "64x64" / "apps" / "pastex.png")
     seen = {(pixels[i], pixels[i + 1], pixels[i + 2])
             for i in range(0, len(pixels), 4) if pixels[i + 3] > 250}
     # hijau tua (latar), putih (dokumen), oranye (panah paste)
@@ -112,7 +112,7 @@ def test_png_is_what_the_generator_produces():
     for size in (64, 256):
         expected = module.render(size, view=view_w, shapes=shapes)
         width, height, actual = _png_rgba(
-            ICON_DIR / f"{size}x{size}" / "apps" / "paste-teks.png")
+            ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png")
         assert (width, height) == (size, size)
         assert bytes(actual) == expected, f"PNG {size}px basi — jalankan ulang skrip"
 
@@ -128,7 +128,7 @@ def test_constants_agree_with_desktop_file():
             entries[key.strip()] = value.strip()
     assert entries["Icon"] == app_module.ICON_NAME
     assert entries["StartupWMClass"] == app_module.WM_CLASS
-    assert entries["Exec"].endswith("/paste-teks")
+    assert entries["Exec"].endswith("/pastex")
 
 
 def test_window_class_passed_to_tk():
@@ -140,7 +140,7 @@ def test_window_class_passed_to_tk():
 def test_icon_files_prefers_installed_and_found():
     files = app_module.icon_files()
     assert files, "PNG ikon tidak ditemukan dari kode"
-    assert [f.name for f in files] == ["paste-teks.png"] * len(files)
+    assert [f.name for f in files] == ["pastex.png"] * len(files)
     sizes = [int(f.parent.parent.name.split("x")[0]) for f in files]
     assert sizes == sorted(sizes, reverse=True), "harus besar -> kecil"
 
@@ -188,7 +188,7 @@ def test_constructor_actually_applies_window_icon():
 
     tree = ast.parse(Path(app_module.__file__).read_text(encoding="utf-8"))
     app_cls = next(n for n in ast.walk(tree)
-                   if isinstance(n, ast.ClassDef) and n.name == "PasteTeksApp")
+                   if isinstance(n, ast.ClassDef) and n.name == "PastexApp")
     init = next(n for n in app_cls.body
                 if isinstance(n, ast.FunctionDef) and n.name == "__init__")
     calls = [node for node in ast.walk(init)
@@ -204,7 +204,7 @@ def test_apply_window_icon_survives_broken_png(monkeypatch, tmp_path):
     """PNG rusak tidak boleh membuat aplikasi gagal start."""
     bad = tmp_path / "256x256" / "apps"
     bad.mkdir(parents=True)
-    (bad / "paste-teks.png").write_bytes(b"bukan png")
+    (bad / "pastex.png").write_bytes(b"bukan png")
 
     class FakeTk:
         class PhotoImage:
@@ -222,9 +222,9 @@ def test_apply_window_icon_survives_broken_png(monkeypatch, tmp_path):
 def test_check_reports_icon_status(capsys):
     assert app_module.run_cli(["--check"]) == 0
     out = capsys.readouterr().out
-    assert "Ikon aplikasi:" in out
-    assert "paste-teks.png" in out
-    assert "WM_CLASS yang diharapkan 'Pasteteks'" in out
+    assert "Application icon:" in out
+    assert "pastex.png" in out
+    assert "(expected WM_CLASS 'Pastex')" in out
 
 
 def test_real_window_wm_class_matches_desktop(tmp_path):
@@ -254,7 +254,7 @@ launcher, folder, expected = sys.argv[1:]
 p = subprocess.Popen([launcher, "--dir", folder], stdout=subprocess.PIPE,
                      stderr=subprocess.PIPE, text=True)
 try:
-    title = "Paste Teks v" + __import__("paste_teks").__version__ + " — Tempel Cepat Satu Klik"
+    title = "Pastex v" + __import__("pastex").__version__ + " — One-Click Paste"
     for _ in range(100):
         result = subprocess.run(["xprop", "-name", title, "WM_CLASS"],
                                 capture_output=True, text=True)
@@ -276,6 +276,6 @@ finally:
     env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
     result = subprocess.run(
         ["xvfb-run", "-a", sys.executable, "-c", script,
-         str(ROOT / "bin" / "paste-teks"), str(tmp_path), app_module.WM_CLASS],
+         str(ROOT / "bin" / "pastex"), str(tmp_path), app_module.WM_CLASS],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
