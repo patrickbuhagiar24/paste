@@ -67,7 +67,7 @@ Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lai
  .
  Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
  tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
- `paste-teks --ekspor-data`. Teks pribadi disimpan di
+ paste-teks --ekspor-data. Teks pribadi disimpan di
  ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF

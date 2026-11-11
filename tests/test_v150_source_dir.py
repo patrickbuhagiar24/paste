@@ -91,7 +91,9 @@ def test_source_dir_replaces_default_roots(gui, sample_root):
     assert app.active_roots() == [sample_root]
     texts = [r["text"] for r in app.tree.rows]
     assert not any("sistem" in t or "pengguna" in t for t in texts)
-    assert any("sumber" in t for t in texts)
+    assert not any("sumber" in t for t in texts)
+    assert app.tree.by_iid(sample_root / "Umum")["parent"] == ""
+    assert app.tree.by_iid(sample_root / "Email")["parent"] == ""
 
 
 def test_missing_source_dir_falls_back_to_roots(gui, tmp_path):
@@ -198,7 +200,8 @@ def test_dir_argument_wins_over_saved_source(gui, sample_root, tmp_path, monkeyp
               transient_roots=True)
     app.refresh_tree()
     assert app.active_roots() == [lain]
-    assert [r["text"] for r in app.tree.rows] == ["📁 lain", "📄 Catatan"]
+    assert [r["text"] for r in app.tree.rows] == ["📄 Catatan"]
+    assert app.tree.rows[0]["parent"] == ""
 
 
 def test_dir_argument_does_not_touch_saved_source(gui, sample_root, tmp_path,

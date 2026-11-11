@@ -88,7 +88,7 @@ def test_png_matches_svg_colors():
         ICON_DIR / "64x64" / "apps" / "paste-teks.png")
     seen = {(pixels[i], pixels[i + 1], pixels[i + 2])
             for i in range(0, len(pixels), 4) if pixels[i + 3] > 250}
-    # hijau tua (latar), putih (kertas), oranye (jam)
+    # hijau tua (latar), putih (dokumen), oranye (panah paste)
     for name, rgb in (("hijau", (46, 125, 50)), ("putih", (255, 255, 255)),
                       ("oranye", (255, 152, 0))):
         hexa = "#%02x%02x%02x" % rgb
