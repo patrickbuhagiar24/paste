@@ -133,7 +133,7 @@ Bila repo ditandatangani GPG, ganti `[trusted=yes]` dengan
 
 ```bash
 ./scripts/build-deb.sh
-sudo apt install ./dist/paste-teks_1.5.2-1_all.deb
+sudo apt install ./dist/paste-teks_1.5.3-1_all.deb
 ```
 
 ### C. Dari source (tanpa .deb)
@@ -228,7 +228,11 @@ Sejak **1.5.0** teks Anda berpusat pada **satu folder sumber**:
 Sesudah itu:
 
 - setiap subfolder menjadi **kategori**, setiap berkas `.txt` menjadi satu teks;
-- **semua teks/kategori baru disimpan di dalam folder itu**;
+- **semua teks/kategori baru disimpan di dalam folder itu**; nama baru harus
+  berupa satu nama tanpa `/` atau `\`, dan tidak boleh tepat `.` atau `..`;
+- symlink di dalam folder sumber tidak ditampilkan atau diikuti, agar tautan
+  keluar folder dan siklus tidak ikut dipindai; folder sumber sendiri boleh
+  dipilih melalui symlink;
 - pilihan tersimpan di `~/.config/paste-teks/settings.json` dan dipulihkan saat
   aplikasi dibuka lagi.
 
@@ -331,7 +335,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.5.2-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.5.3-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 

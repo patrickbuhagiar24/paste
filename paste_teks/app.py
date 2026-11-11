@@ -28,7 +28,6 @@ from .snippets import (
     delete_path,
     flatten_texts,
     read_text,
-    root_label,
     scan_roots,
     search as search_nodes,
     user_root,
@@ -211,12 +210,14 @@ def export_data(target_dir: Path) -> list[Path]:
 
 
 def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
-    """Bangun pohon terfilter: hanya berkas cocok + folder leluhurnya."""
-    hit_paths = {h.path.resolve() for h in hits}
+    """Bangun pohon terfilter dari hasil pencarian simpul pohon yang sama."""
+    # search_nodes mengembalikan Node asli dari nodes. Tidak perlu resolve()
+    # untuk setiap berkas (yang melakukan akses filesystem berulang).
+    hit_paths = {h.path for h in hits}
 
     def keep(node: Node) -> Node | None:
         if node.is_text:
-            return node if node.path.resolve() in hit_paths else None
+            return node if node.path in hit_paths else None
         kept = [k for child in node.children if (k := keep(child)) is not None]
         if not kept:
             return None
@@ -475,13 +476,6 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
                 f"({', '.join(str(r) for r in roots)})")
         self._update_source_label()
 
-    def _root_label(self, path: Path) -> str:
-        """Label akar: nama folder sumber, selain itu label peran root."""
-        source = getattr(self, "settings", {}).get("source_dir")
-        if source and Path(source) == Path(path):
-            return Path(path).name or str(path)
-        return root_label(path)
-
     def _update_source_label(self) -> None:
         var = getattr(self, "source_var", None)
         if var is None:  # pragma: no cover - UI minimal
@@ -724,6 +718,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         Bila folder sumber dipilih, penulisan SELALU di dalamnya: folder induk
         root tidak boleh dipakai karena itu berada di luar folder sumber.
         """
+        if getattr(self, "transient_roots", False):
+            path = self.selected_path()
+            for root in self.active_roots():
+                if path is not None and _is_within(path, root):
+                    return path if path.is_dir() else path.parent
+            return self.writable
         source = self.settings.get("source_dir")
         if source and Path(source).is_dir():
             source_path = Path(source)
