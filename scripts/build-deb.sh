@@ -11,6 +11,7 @@ STAGE="build/deb"
 OUT="dist/${PKG}_${VERSION}-1_${ARCH}.deb"
 
 rm -rf "$STAGE"
+ICON_SIZES="64 128 256"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" \
   "$STAGE/usr/share/paste-teks" \
   "$STAGE/usr/share/applications" \
@@ -29,6 +30,13 @@ find "$STAGE/usr/share/paste-teks" -name "*.pyc" -delete 2>/dev/null || true
 # dibiarkan; pemasangan baru bisa meminta contoh lewat `--ekspor-data`.
 install -m 644 usr/share/applications/paste-teks.desktop "$STAGE/usr/share/applications/"
 install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/"
+# PNG: ikon JENDELA (Tk iconphoto tidak bisa memuat SVG). Dirender dari SVG
+# yang sama oleh scripts/make-icon-png.py agar ikon jendela = ikon menu.
+for size in $ICON_SIZES; do
+  install -d "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps"
+  install -m 644 "usr/share/icons/hicolor/${size}x${size}/apps/paste-teks.png" \
+    "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps/"
+done
 install -m 644 README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
 

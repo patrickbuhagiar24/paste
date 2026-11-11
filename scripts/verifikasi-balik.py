@@ -152,6 +152,48 @@ MUTATIONS = [
         ["tests/test_v150_source_dir.py::test_empty_state_shown_when_no_source_selected"],
     ),
     (
+        "ikon jendela tidak dipasang lagi",
+        "paste_teks/app.py",
+        "        self.icon_files_used = apply_window_icon(self)",
+        "        self.icon_files_used = []",
+        ["tests/test_v150_icon.py::test_constructor_actually_applies_window_icon"],
+    ),
+    (
+        "WM_CLASS kembali ke bawaan Tk",
+        "paste_teks/app.py",
+        "            super().__init__(className=WM_CLASS)",
+        "            super().__init__()",
+        ["tests/test_v150_icon.py::test_window_class_passed_to_tk"],
+    ),
+    (
+        "StartupWMClass menyimpang dari app",
+        "usr/share/applications/paste-teks.desktop",
+        "StartupWMClass=PasteTeks",
+        "StartupWMClass=Tk",
+        ["tests/test_v150_icon.py::test_constants_agree_with_desktop_file"],
+    ),
+    (
+        "PNG ikon jendela hilang",
+        "usr/share/icons/hicolor/64x64/apps/paste-teks.png",
+        None,
+        None,
+        ["tests/test_v150_icon.py::test_png_exists_for_each_size"],
+    ),
+    (
+        "PNG ikon basi (bukan hasil skrip)",
+        "usr/share/icons/hicolor/64x64/apps/paste-teks.png",
+        None,
+        None,
+        ["tests/test_v150_icon.py::test_png_is_what_the_generator_produces"],
+    ),
+    (
+        "--check tidak melaporkan ikon",
+        "paste_teks/app.py",
+        '    print(f"Ikon aplikasi: {ICON_NAME} (WM_CLASS \'{WM_CLASS}\')")',
+        '    print("Ikon aplikasi: (tidak dilaporkan)")',
+        ["tests/test_v150_icon.py::test_check_reports_icon_status"],
+    ),
+    (
         "--list diam saat tidak ada teks",
         "paste_teks/app.py",
         "        if not flatten_texts(nodes):",
@@ -183,11 +225,19 @@ def main() -> int:
         backup = path.with_suffix(path.suffix + ".bak")
         shutil.copy2(path, backup)
         try:
-            text = path.read_text(encoding="utf-8")
-            if old not in text:
-                failures.append(f"[TIDAK DAPAT DITERAPKAN] {name}: potongan tidak ditemukan")
-                continue
-            path.write_text(text.replace(old, new, 1), encoding="utf-8")
+            if old is None:
+                # Mutasi berkas biner: "hapus" -> hapus berkas, "basi" -> acak isi.
+                if name.startswith("PNG ikon hilang"):
+                    path.unlink()
+                else:
+                    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+            else:
+                text = path.read_text(encoding="utf-8")
+                if old not in text:
+                    failures.append(
+                        f"[TIDAK DAPAT DITERAPKAN] {name}: potongan tidak ditemukan")
+                    continue
+                path.write_text(text.replace(old, new, 1), encoding="utf-8")
             code, out = run(tests)
             if code == 0:
                 failures.append(f"[LOLOS PADAHAL BUG] {name}: uji {tests} tetap hijau")

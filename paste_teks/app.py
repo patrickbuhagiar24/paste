@@ -52,6 +52,14 @@ SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) 
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 ERROR_LOG = SETTINGS_DIR / "error.log"
 
+# Nama ikon tema (usr/share/icons/hicolor/*/apps/<nama>.png / .svg) sekaligus
+# kelas jendela. Nilainya WAJIB sama dengan "Icon=" dan "StartupWMClass=" di
+# paste-teks.desktop; kalau berbeda, GNOME menganggap jendela yang sedang
+# berjalan sebagai aplikasi lain dan menampilkan ikon generik.
+APP_ID = "paste-teks"
+WM_CLASS = "PasteTeks"
+ICON_NAME = APP_ID
+
 
 def log_error(message: str) -> None:
     """Catat error ke ~/.config/paste-teks/error.log (untuk diagnosis)."""
@@ -80,6 +88,61 @@ def _is_within(path, root) -> bool:
     except (OSError, ValueError):
         return False
     return True
+
+
+# Ukuran ikon raster yang dipasang pada jendela (besar -> kecil; Tk memilih
+# yang paling cocok untuk judul, taskbar, dan Alt+Tab).
+ICON_SIZES = (256, 128, 64)
+
+
+def icon_dirs() -> list[Path]:
+    """Folder dasar tema hicolor yang tersedia (repo maupun .deb terpasang)."""
+    base = Path(__file__).resolve().parent.parent
+    dirs: list[Path] = []
+    for candidate in (base / "usr" / "share" / "icons" / "hicolor",
+                      Path("/usr/share/icons/hicolor")):
+        if candidate.is_dir() and candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
+def icon_files() -> list[Path]:
+    """Berkas PNG ikon aplikasi yang ditemukan, terbesar lebih dulu."""
+    files: list[Path] = []
+    for base in icon_dirs():
+        for size in ICON_SIZES:
+            path = base / f"{size}x{size}" / "apps" / f"{ICON_NAME}.png"
+            if path.is_file() and path not in files:
+                files.append(path)
+    return files
+
+
+def apply_window_icon(window) -> list[Path]:
+    """Pasang ikon aplikasi pada jendela Tk; kembalikan berkas yang dipakai.
+
+    Tanpa ini jendela memakai ikon generik bawaan Tk sehingga berbeda dengan
+    ikon di menu aplikasi (mis. dash GNOME). Ikon diambil dari PNG yang
+    dirender dari SVG yang sama dengan ikon tema, jadi keduanya identik.
+    """
+    if tk is None:  # pragma: no cover - CLI tanpa tkinter
+        return []
+    images = []
+    used: list[Path] = []
+    for path in icon_files():
+        try:
+            image = tk.PhotoImage(file=str(path))
+        except (tk.TclError, OSError):
+            continue
+        images.append(image)
+        used.append(path)
+    if images:
+        window.iconphoto(True, *images)   # True: juga untuk Toplevel anak
+        window._icon_images = images      # cegah garbage-collect
+    try:
+        window.wm_iconname(ICON_NAME)     # cadangan: nama ikon tema
+    except Exception:  # pragma: no cover - WM tanpa dukungan iconname
+        pass
+    return used
 
 
 DEFAULT_SETTINGS = {
@@ -179,12 +242,17 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             raise RuntimeError("tkinter tidak tersedia. Pasang python3-tk "
                                "(sudo apt install python3-tk).")
         try:
-            super().__init__()
+            # className menentukan WM_CLASS jendela. Harus sama dengan
+            # StartupWMClass di paste-teks.desktop agar GNOME memasangkan
+            # jendela dengan entri menu (ikon & pengelompokan taskbar benar).
+            super().__init__(className=WM_CLASS)
         except Exception as exc:
             raise RuntimeError(
                 "Gagal membuka jendela (display tidak tersedia?). "
                 f"Detail: {exc}") from exc
         self.title(f"Paste Teks v{__version__} — Tempel Cepat Satu Klik")
+        # Ikon jendela = ikon tema yang sama dengan ikon di menu aplikasi.
+        self.icon_files_used = apply_window_icon(self)
         self.geometry("980x620")
         self.minsize(720, 440)
         self.settings = load_settings()
@@ -1046,6 +1114,14 @@ def run_check(roots: list[Path]) -> int:
     tools = available_tools()
     print("Tool clipboard/paste: "
           + ", ".join(f"{k}={'ada' if v else 'tidak ada'}" for k, v in tools.items()))
+    print(f"Ikon aplikasi: {ICON_NAME} (WM_CLASS '{WM_CLASS}')")
+    found_icons = icon_files()
+    if found_icons:
+        for path in found_icons:
+            print(f"  ✅ {path}")
+    else:
+        print("  ❌ tidak ditemukan — jendela akan memakai ikon generik; "
+              "pasang ulang paket atau jalankan scripts/make-icon-png.py")
     try:
         st = uinput.status()
         print(f"Izin paste otomatis (grup '{uinput.GROUP}', akun '{st.user}'):")

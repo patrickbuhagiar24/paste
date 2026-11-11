@@ -23,6 +23,9 @@ klik** (salin + `Ctrl+V` otomatis).
 - 🔐 **Nol konfigurasi** — paket memberi ACL `/dev/uinput` (`uaccess`) untuk
   sesi aktif dan menyalakan `ydotoold` otomatis; tanpa grup `input` dan tanpa
   perlu logout.
+- 🎨 **Ikon konsisten** — jendela memakai ikon yang sama dengan ikon menu
+  (PNG tema `hicolor` yang dirender dari satu berkas SVG, plus `WM_CLASS`
+  yang cocok dengan `StartupWMClass`), bukan ikon generik Tk.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
   via `ydotool`/`xdotool`; tanpa tool clipboard, aplikasi memberi pesan
   jelas alih-alih diam.
@@ -270,6 +273,11 @@ paste_teks/          Kode Python (GUI + logika + clipboard)
 usr/lib/paste-teks/  Helper root (dipanggil via pkexec untuk menambah grup)
 usr/lib/udev/rules.d/  udev rule uaccess (+grup cadangan) untuk /dev/uinput
 usr/lib/systemd/user/  ydotoold.service (daemon paste otomatis)
+usr/share/icons/hicolor/{64,128,256}x/apps/paste-teks.png
+                     Ikon JENDELA (raster untuk Tk iconphoto)
+usr/share/icons/hicolor/scalable/apps/paste-teks.svg
+                     Ikon MENU (vektor); PNG dirender dari SVG ini
+scripts/make-icon-png.py  Render ulang PNG ikon dari SVG (tanpa dependensi)
 usr/share/paste-teks/  Lokasi contoh LAMA (dibiarkan bila sudah terpasang;
                      paket 1.5.0+ tidak lagi memasang contoh — lihat --ekspor-data)
 debian/postinst      Deteksi akun & penambahan grup otomatis saat instalasi
@@ -287,7 +295,13 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
   paste-teks --check   # laporan lingkungan (tkinter, display, tool, folder)
   paste-teks           # jalankan langsung — traceback tampil di terminal
   cat ~/.config/paste-teks/error.log   # log error terakhir
+  paste-teks --check                   # lihat baris "Ikon aplikasi:"
   ```
+- **Ikon jendela berbeda dengan ikon di menu**: pastikan baris
+  `Ikon aplikasi:` pada `--check` menampilkan ketiga PNG. Bila `❌`, pasang
+  ulang paket atau jalankan `python3 scripts/make-icon-png.py`. Setelah
+  memperbarui SVG, jalankan skrip itu agar PNG tidak basi (ada uji yang
+  menangkap PNG usang).
 - **Paste otomatis tidak bekerja**: lakukan dua uji ini untuk memisahkan
   penyebabnya.
 
