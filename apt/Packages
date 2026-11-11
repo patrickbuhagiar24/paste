@@ -1,14 +1,14 @@
 Package: paste-teks
-Version: 1.5.0-1
+Version: 1.5.1-1
 Architecture: all
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
-Filename: ./paste-teks_1.5.0-1_all.deb
-Size: 40962
-MD5sum: 61fcdae6c8ef7393fe82c7058b1c99f2
-SHA1: 1cf01d34ac5849885f1dd75e7b21c9a41a5e8acf
-SHA256: 020289204adcce4520353920d15ede118efb2f073203b0101a061b8068b983e6
+Filename: ./paste-teks_1.5.1-1_all.deb
+Size: 40974
+MD5sum: 866851ef5faff4d3a29f9b50756f580a
+SHA1: 97f39ed1987701c6626a89c73d044e3e9d29774c
+SHA256: 5783fff6f79ca1686ea3714da4ca7a383e79e31286fc7fee6429bee9dcc78f31
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
