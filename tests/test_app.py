@@ -53,6 +53,9 @@ def test_insert_node_uses_end_index(tmp_path):
 
     app = PasteTeksApp.__new__(PasteTeksApp)  # tanpa __init__ (tanpa display)
     app.tree = _FakeTree()
+    # Tk.__getattr__ memerlukan interpreter yang tidak dibuat oleh __new__;
+    # inisialisasi atribut yang dibaca _insert_node secara eksplisit.
+    app.collapsed = set()
     root = Node(name="snippets", path=tmp_path, is_dir=True)
     child = Node(name="Sapaan", path=tmp_path / "Sapaan.txt", is_dir=False)
     root.children = [child]
