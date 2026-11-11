@@ -1,24 +1,24 @@
 Architectures: all
 Codename: stable
 Components: main
-Date: Wed, 11 Nov 2026 04:32:04 +0000
+Date: Wed, 11 Nov 2026 04:47:29 +0000
 Description: Repo APT Paste Teks untuk Ubuntu 26.10
 Label: Paste Teks
 Origin: Paste Teks
 Suite: stable
 MD5Sum:
- 02e2ce86e904dcf8297bbd7d31159e90             1211 Packages
- 6e72bcf5cbe729b0a97b971640e8ec69              774 Packages.gz
- 491781f4af8b16536f4b07ee1b8e8813              194 Release
+ 4df65e2200cc706907b66456b08928fc             1211 Packages
+ 0034623de4d8295278301b9ee8f051a5              773 Packages.gz
+ 1d6109716771661f349153102e0b69fc              194 Release
 SHA1:
- dbb7cd351054e80ccf425dddec6f31df73adccc9             1211 Packages
- 71af2c02211bd511764c1d53d47227d572b48145              774 Packages.gz
- 81aa6de034ceac7f607f32e835b238802d526061              194 Release
+ 4fc1d0d7f8aec49a880a6b6c398cf632b983f465             1211 Packages
+ 7bd6a60cc2fa80eb7d85e85fca9b42d9b0992f0e              773 Packages.gz
+ 090882b862045a72f20bdcded3870b3027c1377d              194 Release
 SHA256:
- e70cb76d690fb88c83a86824ac1d312f9610f1953baebc2e68e93f4d3971efb2             1211 Packages
- 6ecbedc30af35a34db914dd97303d4c2c44b77669cff756655b3cf85e66a31dc              774 Packages.gz
- ff96daa5283fcdb093f91ede64b59fb24e703becd5c6ad84409590d4fd09f8e7              194 Release
+ 75e922b92d89e781e56ca00edfecb5d115f961f083df321041200294174c0576             1211 Packages
+ 17c954f09e3e299dd29d6ebbb79ccddca3f2bb6227c317ed67afb1eca3c7d676              773 Packages.gz
+ 5e2da1351c080439ebd5fca96438065326c6a4cd8f02ef5a117ac475dace36b9              194 Release
 SHA512:
- 021e2eceb15d9ea7688ef8c1c6ff4b9e523f72da02f65afbe40a05380f34a11b3293126b379a846e3e3de2fcecd9f31cb2f4cbf5f3d401553d3ef9199f5374df             1211 Packages
- 1e1bd03b462c20a65401c7c793bc619543e5ce5799eb83414ad1d1c7d3f4e5f396f7c1b1a976f402d39e7c548e6cad4eae486ee59b1a3b1d8874cf21be659a8c              774 Packages.gz
- 3750fc4790d331caaa79f0ed8debb653acf3be267cc6a184558628bcf918ed837cae0e704d37ffd132a8588f752c1e5507bb2e17cf4b8133791edb6cf9e5041f              194 Release
+ 3ae4d1eb28f3f6570b39d3fbc065638218dfd65036c16f4f86328e1c2b30493930987924fefcc76eb6d649ad2f7dc883a8bd1cc478794a6f6be0cc55e718102a             1211 Packages
+ 53d3bf8f5f0cc92db435c19b73bbca7578fe4680bb9c67e2910ac2f0b5867d2d13e11cbac2fbee41447080836fc4ef02b5a64d7fb8739e68494ea2274e2def27              773 Packages.gz
+ 6c134df15d9dea8a79769cc5c0db5f72efde9b87d32ec4ecf0c97e1c6306970aa48900ae912ef6452da2d4a03739cc2c7624fd7521ddc5d1919c5165c951fa7a              194 Release
