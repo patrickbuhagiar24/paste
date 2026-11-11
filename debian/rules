@@ -7,7 +7,7 @@ override_dh_auto_install:
 	install -m 755 bin/paste-teks debian/paste-teks/usr/bin/paste-teks
 	install -d debian/paste-teks/usr/share/paste-teks
 	cp -r paste_teks debian/paste-teks/usr/share/paste-teks/
-	cp -r data/snippets debian/paste-teks/usr/share/paste-teks/
+	# Sejak 1.5.0 tidak ada contoh bawaan yang dipasang (data/snippets/ dihapus).
 	install -d debian/paste-teks/usr/share/applications
 	install -m 644 usr/share/applications/paste-teks.desktop debian/paste-teks/usr/share/applications/
 	install -d debian/paste-teks/usr/share/icons/hicolor/scalable/apps

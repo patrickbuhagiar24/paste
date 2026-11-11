@@ -133,7 +133,7 @@ case "${1:-}" in
         if [ -z "${USERS:-}" ]; then
             say "tidak bisa mendeteksi akun pengguna secara otomatis."
             say "Paste otomatis biasanya tetap bekerja lewat ACL sesi."
-            say "Bila belum, buka Paste Teks > \"Izin Paste Otomatis\", atau:"
+            say "Bila belum, jalankan `paste-teks --aktifkan-izin`, atau:"
             say "  sudo usermod -aG $GROUP <nama-akun-anda>"
             exit 0
         fi
@@ -157,7 +157,7 @@ case "${1:-}" in
                 | tr ' ' '\n' | grep -qx "$GROUP" \
            && [ "$NEW_MEMBER" -eq 0 ]; then
             say "peringatan: grup belum aktif untuk akun ini — gunakan tombol"
-            say "\"Izin Paste Otomatis\" di aplikasi bila paste otomatis gagal."
+            say "`paste-teks --aktifkan-izin` bila paste otomatis gagal."
         fi
 
         # Uji nyata: apakah perangkat sekarang bisa ditulis akun tersebut?
@@ -169,7 +169,7 @@ case "${1:-}" in
                 say "$DEV tidak ada — akan dibuat saat modul uinput dimuat."
             else
                 say "izin $DEV belum berlaku untuk '$FIRST'."
-                say "Buka aplikasi lalu klik \"Izin Paste Otomatis\", atau:"
+                say "Jalankan `paste-teks --aktifkan-izin`, atau:"
                 say "  sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput"
             fi
         fi

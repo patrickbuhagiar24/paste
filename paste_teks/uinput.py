@@ -41,6 +41,15 @@ MANUAL_COMMAND = (
     "# lalu logout & login ulang"
 )
 
+# Sejak 1.5.0 tidak ada tombol izin di GUI; aktivasi lewat CLI. Teks ini
+# dicetak `--izin`, `--check`, dan dialog kegagalan paste agar pengguna tahu
+# perintah yang harus dijalankan tanpa harus mencari di dokumentasi.
+CLI_HINT = (
+    "Jalankan di terminal:\n"
+    "  paste-teks --izin            # lihat status izin\n"
+    "  paste-teks --aktifkan-izin   # aktifkan (minta kata sandi admin)"
+)
+
 
 def current_user() -> str:
     """Nama pengguna yang menjalankan aplikasi (bukan root)."""
@@ -330,7 +339,7 @@ def status(user: str | None = None) -> UinputStatus:
 
 
 def can_self_enable(st: UinputStatus | None = None) -> bool:
-    """Bisa menawarkan tombol "Aktifkan sekarang" (pkexec + helper)?"""
+    """Bisa mengaktifkan sendiri lewat pkexec + helper (dipakai --aktifkan-izin)?"""
     st = st or status()
     return st.helper and st.pkexec and not st.device_writable
 
@@ -398,8 +407,8 @@ def explain(st: UinputStatus | None = None) -> str:
     steps: list[str] = []
     if not st.account_ready:
         steps.append(
-            f"Akun '{st.user}' belum menjadi anggota grup '{GROUP}'. Klik "
-            "\"Aktifkan sekarang\" (atau pakai perintah manual di README).")
+            f"Akun '{st.user}' belum menjadi anggota grup '{GROUP}'. Jalankan "
+            "`paste-teks --aktifkan-izin` (atau perintah manual di README).")
     if st.needs_relogin:
         steps.append(
             f"Akun '{st.user}' sudah menjadi anggota grup '{GROUP}' di "

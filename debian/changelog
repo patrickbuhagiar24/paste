@@ -1,3 +1,36 @@
+paste-teks (1.5.0-1) unstable; urgency=medium
+
+  * Contoh bawaan tidak lagi disertakan.
+    - data/snippets/ dihapus dari repo; scripts/build-deb.sh dan debian/rules
+      berhenti menyalinnya ke /usr/share/paste-teks/snippets.
+    - Contoh yang SUDAH terpasang di mesin pengguna dibiarkan apa adanya
+      (postinst/postrm tidak menyentuhnya).
+    - Sebagai gantinya, contoh dibuat atas permintaan: `paste-teks
+      --ekspor-data [FOLDER]` (tidak pernah menimpa berkas yang ada).
+  * Tombol "Izin Paste Otomatis" dihapus dari GUI.
+    - Alur aktivasi pindah ke CLI: `--izin` (status) dan `--aktifkan-izin`
+      (pkexec + helper grup 'paste-teks').
+    - Informasi tetap tersedia di `--check` dan pada dialog kegagalan paste,
+      termasuk petunjuk perintah CLI (uinput.CLI_HINT).
+  * Kategori yang diciutkan kini diingat.
+    - Status disimpan di settings.json pada kunci "collapsed" dan dipulihkan
+      setiap refresh_tree, termasuk setelah aplikasi dibuka ulang.
+    - Saat mencari, semua kategori dibuka agar hasil terlihat, tanpa menghapus
+      status tersimpan. Kategori yang dihapus ikut dibersihkan dari settings.
+  * Satu folder sumber (source_dir) dengan tombol "📁 Pilih Folder Sumber".
+    - Folder sumber menjadi satu-satunya root yang tampil dan tempat penulisan
+      teks/kategori baru; pilihannya disimpan di settings.json.
+    - Tampilan kosong berpetunjuk (beserta tombol yang sama) muncul bila belum
+      ada folder sumber maupun teks.
+    - Argumen `--dir` selalu menang untuk sesi itu dan TIDAK mengubah folder
+      tersimpan (PasteTeksApp(transient_roots=True)).
+  * Alur paste withdraw -> salin -> jeda -> Ctrl+V tidak diubah.
+  * Uji: 151 lolos (57 uji baru). Setiap uji baru diperiksa-balik lewat
+    scripts/verifikasi-balik.py: 19 mutasi bug dikembalikan satu per satu dan
+    dipastikan uji yang relevan benar-benar gagal.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 11 Nov 2026 00:00:00 +0700
+
 paste-teks (1.4.3-1) unstable; urgency=medium
 
   * PERBAIKAN: paste tidak lagi melaporkan "berhasil" secara palsu.

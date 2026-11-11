@@ -200,6 +200,13 @@ def delete_path(path: Path) -> None:
         raise FileNotFoundError(str(path))
 
 
+def user_root() -> Path:
+    """Folder pengguna tempat teks pribadi disimpan (selalu writable)."""
+    data_home = Path(os.environ.get("XDG_DATA_HOME",
+                                   Path.home() / ".local" / "share"))
+    return data_home / "paste-teks" / "snippets"
+
+
 def default_roots() -> list[Path]:
     """Daftar root bawaan: sistem (read-only) lalu pengguna (writable).
 
@@ -208,16 +215,11 @@ def default_roots() -> list[Path]:
     system_root = Path("/usr/share/paste-teks/snippets")
     # Relatif terhadap paket (terpasang di /usr/share/paste-teks/paste_teks).
     package_root = Path(__file__).resolve().parent.parent / "snippets"
-    data_home = Path(os.environ.get("XDG_DATA_HOME",
-                                   Path.home() / ".local" / "share"))
-    user_root = data_home / "paste-teks" / "snippets"
-    # Di lingkungan dev (repo), pakai data/snippets bila ada.
-    repo_root = Path(__file__).resolve().parent.parent / "data" / "snippets"
     roots: list[Path] = []
-    for candidate in (system_root, package_root, repo_root):
+    for candidate in (system_root, package_root):
         if candidate.is_dir() and candidate not in roots:
             roots.append(candidate)
-    roots.append(user_root)
+    roots.append(user_root())
     return roots
 
 
@@ -226,3 +228,57 @@ def writable_root(roots: list[Path] | None = None) -> Path:
     if roots:
         return Path(roots[-1])
     return default_roots()[-1]
+
+
+def root_label(root: Path, index: int | None = None) -> str:
+    """Label ramah untuk sebuah root (dipakai GUI tanpa membocorkan path).
+
+    Nama folder mentah tidak berguna di GUI: root sistem, paket, dan pengguna
+    semuanya bernama "snippets". Label di sini menjelaskan perannya. ``index``
+    diterima agar pemanggil bisa meneruskan posisi root tanpa berubah.
+    """
+    root = Path(root)
+    system_roots = {
+        Path("/usr/share/paste-teks/snippets"),
+        Path(__file__).resolve().parent.parent / "snippets",
+    }
+    try:
+        resolved = root.resolve()
+    except OSError:  # pragma: no cover - path aneh
+        resolved = root
+    if resolved in {p.resolve() for p in system_roots}:
+        return "Contoh bawaan"
+    if resolved == user_root().resolve():
+        return "Teks saya"
+    return root.name or str(root)
+
+
+# --- Contoh bawaan -------------------------------------------------------
+#
+# Sejak 1.5.0 repo tidak lagi menyertakan data/snippets/ dan .deb tidak lagi
+# menyalinnya. Mesin yang sudah punya contoh terpasang di
+# /usr/share/paste-teks/snippets tetap memakainya (tidak dihapus).
+#
+# Pemasangan baru TIDAK diisi contoh otomatis: GUI menampilkan petunjuk
+# "Pilih Folder Sumber" lebih dulu. Contoh di bawah hanya ditulis bila
+# pengguna memintanya lewat `paste-teks --ekspor-data [FOLDER]`.
+
+DEFAULT_SAMPLES: dict[str, dict[str, str]] = {
+    "Umum": {
+        "Sapaan": "Halo, apa kabar? Semoga sehat selalu.\n",
+        "Tanda Tangan": "Salam,\nNama Anda\nJabatan — Perusahaan\n",
+    },
+    "Email": {
+        "Balas Lamaran": (
+            "Terima kasih atas lamaran Anda. Kami akan menghubungi Anda "
+            "kembali setelah proses seleksi selesai.\n"),
+        "Tindak Lanjut": (
+            "Menindaklanjuti pesan sebelumnya, apakah ada perkembangan yang "
+            "bisa kami ketahui?\n"),
+    },
+    "Kerja": {
+        "Format Laporan": (
+            "Laporan Mingguan\n\nRingkasan:\n- \n\nKendala:\n- \n\n"
+            "Rencana berikutnya:\n- \n"),
+    },
+}

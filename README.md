@@ -15,17 +15,24 @@ klik** (salin + `Ctrl+V` otomatis).
   dikirim otomatis. Jendela muncul lagi setelah teks tertempel.
 - 🔍 **Pencarian** — cari berdasarkan nama berkas *atau isi teksnya*.
 - ✏️ **Kelola dari GUI** — tambah kategori, tambah teks, edit (editor internal),
-  hapus, buka folder di Nautilus. Perubahan tersimpan di folder pengguna.
-- ⚙️ **Pengaturan** — jeda sebelum paste otomatis (0,5–5 detik), mode
-  double-click, dan *selalu di atas*. Tersimpan di `~/.config/paste-teks/`.
+  hapus, buka folder di Nautilus. Perubahan tersimpan di folder sumber pilihan
+  Anda (atau folder pengguna bila belum dipilih).
+- ⚙️ **Pengaturan** — jeda sebelum paste otomatis (0,5–5 detik), *selalu di
+  atas*, folder sumber, dan kategori yang diciutkan. Semua tersimpan di
+  `~/.config/paste-teks/settings.json`.
 - 🔐 **Nol konfigurasi** — paket memberi ACL `/dev/uinput` (`uaccess`) untuk
   sesi aktif dan menyalakan `ydotoold` otomatis; tanpa grup `input` dan tanpa
   perlu logout.
 - 🖥️ **Wayland & X11** — clipboard via `wl-copy`/`xclip`/`xsel`, paste otomatis
   via `ydotool`/`xdotool`; tanpa tool clipboard, aplikasi memberi pesan
   jelas alih-alih diam.
+- 📁 **Satu folder sumber** — pilih satu folder lewat **📁 Pilih Folder Sumber**;
+  semua kategori di dalamnya tampil di pohon dan semua teks baru disimpan di
+  sana. Pilihan tersimpan dan dipulihkan pada sesi berikutnya.
 - 🧩 **CLI juga** — `paste-teks --list`, `--copy FILE`, `--paste FILE`, serta
-  `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan.
+  `--test-paste` untuk diagnosis, `--check` untuk laporan lingkungan,
+  `--izin`/`--aktifkan-izin` untuk izin paste otomatis, `--ekspor-data` untuk
+  contoh teks.
 
 ## Cara pakai — satu klik, langsung tertempel
 
@@ -69,7 +76,7 @@ Supaya alurnya benar-benar satu tindakan, fitur berikut dihapus:
 | Tombol | Aksi |
 |---|---|
 | Klik / double-click / `Enter` | Tempel ke aplikasi lain (satu tindakan) |
-| `F5` | Muat ulang pohon |
+| `F5` | Muat ulang pohon (status kategori ciut dipulihkan dari `settings.json`) |
 | `F2` | Edit berkas terpilih |
 | `Delete` | Hapus berkas/kategori terpilih |
 | `Ctrl+F` | Fokus ke pencarian |
@@ -123,7 +130,7 @@ Bila repo ditandatangani GPG, ganti `[trusted=yes]` dengan
 
 ```bash
 ./scripts/build-deb.sh
-sudo apt install ./dist/paste-teks_1.0.0-1_all.deb
+sudo apt install ./dist/paste-teks_1.5.0-1_all.deb
 ```
 
 ### C. Dari source (tanpa .deb)
@@ -170,7 +177,7 @@ Biasanya: **tidak ada**. Pasang, lalu langsung pakai.
 | Situasi | Tindakan |
 |---|---|
 | `apt install` / `apt upgrade` lewat terminal | Tidak ada — langsung aktif |
-| Dipasang lewat GNOME Software | Buka aplikasi sekali; bila perlu klik **🔐 Izin Paste Otomatis** |
+| Dipasang lewat GNOME Software | Buka aplikasi sekali; bila perlu jalankan `paste-teks --aktifkan-izin` |
 | `--check` menunjukkan ❌ | Baca blok **Langkah berikutnya** — isinya perintah siap tempel |
 | Daemon mati setelah reboot | `systemctl --user enable ydotoold` (postinst sudah mencoba ini) |
 
@@ -208,6 +215,50 @@ systemctl --user enable --now ydotoold
 Saat paket dihapus (`apt purge`), grup `paste-teks` ikut dihapus bila tidak
 ada anggota tersisa.
 
+## Folder sumber
+
+Sejak **1.5.0** teks Anda berpusat pada **satu folder sumber**:
+
+1. Klik **📁 Pilih Folder Sumber** (di toolbar atau di tengah tampilan kosong).
+2. Pilih satu folder — mis. `~/Dokumen/Teks`.
+
+Sesudah itu:
+
+- setiap subfolder menjadi **kategori**, setiap berkas `.txt` menjadi satu teks;
+- **semua teks/kategori baru disimpan di dalam folder itu**;
+- pilihan tersimpan di `~/.config/paste-teks/settings.json` dan dipulihkan saat
+  aplikasi dibuka lagi.
+
+Bila belum ada folder sumber yang dipilih dan tidak ada teks di folder bawaan,
+panel kiri menampilkan petunjuk berisi tombol yang sama — bukan pohon kosong.
+
+Argumen CLI `--dir` **selalu menang** untuk sesi itu dan **tidak mengubah**
+folder tersimpan:
+
+```bash
+paste-teks --dir ~/Dokumen/Teks-Lain    # sesi ini saja
+```
+
+Ingin contoh teks siap pakai? Paket 1.5.0 ke atas tidak lagi membawa contoh
+bawaan (contoh yang sudah terpasang di mesin lama tetap dibiarkan):
+
+```bash
+paste-teks --ekspor-data            # ke ~/.local/share/paste-teks/snippets
+paste-teks --ekspor-data ~/Dokumen/Teks
+```
+
+## Izin paste otomatis lewat CLI
+
+Tombol **Izin Paste Otomatis** di GUI dihapus di 1.5.0; alurnya pindah ke CLI:
+
+```bash
+paste-teks --izin             # status izin /dev/uinput (sama seperti di --check)
+paste-teks --aktifkan-izin    # aktifkan (meminta kata sandi administrator)
+```
+
+Status izin juga tetap tercetak di `--check`, dan dialog kegagalan paste
+menyebutkan kedua perintah di atas.
+
 ## Struktur repo
 
 ```
@@ -219,8 +270,9 @@ paste_teks/          Kode Python (GUI + logika + clipboard)
 usr/lib/paste-teks/  Helper root (dipanggil via pkexec untuk menambah grup)
 usr/lib/udev/rules.d/  udev rule uaccess (+grup cadangan) untuk /dev/uinput
 usr/lib/systemd/user/  ydotoold.service (daemon paste otomatis)
+usr/share/paste-teks/  Lokasi contoh LAMA (dibiarkan bila sudah terpasang;
+                     paket 1.5.0+ tidak lagi memasang contoh — lihat --ekspor-data)
 debian/postinst      Deteksi akun & penambahan grup otomatis saat instalasi
-data/snippets/       Contoh teks bawaan per kategori
 debian/              Kemasan Debian (.deb)
 scripts/             build-deb.sh, setup-apt-repo.sh, install.sh
 apt-repo/            Hasil repo APT + contoh sources.list
@@ -265,7 +317,7 @@ tests/               Uji pytest (snippets, clipboard, izin uinput, CLI)
 
 ```bash
 python3 -m pytest tests/ -q
-./scripts/build-deb.sh          # → dist/paste-teks_1.4.1-1_all.deb
+./scripts/build-deb.sh          # → dist/paste-teks_1.5.0-1_all.deb
 ./scripts/setup-apt-repo.sh     # → apt-repo/dist/ (Packages + Release)
 ```
 
