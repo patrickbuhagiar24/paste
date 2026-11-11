@@ -20,14 +20,18 @@ from pathlib import Path
 from . import __version__, uinput
 from .clipboard import copy_text, simulate_paste
 from .snippets import (
+    DEFAULT_SAMPLES,
     Node,
     create_category,
     create_snippet,
     default_roots,
     delete_path,
+    flatten_texts,
     read_text,
+    root_label,
     scan_roots,
     search as search_nodes,
+    user_root,
     writable_root,
     write_text,
 )
@@ -48,6 +52,14 @@ SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) 
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 ERROR_LOG = SETTINGS_DIR / "error.log"
 
+# Nama ikon tema (usr/share/icons/hicolor/*/apps/<nama>.png / .svg) sekaligus
+# kelas jendela. Nilainya WAJIB sama dengan "Icon=" dan "StartupWMClass=" di
+# paste-teks.desktop; kalau berbeda, GNOME menganggap jendela yang sedang
+# berjalan sebagai aplikasi lain dan menampilkan ikon generik.
+APP_ID = "paste-teks"
+WM_CLASS = "PasteTeks"
+ICON_NAME = APP_ID
+
 
 def log_error(message: str) -> None:
     """Catat error ke ~/.config/paste-teks/error.log (untuk diagnosis)."""
@@ -64,20 +76,102 @@ def _run_in_thread(target, *args) -> None:
     threading.Thread(target=target, args=args, daemon=True).start()
 
 
+def _norm_path(path) -> str:
+    """Path absolut tanpa symlink, sebagai kunci stabil di settings.json."""
+    return str(Path(path).expanduser().resolve())
+
+
+def _is_within(path, root) -> bool:
+    """Apakah ``path`` berada di dalam ``root`` (atau sama dengannya)?"""
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+# Ukuran ikon raster yang dipasang pada jendela (besar -> kecil; Tk memilih
+# yang paling cocok untuk judul, taskbar, dan Alt+Tab).
+ICON_SIZES = (256, 128, 64)
+
+
+def icon_dirs() -> list[Path]:
+    """Folder dasar tema hicolor yang tersedia (repo maupun .deb terpasang)."""
+    base = Path(__file__).resolve().parent.parent
+    dirs: list[Path] = []
+    for candidate in (base / "usr" / "share" / "icons" / "hicolor",
+                      Path("/usr/share/icons/hicolor")):
+        if candidate.is_dir() and candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
+def icon_files() -> list[Path]:
+    """Berkas PNG ikon aplikasi yang ditemukan, terbesar lebih dulu."""
+    files: list[Path] = []
+    for base in icon_dirs():
+        for size in ICON_SIZES:
+            path = base / f"{size}x{size}" / "apps" / f"{ICON_NAME}.png"
+            if path.is_file() and path not in files:
+                files.append(path)
+    return files
+
+
+def apply_window_icon(window) -> list[Path]:
+    """Pasang ikon aplikasi pada jendela Tk; kembalikan berkas yang dipakai.
+
+    Tanpa ini jendela memakai ikon generik bawaan Tk sehingga berbeda dengan
+    ikon di menu aplikasi (mis. dash GNOME). Ikon diambil dari PNG yang
+    dirender dari SVG yang sama dengan ikon tema, jadi keduanya identik.
+    """
+    if tk is None:  # pragma: no cover - CLI tanpa tkinter
+        return []
+    images = []
+    used: list[Path] = []
+    for path in icon_files():
+        try:
+            image = tk.PhotoImage(file=str(path))
+        except (tk.TclError, OSError):
+            continue
+        images.append(image)
+        used.append(path)
+    if images:
+        window.iconphoto(True, *images)   # True: juga untuk Toplevel anak
+        window._icon_images = images      # cegah garbage-collect
+    try:
+        window.wm_iconname(ICON_NAME)     # cadangan: nama ikon tema
+    except Exception:  # pragma: no cover - WM tanpa dukungan iconname
+        pass
+    return used
+
+
 DEFAULT_SETTINGS = {
     # Jeda setelah jendela dilepas, agar compositor sempat memindahkan fokus
     # sebelum Ctrl+V dikirim. 0,6 detik cukup di GNOME Wayland.
     "focus_delay": 0.6,
     "always_on_top": False,
+    # Folder sumber pilihan pengguna. Bila ada, HANYA folder ini yang tampil
+    # dan menjadi tempat penulisan. Argumen --dir tidak mengubah nilai ini.
+    "source_dir": None,
+    # Kategori yang sedang diciutkan di pohon (path absolut).
+    "collapsed": [],
 }
-
 
 def load_settings() -> dict:
     try:
         data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        return {**DEFAULT_SETTINGS, **data}
     except (OSError, json.JSONDecodeError):
         return dict(DEFAULT_SETTINGS)
+    if not isinstance(data, dict):
+        return dict(DEFAULT_SETTINGS)
+    settings = {**DEFAULT_SETTINGS, **data}
+    # Normalisasi agar nilai rusak tidak membuat GUI meledak.
+    collapsed = settings.get("collapsed")
+    settings["collapsed"] = [str(p) for p in collapsed] if isinstance(
+        collapsed, (list, tuple)) else []
+    source = settings.get("source_dir")
+    settings["source_dir"] = str(source) if isinstance(source, str) and source else None
+    return settings
 
 
 def save_settings(settings: dict) -> None:
@@ -87,6 +181,33 @@ def save_settings(settings: dict) -> None:
                                  encoding="utf-8")
     except OSError:
         pass
+
+
+def export_data(target_dir: Path) -> list[Path]:
+    """Salin contoh bawaan ke ``target_dir`` (sekali), kembalikan berkas baru.
+
+    Dipakai ``--ekspor-data``. Tujuannya untuk pemasangan baru: repo dan .deb
+    tidak lagi menyertakan contoh, jadi pengguna yang ingin contoh memintanya
+    secara eksplisit. Berkas yang sudah ada tidak pernah ditimpa.
+    """
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    created: list[Path] = []
+    skipped: list[Path] = []
+    for category, files in DEFAULT_SAMPLES.items():
+        for name, content in files.items():
+            target = target_dir / category / f"{name}.txt"
+            if target.exists():
+                skipped.append(target)
+                continue
+            write_text(target, content)
+            created.append(target)
+    for path in skipped:
+        print(f"lewati (sudah ada): {path}")
+    for path in created:
+        print(f"dibuat: {path}")
+    print(f"{len(created)} berkas dibuat, {len(skipped)} dilewati di {target_dir}")
+    return created
 
 
 def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
@@ -109,25 +230,40 @@ def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
 class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
     """Jendela utama Paste Teks."""
 
-    def __init__(self, roots: list[Path] | None = None):
+    def __init__(self, roots: list[Path] | None = None,
+                 *, transient_roots: bool = False):
+        """``roots`` menggantikan daftar bawaan untuk sesi ini saja.
+
+        ``transient_roots=True`` dipakai untuk argumen CLI ``--dir``: daftar itu
+        berlaku selama proses ini hidup dan TIDAK PERNAH ditulis ke
+        settings.json, sehingga folder sumber pilihan pengguna tetap utuh.
+        """
         if tk is None:
             raise RuntimeError("tkinter tidak tersedia. Pasang python3-tk "
                                "(sudo apt install python3-tk).")
         try:
-            super().__init__()
+            # className menentukan WM_CLASS jendela. Harus sama dengan
+            # StartupWMClass di paste-teks.desktop agar GNOME memasangkan
+            # jendela dengan entri menu (ikon & pengelompokan taskbar benar).
+            super().__init__(className=WM_CLASS)
         except Exception as exc:
             raise RuntimeError(
                 "Gagal membuka jendela (display tidak tersedia?). "
                 f"Detail: {exc}") from exc
         self.title(f"Paste Teks v{__version__} — Tempel Cepat Satu Klik")
+        # Ikon jendela = ikon tema yang sama dengan ikon di menu aplikasi.
+        self.icon_files_used = apply_window_icon(self)
         self.geometry("980x620")
         self.minsize(720, 440)
         self.settings = load_settings()
-        self.roots: list[Path] = roots or default_roots()
+        given = [Path(r) for r in (roots or [])]
+        self.roots: list[Path] = given or default_roots()
+        self.transient_roots = bool(transient_roots and given)
         self.writable = writable_root(self.roots)
         self.current_file: Path | None = None
         self._pasting = False
         self._search_after_id: str | None = None
+        self.collapsed: set[str] = set()
         self._build_ui()
         self.refresh_tree()
         self._apply_settings()
@@ -152,30 +288,54 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._on_search_changed())
         ttk.Label(toolbar, text="🔍").pack(side="left")
-        ttk.Entry(toolbar, textvariable=self.search_var,
-                  width=26).pack(side="left", padx=(2, 6))
+        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var,
+                                      width=26)
+        self.search_entry.pack(side="left", padx=(2, 6))
         buttons = (
-            ("↻ Muat Ulang (F5)", self.refresh_tree, (0, 0)),
-            ("📂 Buka Folder", self.open_folder, (4, 0)),
-            ("＋ Kategori", self.add_category, (4, 0)),
-            ("＋ Teks", self.add_text, (4, 0)),
-            ("✏️ Edit", self.edit_selected, (4, 0)),
-            ("🗑 Hapus", self.delete_selected, (4, 0)),
+            (self.refresh_tree, "↻ Muat Ulang (F5)", (0, 0)),
+            (self.open_folder, "📂 Buka Folder", (4, 0)),
+            (self.add_category, "＋ Kategori", (4, 0)),
+            (self.add_text, "＋ Teks", (4, 0)),
+            (self.edit_selected, "✏️ Edit", (4, 0)),
+            (self.delete_selected, "🗑 Hapus", (4, 0)),
         )
-        for label, command, padx in buttons:
+        for command, label, padx in buttons:
             ttk.Button(toolbar, text=label, command=command).pack(
                 side="left", padx=padx)
+        # Tombol folder sumber: satu folder saja, dan folder itulah tempat
+        # penulisan. Ditaruh paling kanan agar alur utama tetap di kiri.
+        self.source_button = ttk.Button(toolbar, text="📁 Pilih Folder Sumber",
+                                        command=self.choose_source_dir)
+        self.source_button.pack(side="right")
+        self.source_var = tk.StringVar(value="")
+        ttk.Label(toolbar, textvariable=self.source_var,
+                  foreground="gray").pack(side="right", padx=(0, 6))
+
         # Panel utama: kiri pohon, kanan pratinjau
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=6)
 
         left = ttk.Frame(paned)
         ttk.Label(left, text="Kategori / Folder → Berkas .txt").pack(anchor="w")
-        self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
-        scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        # Wadah tetap; isinya berganti antara pohon dan tampilan kosong.
+        self.tree_area = ttk.Frame(left)
+        self.tree_area.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="browse")
+        self.scroll = ttk.Scrollbar(self.tree_area, orient="vertical",
+                                    command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.scroll.set)
+        # Tampilan kosong berpetunjuk (dipakai bila belum ada folder sumber).
+        self.empty_frame = ttk.Frame(self.tree_area)
+        ttk.Label(self.empty_frame, text="📁", font=("", 34)).pack(pady=(28, 4))
+        ttk.Label(
+            self.empty_frame,
+            text="Belum ada folder sumber.\n\nPilih satu folder berisi berkas "
+                 ".txt —\nhierarki folder di dalamnya menjadi kategori,\ndan "
+                 "berkas baru akan disimpan di folder itu.",
+            justify="center", foreground="gray").pack()
+        ttk.Button(self.empty_frame, text="📁 Pilih Folder Sumber",
+                   command=self.choose_source_dir).pack(pady=12)
+        self._show_empty_state(True)
         paned.add(left, weight=2)
 
         right = ttk.Frame(paned)
@@ -198,8 +358,9 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
         ttk.Checkbutton(opts, text="Selalu di atas", variable=self.top_var,
                         command=self._apply_settings).pack(side="left")
-        ttk.Button(opts, text="🔐 Izin Paste Otomatis",
-                   command=self.show_permission_info).pack(side="right")
+        # Catatan: tombol "Izin Paste Otomatis" DIHAPUS di 1.5.0. Aktivasi izin
+        # /dev/uinput kini lewat CLI (`paste-teks --izin`, `--aktifkan-izin`);
+        # informasi statusnya tetap muncul di `--check` dan saat paste gagal.
 
         # Status bar
         self.status_var = tk.StringVar(value="Siap.")
@@ -215,6 +376,12 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.menu.add_command(label="🗑 Hapus", command=self.delete_selected)
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
+        # Kategori diciutkan/dibuka: catat agar pulih pada refresh berikutnya
+        # dan pada sesi berikutnya (settings.json -> "collapsed").
+        self.tree.bind("<<TreeviewOpen>>",
+                       lambda e: self._toggle_collapsed(self._event_iid(e)))
+        self.tree.bind("<<TreeviewClose>>",
+                       lambda e: self._toggle_collapsed(self._event_iid(e)))
         self.tree.bind("<Double-1>", lambda _e: self.on_activate())
         self.tree.bind("<Return>", lambda _e: self.on_activate())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
@@ -229,11 +396,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self._search_after_id = self.after(300, self.refresh_tree)
 
     def _focus_search(self) -> None:
-        for child in self.winfo_children():
-            for sub in child.winfo_children():
-                if isinstance(sub, ttk.Entry):
-                    sub.focus_set()
-                    return
+        if getattr(self, "search_entry", None) is not None:
+            self.search_entry.focus_set()
 
     def _on_right_click(self, event) -> None:
         row = self.tree.identify_row(event.y)
@@ -242,34 +406,167 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
             self.show_preview()
         self.menu.post(event.x_root, event.y_root)
 
+    def _event_iid(self, event) -> str:
+        """iid dari event Treeview (``focus()``/``identify_row`` sebagai cadangan)."""
+        item = getattr(event, "iid", None) if event is not None else None
+        if item:
+            return str(item)
+        try:
+            focused = self.tree.focus()
+        except Exception:  # pragma: no cover - treeview tiruan
+            return ""
+        return str(focused or "")
+
     # ---------- Pohon ----------
+    def active_roots(self) -> list[Path]:
+        """Root yang dipakai sekarang: folder sumber bila ada, selain itu bawaan.
+
+        Folder sumber menggantikan daftar bawaan sepenuhnya: hanya folder itu
+        yang tampil dan hanya folder itu yang ditulisi.
+        """
+        roots = list(getattr(self, "roots", []) or [])
+        if getattr(self, "transient_roots", False) and roots:
+            # --dir menang untuk sesi ini; folder tersimpan tidak diubah.
+            return roots
+        source = getattr(self, "settings", {}).get("source_dir")
+        if source:
+            path = Path(source)
+            if path.is_dir():
+                return [path]
+            log_error(f"[sumber] folder sumber tidak ditemukan: {path}")
+        return roots or default_roots()
+
+    def _show_empty_state(self, empty: bool) -> None:
+        """Tampilkan pohon atau tampilan kosong berpetunjuk."""
+        tree_area = getattr(self, "tree_area", None)
+        if tree_area is None:  # pragma: no cover - UI minimal
+            return
+        if empty:
+            self.tree.pack_forget()
+            self.scroll.pack_forget()
+            self.empty_frame.pack(fill="both", expand=True)
+        else:
+            self.empty_frame.pack_forget()
+            self.tree.pack(side="left", fill="both", expand=True)
+            self.scroll.pack(side="right", fill="y")
+
     def refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
-        nodes = scan_roots(self.roots)
+        roots = self.active_roots()
+        nodes = scan_roots(roots)
         query = self.search_var.get().strip()
         if query:
             nodes = filter_tree(nodes, search_nodes(nodes, query))
+        # Saat mencari, semua kategori dibuka agar hasil terlihat. Saat tidak
+        # mencari, status ciut yang tersimpan dipulihkan.
+        self.collapsed = set() if query else self._collapsed_paths()
         total = 0
         for root_node in nodes:
-            self._insert_node("", root_node)
+            self._insert_node(
+                "", root_node, label=self._root_label(root_node.path))
             total += root_node.count_texts()
-        self.status_var.set(
-            f"{total} berkas .txt dari {len(self.roots)} folder "
-            f"({', '.join(str(r) for r in self.roots)})")
+        self._show_empty_state(not nodes)
         if query:
             self.status_var.set(f"Hasil pencarian '{query}': {total} berkas cocok.")
+        else:
+            self.status_var.set(
+                f"{total} berkas .txt dari {len(roots)} folder "
+                f"({', '.join(str(r) for r in roots)})")
+        self._update_source_label()
 
-    def _insert_node(self, parent: str, node: Node) -> str:
+    def _root_label(self, path: Path) -> str:
+        """Label akar: nama folder sumber, selain itu label peran root."""
+        source = getattr(self, "settings", {}).get("source_dir")
+        if source and Path(source) == Path(path):
+            return Path(path).name or str(path)
+        return root_label(path)
+
+    def _update_source_label(self) -> None:
+        var = getattr(self, "source_var", None)
+        if var is None:  # pragma: no cover - UI minimal
+            return
+        source = getattr(self, "settings", {}).get("source_dir")
+        if source:
+            var.set(f"📁 {Path(source).name}")
+        else:
+            var.set("")
+
+    def _insert_node(self, parent: str, node: Node, *, label: str | None = None) -> str:
         icon = "📁 " if node.is_dir else "📄 "
         iid = str(node.path)
         # Hindari iid duplikat bila dua root punya path sama (dev vs sistem).
         if self.tree.exists(iid):
             iid = f"{iid}#{node.source_root}"
-        self.tree.insert(parent, "end", iid=iid, text=f"{icon}{node.name}",
-                         open=node.is_dir, tags=("dir" if node.is_dir else "file"))
+        collapsed = getattr(self, "collapsed", set())
+        is_open = node.is_dir and str(node.path) not in collapsed
+        self.tree.insert(parent, "end", iid=iid,
+                         text=f"{icon}{label if label is not None else node.name}",
+                         open=is_open,
+                         tags=("dir" if node.is_dir else "file"))
         for child in node.children:
             self._insert_node(iid, child)
         return iid
+
+    # ---------- Folder sumber & kategori ciut ----------
+    def choose_source_dir(self) -> Path | None:
+        """Pilih SATU folder sumber; folder itu menjadi tempat penulisan.
+
+        Pilihan disimpan di settings.json dan dipulihkan pada sesi berikutnya.
+        Kembalikan path terpilih (None bila dibatalkan) agar mudah diuji.
+        """
+        current = self.settings.get("source_dir") or str(Path.home())
+        chosen = filedialog.askdirectory(
+            title="Pilih Folder Sumber (berkas .txt)", initialdir=current,
+            mustexist=True)
+        if not chosen:
+            return None
+        path = Path(chosen).expanduser()
+        if not path.is_dir():
+            messagebox.showerror("Folder tidak valid",
+                                 f"Bukan folder: {path}")
+            return None
+        self.settings["source_dir"] = _norm_path(path)
+        self.writable = path
+        save_settings(self.settings)
+        self.refresh_tree()
+        self.status_var.set(f"📁 Folder sumber: {path}")
+        return path
+
+    def _collapsed_paths(self) -> set[str]:
+        """Kategori yang tersimpan dalam keadaan ciut (path ternormalisasi)."""
+        stored = self.settings.get("collapsed") or []
+        return {_norm_path(p) for p in stored if str(p).strip()}
+
+    def _save_collapsed(self, paths) -> None:
+        """Simpan status ciut kategori ke settings.json."""
+        unique = sorted({_norm_path(p) for p in paths if str(p).strip()})
+        self.settings["collapsed"] = unique
+        save_settings(self.settings)
+
+    def _toggle_collapsed(self, iid: str) -> None:
+        """Catat buka/tutup satu kategori lalu simpan.
+
+        Dipanggil dari event <<TreeviewOpen>>/<<TreeviewClose>> Treeview.
+        """
+        path = str(iid).split("#")[0]
+        if not Path(path).is_dir():
+            return
+        collapsed = self._collapsed_paths()
+        key = _norm_path(path)
+        if key in collapsed:
+            collapsed.discard(key)
+        else:
+            collapsed.add(key)
+        self._save_collapsed(collapsed)
+        self.collapsed = collapsed
+
+    def _prune_collapsed(self, path: Path) -> None:
+        """Buang catatan ciut untuk ``path`` (mis. setelah kategori dihapus)."""
+        key = _norm_path(path)
+        collapsed = {p for p in self._collapsed_paths()
+                     if p != key and not p.startswith(key + str(Path("/")))}
+        if collapsed != self._collapsed_paths():
+            self._save_collapsed(collapsed)
 
     def selected_path(self) -> Path | None:
         sel = self.tree.selection()
@@ -401,107 +698,40 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
 
     # ---------- izin paste otomatis (grup paste-teks) ----------
     def _show_paste_failure(self, message: str) -> None:
-        """Dialog kegagalan + tombol untuk memperbaiki izin /dev/uinput."""
+        """Dialog kegagalan: sebutkan penyebab + perintah CLI untuk memperbaiki.
+
+        Pada 1.5.0 tombol "Izin Paste Otomatis" dihapus dari GUI; aktivasi
+        izin /dev/uinput dipindah ke `paste-teks --aktifkan-izin` (dan
+        `--izin` untuk melihat statusnya). Dialog tetap memberi informasi dan
+        menyebut perintah yang harus dijalankan di terminal.
+        """
         st = uinput.status()
         text = (f"{message}\n\nTeks sudah ada di clipboard — "
                 "tekan Ctrl+V di aplikasi tujuan.")
         if st.ready:
             messagebox.showinfo("Paste otomatis tidak tersedia", text)
             return
-        text += "\n\nDiagnosis:\n" + "\n".join(_status_lines(st)) + \
-            "\n\n" + uinput.explain(st)
-        if uinput.can_self_enable(st):
-            if messagebox.askyesno(
-                    "Aktifkan paste otomatis?",
-                    text + "\n\nAktifkan sekarang? Anda akan diminta "
-                    "kata sandi administrator."):
-                self.enable_auto_paste()
-        else:
-            messagebox.showinfo("Paste otomatis tidak tersedia", text)
-
-    def enable_auto_paste(self) -> None:
-        """Minta akses /dev/uinput via pkexec + helper (grup paste-teks)."""
-        st = uinput.status()
-        if st.device_writable:
-            messagebox.showinfo("Paste otomatis", "Izin sudah aktif.")
-            return
-        if not uinput.can_self_enable(st):
-            messagebox.showinfo(
-                "Aktivasi manual diperlukan",
-                "Tidak dapat meminta hak administrator dari aplikasi ini.\n\n"
-                "Jalankan perintah berikut di terminal:\n\n"
-                + uinput.MANUAL_COMMAND)
-            return
-        self.status_var.set("Meminta hak administrator...")
-        _run_in_thread(self._enable_worker, st.user)
-
-    def _enable_worker(self, user: str) -> None:
-        code, out, err = uinput.enable_for_user(user)
-        self.after(0, self._enable_done, user, code, out, err)
-
-    def _enable_done(self, user: str, code: int, out: str, err: str) -> None:
-        if code == 0:
-            detail = out or "Akun ditambahkan ke grup 'paste-teks'."
-            messagebox.showinfo(
-                "Berhasil — satu langkah lagi",
-                f"{detail}\n\nLogout lalu login ulang (atau reboot) agar grup "
-                "baru aktif. Setelah itu paste otomatis akan bekerja.")
-            self.status_var.set("✅ Izin diaktifkan — logout & login ulang.")
-            return
-        if code in (126, 127):
-            reason = "Permintaan kata sandi dibatalkan."
-        else:
-            reason = (err or out or f"kode keluar {code}")
-        self.status_var.set("Aktivasi izin gagal.")
-        messagebox.showwarning(
-            "Aktivasi gagal",
-            f"{reason}\n\nAlternatif manual di terminal:\n\n"
-            + uinput.MANUAL_COMMAND)
-
-    def show_permission_info(self) -> None:
-        st = uinput.status()
-        text = ("Status paste otomatis\n\n"
-                + "\n".join(_status_lines(st))
-                + "\n\n" + uinput.explain(st))
-        if st.daemon_missing:
-            if messagebox.askyesno(
-                    "Daemon ydotoold",
-                    text + "\n\nNyalakan daemon ydotoold sekarang?"):
-                self.start_ydotoold()
-                return
-        if uinput.can_self_enable(st):
-            if messagebox.askyesno("Paste otomatis",
-                                   text + "\n\nAktifkan sekarang?"):
-                self.enable_auto_paste()
-        else:
-            messagebox.showinfo("Paste otomatis", text)
-
-    def start_ydotoold(self) -> None:
-        """Nyalakan ydotoold lewat systemd --user (tanpa hak root)."""
-        self.status_var.set("Menyalakan ydotoold...")
-        _run_in_thread(self._daemon_worker)
-
-    def _daemon_worker(self) -> None:
-        code, out, err = uinput.start_daemon()
-        self.after(0, self._daemon_done, code, out, err)
-
-    def _daemon_done(self, code: int, out: str, err: str) -> None:
-        if code == 0 and uinput.ydotoold_running():
-            self.status_var.set("✅ ydotoold berjalan.")
-            messagebox.showinfo("ydotoold", "Daemon ydotoold sudah berjalan. "
-                                "Silakan coba Paste Otomatis lagi.")
-            return
-        detail = err or out or (f"kode keluar {code}"
-                                if code else "daemon belum terdeteksi")
-        self.status_var.set("Gagal menyalakan ydotoold.")
-        messagebox.showwarning(
-            "ydotoold tidak bisa dinyalakan",
-            f"{detail}\n\nCoba jalankan di terminal:\n\n  ydotoold &\n\n"
-            "Atau tanpa daemon, jalankan ydotool dengan \"ydotool key "
-            "ctrl+v\" — aplikasi akan memakainya sebagai cadangan.")
+        text += ("\n\nDiagnosis:\n" + "\n".join(_status_lines(st))
+                 + "\n\n" + uinput.explain(st)
+                 + "\n\n" + uinput.CLI_HINT)
+        messagebox.showinfo("Paste otomatis tidak tersedia", text)
 
     # ---------- CRUD ----------
     def _target_dir(self) -> Path:
+        """Folder tempat kategori/teks baru dibuat.
+
+        Bila folder sumber dipilih, penulisan SELALU di dalamnya: folder induk
+        root tidak boleh dipakai karena itu berada di luar folder sumber.
+        """
+        source = self.settings.get("source_dir")
+        if source and Path(source).is_dir():
+            source_path = Path(source)
+            path = self.selected_path()
+            if path is not None and path.is_dir() and _is_within(path, source_path):
+                return path
+            if path is not None and _is_within(path.parent, source_path):
+                return path.parent
+            return source_path
         path = self.selected_path()
         if path is not None and path.is_dir():
             return path
@@ -551,6 +781,8 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         except OSError as exc:
             messagebox.showerror("Gagal menghapus", str(exc))
             return
+        # Jangan biarkan settings.json menyimpan path yang sudah tiada.
+        self._prune_collapsed(path)
         self.refresh_tree()
 
     def open_folder(self) -> None:
@@ -639,6 +871,14 @@ def run_cli(argv: list[str] | None = None) -> int:
                         help="dengan --test-paste: kirim Ctrl+V, bukan teks")
     parser.add_argument("--check", action="store_true",
                         help="Periksa lingkungan (tkinter, display, tool) lalu keluar.")
+    # Izin /dev/uinput: dulu tombol di GUI, sejak 1.5.0 hanya lewat CLI.
+    parser.add_argument("--izin", action="store_true",
+                        help="Tampilkan status izin paste otomatis (/dev/uinput).")
+    parser.add_argument("--aktifkan-izin", action="store_true",
+                        help="Minta akses /dev/uinput (grup 'paste-teks' lewat pkexec).")
+    parser.add_argument("--ekspor-data", metavar="FOLDER", nargs="?",
+                        const="", default=None,
+                        help="Salin contoh bawaan ke FOLDER (bawaan: folder pengguna).")
     args = parser.parse_args(argv)
 
     if args.version:
@@ -648,9 +888,22 @@ def run_cli(argv: list[str] | None = None) -> int:
     roots = [Path(d) for d in args.dir] or default_roots()
     if args.check:
         return run_check(roots)
+    if args.izin:
+        return run_permission_info()
+    if args.aktifkan_izin:
+        return run_enable_permission()
+    if args.ekspor_data is not None:
+        target = Path(args.ekspor_data) if args.ekspor_data else user_root()
+        export_data(target)
+        return 0
     if args.list:
-        for node in scan_roots(roots):
+        nodes = scan_roots(roots)
+        for node in nodes:
             _print_tree(node, prefix="")
+        if not flatten_texts(nodes):
+            print("(belum ada berkas .txt)", file=sys.stderr)
+            print("Pilih folder sumber di GUI, pakai --dir FOLDER, atau "
+                  "jalankan --ekspor-data.", file=sys.stderr)
         return 0
     if args.test_paste:
         return run_test_paste(ctrl_v=args.ctrl_v)
@@ -676,7 +929,9 @@ def run_cli(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        app = PasteTeksApp(roots=roots)
+        # --dir berlaku untuk sesi ini saja; folder sumber tersimpan tidak
+        # pernah diubah oleh argumen CLI.
+        app = PasteTeksApp(roots=roots, transient_roots=bool(args.dir))
     except Exception:
         tb = traceback.format_exc()
         log_error(f"Gagal memulai GUI:\n{tb}")
@@ -765,6 +1020,52 @@ def _full_paste_test() -> int:
     return 0
 
 
+def permission_report() -> str:
+    """Teks laporan status izin paste otomatis (dipakai --izin dan --check)."""
+    st = uinput.status()
+    lines = "\n".join(_status_lines(st))
+    return (f"Izin paste otomatis (grup '{uinput.GROUP}', akun '{st.user}'):\n"
+            f"{lines}\n\nLangkah berikutnya:\n{uinput.explain(st)}")
+
+
+def run_permission_info() -> int:
+    """``--izin``: cetak status izin /dev/uinput, tanpa membuka GUI."""
+    print(permission_report())
+    if not uinput.status().ready:
+        print(f"\n{uinput.CLI_HINT}")
+    return 0
+
+
+def run_enable_permission() -> int:
+    """``--aktifkan-izin``: minta akses /dev/uinput (pengganti tombol GUI)."""
+    st = uinput.status()
+    if st.device_writable:
+        print("Izin paste otomatis sudah aktif.")
+        return 0
+    if not uinput.can_self_enable(st):
+        print("Tidak dapat meminta hak administrator dari sini.")
+        print("Jalankan perintah berikut di terminal:\n")
+        print(uinput.MANUAL_COMMAND)
+        return 2
+    print(f"Meminta akses /dev/uinput untuk akun '{st.user}' ...")
+    code, out, err = uinput.enable_for_user(st.user)
+    for line in (out, err):
+        if line:
+            print(line)
+    if code == 0:
+        print("\n✅ Izin diaktifkan.")
+        print("Logout lalu login ulang (atau reboot) agar grup baru aktif; "
+              "setelah itu paste otomatis akan bekerja.")
+        return 0
+    if code in (126, 127):
+        print("\n❌ Permintaan kata sandi dibatalkan.")
+        return 1
+    print(f"\n❌ Aktivasi gagal (kode keluar {code}).")
+    print("\nAlternatif manual di terminal:\n")
+    print(uinput.MANUAL_COMMAND)
+    return 1
+
+
 def clipboard_status() -> list[str]:
     """Uji nyata: tulis & baca kembali clipboard sistem.
 
@@ -813,6 +1114,14 @@ def run_check(roots: list[Path]) -> int:
     tools = available_tools()
     print("Tool clipboard/paste: "
           + ", ".join(f"{k}={'ada' if v else 'tidak ada'}" for k, v in tools.items()))
+    print(f"Ikon aplikasi: {ICON_NAME} (WM_CLASS '{WM_CLASS}')")
+    found_icons = icon_files()
+    if found_icons:
+        for path in found_icons:
+            print(f"  ✅ {path}")
+    else:
+        print("  ❌ tidak ditemukan — jendela akan memakai ikon generik; "
+              "pasang ulang paket atau jalankan scripts/make-icon-png.py")
     try:
         st = uinput.status()
         print(f"Izin paste otomatis (grup '{uinput.GROUP}', akun '{st.user}'):")
@@ -821,12 +1130,22 @@ def run_check(roots: list[Path]) -> int:
         print("\nLangkah berikutnya:")
         for line in uinput.explain(st).splitlines():
             print(f"  {line}")
+        if not st.ready:
+            # Info izin tetap ada di --check walau tombolnya sudah dihapus.
+            print(f"\n{uinput.CLI_HINT}")
     except Exception as exc:  # pragma: no cover - jangan gagalkan --check
         print(f"Izin paste otomatis: tidak dapat diperiksa ({exc})")
     clip = clipboard_status()
     print("Clipboard:")
     for line in clip:
         print(f"  {line}")
+    settings = load_settings()
+    source = settings.get("source_dir")
+    print("Folder sumber:")
+    if source:
+        print(f"  - {source} ({'ada' if Path(source).is_dir() else 'TIDAK ADA'})")
+    else:
+        print("  (belum dipilih — memakai folder bawaan di bawah)")
     print("Folder snippets:")
     for r in roots:
         print(f"  - {r} ({'ada' if r.is_dir() else 'belum ada'})")

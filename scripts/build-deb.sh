@@ -11,6 +11,7 @@ STAGE="build/deb"
 OUT="dist/${PKG}_${VERSION}-1_${ARCH}.deb"
 
 rm -rf "$STAGE"
+ICON_SIZES="64 128 256"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" \
   "$STAGE/usr/share/paste-teks" \
   "$STAGE/usr/share/applications" \
@@ -24,9 +25,18 @@ install -m 755 bin/paste-teks "$STAGE/usr/bin/paste-teks"
 cp -r paste_teks "$STAGE/usr/share/paste-teks/"
 find "$STAGE/usr/share/paste-teks" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE/usr/share/paste-teks" -name "*.pyc" -delete 2>/dev/null || true
-cp -r data/snippets "$STAGE/usr/share/paste-teks/"
+# Sejak 1.5.0 paket TIDAK lagi menyalin contoh bawaan (data/snippets/ sudah
+# dihapus dari repo). Contoh yang sudah terpasang di mesin pengguna tetap
+# dibiarkan; pemasangan baru bisa meminta contoh lewat `--ekspor-data`.
 install -m 644 usr/share/applications/paste-teks.desktop "$STAGE/usr/share/applications/"
 install -m 644 usr/share/icons/hicolor/scalable/apps/paste-teks.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/"
+# PNG: ikon JENDELA (Tk iconphoto tidak bisa memuat SVG). Dirender dari SVG
+# yang sama oleh scripts/make-icon-png.py agar ikon jendela = ikon menu.
+for size in $ICON_SIZES; do
+  install -d "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps"
+  install -m 644 "usr/share/icons/hicolor/${size}x${size}/apps/paste-teks.png" \
+    "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps/"
+done
 install -m 644 README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
 
@@ -55,8 +65,10 @@ Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lai
  Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via
  wl-copy/xclip/xsel, paste otomatis via ydotool/xdotool.
  .
- Contoh bawaan ada di /usr/share/paste-teks/snippets; teks pribadi disimpan
- di ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
+ Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
+ tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
+ `paste-teks --ekspor-data`. Teks pribadi disimpan di
+ ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF
 

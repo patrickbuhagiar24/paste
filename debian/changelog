@@ -1,3 +1,46 @@
+paste-teks (1.5.0-1) unstable; urgency=medium
+
+  * Contoh bawaan tidak lagi disertakan.
+    - data/snippets/ dihapus dari repo; scripts/build-deb.sh dan debian/rules
+      berhenti menyalinnya ke /usr/share/paste-teks/snippets.
+    - Contoh yang SUDAH terpasang di mesin pengguna dibiarkan apa adanya
+      (postinst/postrm tidak menyentuhnya).
+    - Sebagai gantinya, contoh dibuat atas permintaan: `paste-teks
+      --ekspor-data [FOLDER]` (tidak pernah menimpa berkas yang ada).
+  * Tombol "Izin Paste Otomatis" dihapus dari GUI.
+    - Alur aktivasi pindah ke CLI: `--izin` (status) dan `--aktifkan-izin`
+      (pkexec + helper grup 'paste-teks').
+    - Informasi tetap tersedia di `--check` dan pada dialog kegagalan paste,
+      termasuk petunjuk perintah CLI (uinput.CLI_HINT).
+  * Kategori yang diciutkan kini diingat.
+    - Status disimpan di settings.json pada kunci "collapsed" dan dipulihkan
+      setiap refresh_tree, termasuk setelah aplikasi dibuka ulang.
+    - Saat mencari, semua kategori dibuka agar hasil terlihat, tanpa menghapus
+      status tersimpan. Kategori yang dihapus ikut dibersihkan dari settings.
+  * Satu folder sumber (source_dir) dengan tombol "📁 Pilih Folder Sumber".
+    - Folder sumber menjadi satu-satunya root yang tampil dan tempat penulisan
+      teks/kategori baru; pilihannya disimpan di settings.json.
+    - Tampilan kosong berpetunjuk (beserta tombol yang sama) muncul bila belum
+      ada folder sumber maupun teks.
+    - Argumen `--dir` selalu menang untuk sesi itu dan TIDAK mengubah folder
+      tersimpan (PasteTeksApp(transient_roots=True)).
+  * Ikon jendela kini sama dengan ikon di menu aplikasi.
+    - Sebelumnya jendela tidak pernah diberi ikon (tidak ada iconphoto),
+      sehingga Tk memakai ikon generik; WM_CLASS pun "Tk", tidak sama dengan
+      StartupWMClass di .desktop, jadi GNOME tidak memasangkan jendela ke
+      entri menu.
+    - Ditambahkan PNG tema hicolor 64/128/256 px untuk iconphoto, dirender
+      dari SVG yang SAMA oleh scripts/make-icon-png.py (tanpa dependensi),
+      dan Tk dijalankan dengan className="PasteTeks".
+    - .deb (build-deb.sh + debian/rules) ikut memasang PNG tersebut.
+    - `--check` melaporkan ikon yang ditemukan agar mudah didiagnosis.
+  * Alur paste withdraw -> salin -> jeda -> Ctrl+V tidak diubah.
+  * Uji: 167 lolos (73 uji baru). Setiap uji baru diperiksa-balik lewat
+    scripts/verifikasi-balik.py: 25 mutasi bug dikembalikan satu per satu dan
+    dipastikan uji yang relevan benar-benar gagal.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 11 Nov 2026 00:00:00 +0700
+
 paste-teks (1.4.3-1) unstable; urgency=medium
 
   * PERBAIKAN: paste tidak lagi melaporkan "berhasil" secara palsu.
