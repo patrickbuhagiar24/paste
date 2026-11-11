@@ -10,11 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from paste_teks import app as app_module
-from paste_teks.app import PasteTeksApp
-from paste_teks.app import export_data
 from paste_teks.snippets import user_root
 
 
@@ -291,3 +287,14 @@ def test_source_dir_selection_does_not_get_samples(gui, sample_root,
     app.refresh_tree()
     names = sorted(p.name for p in sample_root.rglob("*.txt"))
     assert names == ["Balas.txt", "Sapaan.txt"]
+
+
+def test_dir_writes_to_transient_root_not_saved_source(gui, sample_root, tmp_path):
+    other = tmp_path / "lain"
+    (other / "kategori").mkdir(parents=True)
+    app = gui(roots=[other], settings={"source_dir": _norm(sample_root)},
+              transient_roots=True)
+    app.refresh_tree()
+    assert app._target_dir() == other
+    app.tree.selection_set(str(other / "kategori"))
+    assert app._target_dir() == other / "kategori"

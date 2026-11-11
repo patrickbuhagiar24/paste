@@ -64,8 +64,10 @@ def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
 
     Hanya berkas .txt yang dimasukkan. Folder kosong tetap ditampilkan
     (sebagai kategori) agar pengguna tahu strukturnya. Berkas/folder
-    tersembunyi (diawali '.') dilewati. Urutan: folder dulu, lalu berkas,
-    masing-masing alfabetis (case-insensitive).
+    tersembunyi (diawali '.') dan symlink di dalam folder sumber dilewati,
+    agar tidak mengikuti tautan ke luar sumber atau siklus. Folder sumber
+    sendiri boleh berupa symlink. Urutan: folder dulu, lalu berkas, masing-
+    masing alfabetis (case-insensitive).
     """
     directory = Path(directory)
     node = Node(name=directory.name or str(directory), path=directory,
@@ -81,7 +83,7 @@ def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
     dirs: list[Node] = []
     files: list[Node] = []
     for entry in entries:
-        if entry.name.startswith("."):
+        if entry.name.startswith(".") or entry.is_symlink():
             continue
         if entry.is_dir():
             dirs.append(scan_dir(entry, source_root=node.source_root))
@@ -161,11 +163,17 @@ def write_text(path: Path, content: str) -> Path:
     return path
 
 
-def ensure_txt_suffix(name: str) -> str:
-    """Pastikan nama berkas berakhiran .txt."""
+def _single_name(name: str) -> str:
+    """Terima hanya satu nama, bukan path absolut atau relatif."""
     name = name.strip()
-    if not name:
-        raise ValueError("Nama berkas tidak boleh kosong.")
+    if not name or name in {".", ".."} or any(c in name for c in "/\\\0"):
+        raise ValueError("Masukkan satu nama tanpa pemisah folder, '.' atau '..'.")
+    return name
+
+
+def ensure_txt_suffix(name: str) -> str:
+    """Pastikan nama berkas aman dan berakhiran .txt."""
+    name = _single_name(name)
     if not name.lower().endswith(".txt"):
         name += ".txt"
     return name
@@ -173,20 +181,20 @@ def ensure_txt_suffix(name: str) -> str:
 
 def create_category(parent: Path, name: str) -> Path:
     """Buat folder kategori baru di bawah parent."""
-    name = name.strip().strip("/\\")
-    if not name:
-        raise ValueError("Nama kategori tidak boleh kosong.")
-    target = Path(parent) / name
+    target = Path(parent) / _single_name(name)
+    if target.is_symlink():
+        raise ValueError("Kategori tidak boleh berupa symlink.")
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def create_snippet(parent: Path, filename: str, content: str = "") -> Path:
-    """Buat berkas .txt baru di bawah parent. Gagal bila sudah ada."""
+    """Buat berkas .txt baru secara eksklusif; gagal bila sudah ada."""
     target = Path(parent) / ensure_txt_suffix(filename)
-    if target.exists():
-        raise FileExistsError(f"Berkas sudah ada: {target}")
-    return write_text(target, content)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("x", encoding="utf-8") as file:
+        file.write(content)
+    return target
 
 
 def delete_path(path: Path) -> None:
