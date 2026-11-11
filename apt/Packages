@@ -1,27 +1,28 @@
-Package: paste-teks
-Version: 1.5.3-1
+Package: pastex
+Version: 1.6.0-1
 Architecture: all
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
-Filename: ./paste-teks_1.5.3-1_all.deb
-Size: 41238
-MD5sum: 879a4cf9e93a5e584d349bcb74481ec2
-SHA1: 9435591a7b5eadf7dcb7d4b5f6fbe2a8e3120f92
-SHA256: 32f075dc49f7bec698c068df4ebc00bda91b004cdb051cdd9f762d910f475bb5
+Conflicts: paste-teks
+Replaces: paste-teks
+Filename: ./pastex_1.6.0-1_all.deb
+Size: 36760
+MD5sum: aa1d3ac5d98cdb577bd7d80d86c1de73
+SHA1: 75b3d31047ab5fc8cb7746b633d096f660be2a53
+SHA256: 21744e54ce7253741599935e09bfafcf521a0fbac9815f4a863cc28b5746eeef
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
-Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lain satu klik
- Paste Teks menampilkan berkas .txt dalam hierarki kategori/folder (GUI).
- Double-click atau tombol "Paste ke Aplikasi Lain" menyalin teks ke clipboard
- dan mengirim Ctrl+V otomatis ke aplikasi yang sedang fokus.
+Description: One-click desktop text snippet manager for Ubuntu 26.10
+ Pastex displays .txt files as a hierarchy of categories and folders.
+ Click a text file once to copy its contents and send Ctrl+V to the previously
+ active app. A preview, search, and built-in editor are also included.
  .
- Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via
- wl-copy/xclip/xsel, paste otomatis via ydotool/xdotool.
+ Supports Ubuntu 26.10 (GNOME Wayland and X11), using wl-copy/xclip/xsel
+ for clipboard access and ydotool/xdotool for automatic paste.
  .
- Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
- tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
- paste-teks --ekspor-data. Teks pribadi disimpan di
- ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
+ Choose a source folder in the GUI, or create example snippets with
+ pastex --export-data. User snippets are stored under
+ ~/.local/share/pastex/snippets and can be managed in the GUI.
 
