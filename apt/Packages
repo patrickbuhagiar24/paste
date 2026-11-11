@@ -5,10 +5,10 @@ Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
 Filename: ./paste-teks_1.5.0-1_all.deb
-Size: 41806
-MD5sum: 2f52a885bb33b3efe768e8b9bb34a75f
-SHA1: d2528b67ff41776b795bed9d14369bf9449c70b2
-SHA256: a3985cc0dd67d800d2094933084b38ff29f1d1403e02c226636dc424037bf850
+Size: 40962
+MD5sum: 61fcdae6c8ef7393fe82c7058b1c99f2
+SHA1: 1cf01d34ac5849885f1dd75e7b21c9a41a5e8acf
+SHA256: 020289204adcce4520353920d15ede118efb2f073203b0101a061b8068b983e6
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
@@ -22,6 +22,6 @@ Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lai
  .
  Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
  tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
- . Teks pribadi disimpan di
+ paste-teks --ekspor-data. Teks pribadi disimpan di
  ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
 
