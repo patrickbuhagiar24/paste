@@ -1,3 +1,12 @@
+paste-teks (1.5.1-1) unstable; urgency=medium
+
+  * Perbarui ikon dokumen dan panah di menu dan jendela.
+  * Tampilkan isi folder sumber langsung tanpa kategori akar tambahan.
+  * Samakan deskripsi paket untuk memperbaiki uji build.
+  * Naikkan versi agar pembaruan dapat dipasang melalui APT.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 04:00:00 +0000
+
 paste-teks (1.5.0-1) unstable; urgency=medium
 
   * Contoh bawaan tidak lagi disertakan.
