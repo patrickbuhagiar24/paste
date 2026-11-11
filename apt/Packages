@@ -1,14 +1,14 @@
 Package: paste-teks
-Version: 1.4.3-1
+Version: 1.5.0-1
 Architecture: all
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
-Filename: ./paste-teks_1.4.3-1_all.deb
-Size: 31350
-MD5sum: ebf6255317e748f1d70710fb2fd37d30
-SHA1: b595ec7bbc619a4ab3e0757ec9181e5029034b33
-SHA256: ac312c8ee32af1d16115305c96004c37ef3399be4d67210f298f8a805afe980d
+Filename: ./paste-teks_1.5.0-1_all.deb
+Size: 41806
+MD5sum: 2f52a885bb33b3efe768e8b9bb34a75f
+SHA1: d2528b67ff41776b795bed9d14369bf9449c70b2
+SHA256: a3985cc0dd67d800d2094933084b38ff29f1d1403e02c226636dc424037bf850
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
@@ -20,6 +20,8 @@ Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lai
  Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via
  wl-copy/xclip/xsel, paste otomatis via ydotool/xdotool.
  .
- Contoh bawaan ada di /usr/share/paste-teks/snippets; teks pribadi disimpan
- di ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
+ Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
+ tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
+ . Teks pribadi disimpan di
+ ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
 

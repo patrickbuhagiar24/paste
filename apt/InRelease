@@ -4,31 +4,31 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Tue, 10 Nov 2026 14:49:07 +0000
+Date: Wed, 11 Nov 2026 02:49:47 +0000
 Description: Repo APT Paste Teks untuk Ubuntu 26.10
 Label: Paste Teks
 Origin: Paste Teks
 Suite: stable
 MD5Sum:
- 91a549adea4c441e1d8ad12f3bb6c84d             1103 Packages
- 0c3340154def7592793e91098883be74              714 Packages.gz
- 39e845a61accd970aab45ab87ddfca91              194 Release
+ 05debe49ccecb949044ce064ecacb4e6             1187 Packages
+ 7352533464de5d0722a894bc60745a0a              763 Packages.gz
+ 28f368ca99201c772d2ff518ddc47560              194 Release
 SHA1:
- 3e908b5da2fd4e640d1f9e60c4d48f7f166e1666             1103 Packages
- 77fe01262114059ccf0637d0f47e7e07aca7ced7              714 Packages.gz
- 21fe7e19eba2a92cdf04c8b5d5575ae999ad7173              194 Release
+ e14990896a95fa5b8221856c160b29e1658322a4             1187 Packages
+ 5fe61eed1c2e0388a4e81a467aad22ca43c7a5d8              763 Packages.gz
+ 73cd69200ed71a17702f05fe5ab5353ed60576d2              194 Release
 SHA256:
- 3008dacef6489d429dad1517cf771f6c996d89270070b0fc191ac017577c3c07             1103 Packages
- bdc23429cdc6af21dd1d6a5ebd3c5b1bcacd40eb307518712bbe6076b6ee69ad              714 Packages.gz
- 8c116703af5d6feb5d694d38f7a1117366d59f8cde623d95561db76760ed669c              194 Release
+ 45edc3004fb4efa482a3581ae9254ec8f252e3303e1443d6a1e9d340021c33d1             1187 Packages
+ 59234a0442cf7510a259bde3134859e49292053e9f6360b7e7525531276e2d52              763 Packages.gz
+ 3eb195ac99c0539b59f17450286f9cbc69598c48f955b360d02e1837e61a9e90              194 Release
 SHA512:
- 621af391560f50acdb356f7a7f767535eb2ff71ba392c91988b9071c57026ff154298c8d542eaab314893c1fc34e69790d79c7092b4b6ac08e4253b2e2859f37             1103 Packages
- 20d7868bae270125292c3b710386b4a355f69ab6171ec31de5f567854b8b4bb112147181d19cb3f79d633670bed723a90d0e39c73fbb7363fedde9ad47aae722              714 Packages.gz
- 631dd47d5cf1d6167e61b8e333651744f5f66b72292a6dcb61de9137be844262688a960d918d411211e6cbff7693f57cd768b1c0437a46c56d642e3105e918b3              194 Release
+ f53221c0aa543c3a377bb95bf00aaf8f6908c266c5c907397fb374d94550e21909c881d01288a7714e3fd712a774789393c4177d51585dc9a3b34a76b58b60ad             1187 Packages
+ 495c748ab6df8e987bd769383be3612a55d7125583333e5489f5bd0e4b77cb0e40774f93eac68a52856a4d16c566ef4880f0a4953bbfdabbcedef002ab530784              763 Packages.gz
+ 1d3371cdd48040c1076a8952390fd6ea9ef310e4566115492ddd63189b55ba41065cc5e2e0bd6ffcd633b3a3f2abc83fbd22f496c3ae6615958a3aba0855cdef              194 Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRVR5Ox3GKMxO4fgIVlaI09nc9lhwUCavMu5AAKCRBlaI09nc9l
-h2vcAPsGJg4PVRka8/mXapxnJk60y1kX6UISez0HWYF4n4lhSQEApUWehI8jLDcn
-0tkM/nRysL+VOw+pjKCGVviNqoBkCw4=
-=DFgu
+iHUEARYKAB0WIQRVR5Ox3GKMxO4fgIVlaI09nc9lhwUCavPXzQAKCRBlaI09nc9l
+h4ORAP4kwjf9YZZ1KW0057pGX2i2z5pTG7PMLNf8Y5Kb+ONqaQD/T0jQfoN71DVf
+jlzI9xkCaU8tl7B+GfC5scG8f84OWgs=
+=7Wes
 -----END PGP SIGNATURE-----
