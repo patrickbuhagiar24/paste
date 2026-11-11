@@ -134,7 +134,7 @@ def test_constants_agree_with_desktop_file():
 def test_window_class_passed_to_tk():
     """Tk harus diberi className agar WM_CLASS tidak jatuh ke "Tk"."""
     src = Path(app_module.__file__).read_text(encoding="utf-8")
-    assert "super().__init__(className=WM_CLASS)" in src
+    assert "super().__init__(className=TK_CLASS_NAME)" in src
 
 
 def test_icon_files_prefers_installed_and_found():
@@ -224,4 +224,58 @@ def test_check_reports_icon_status(capsys):
     out = capsys.readouterr().out
     assert "Ikon aplikasi:" in out
     assert "paste-teks.png" in out
-    assert "WM_CLASS 'PasteTeks'" in out
+    assert "WM_CLASS yang diharapkan 'Pasteteks'" in out
+
+
+def test_real_window_wm_class_matches_desktop(tmp_path):
+    """Jalankan launcher nyata di Xvfb lalu periksa WM_CLASS melalui xprop.
+
+    Uji ini juga berjalan pada XWayland karena Tk menggunakan protokol X11;
+    pencocokan ikon oleh GNOME sendiri tetap perlu diverifikasi di desktop.
+    """
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    required = os.environ.get("PASTE_REQUIRE_X11_TEST") == "1"
+    missing = [tool for tool in ("xvfb-run", "xauth", "xprop")
+               if not shutil.which(tool)]
+    if app_module.tk is None:
+        missing.append("tkinter")
+    if missing:
+        if required:
+            pytest.fail("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
+        pytest.skip("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
+
+    script = r'''
+import os, subprocess, sys, time
+launcher, folder, expected = sys.argv[1:]
+p = subprocess.Popen([launcher, "--dir", folder], stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, text=True)
+try:
+    title = "Paste Teks v" + __import__("paste_teks").__version__ + " — Tempel Cepat Satu Klik"
+    for _ in range(100):
+        result = subprocess.run(["xprop", "-name", title, "WM_CLASS"],
+                                capture_output=True, text=True)
+        if result.returncode == 0 and "WM_CLASS(STRING)" in result.stdout:
+            print(result.stdout.strip())
+            if result.stdout.strip().split('"')[-2] != expected:
+                raise SystemExit("WM_CLASS aktual berbeda dari StartupWMClass")
+            break
+        if p.poll() is not None:
+            raise SystemExit("Aplikasi berhenti: " + p.stderr.read())
+        time.sleep(0.1)
+    else:
+        raise SystemExit("Jendela tidak ditemukan oleh xprop")
+finally:
+    p.terminate()
+    p.wait(timeout=10)
+'''
+    env = os.environ.copy()
+    env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
+    result = subprocess.run(
+        ["xvfb-run", "-a", sys.executable, "-c", script,
+         str(ROOT / "bin" / "paste-teks"), str(tmp_path), app_module.WM_CLASS],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
