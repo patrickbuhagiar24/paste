@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from paste_teks import app as app_module
+from pastex import app as app_module
 
 
 def _norm(path):
@@ -40,17 +40,17 @@ def test_open_treeview_event_marks_category_collapsed(gui, sample_root):
     """Menciutkan kategori harus tersimpan ke settings.json."""
     app = gui(roots=[sample_root])
     app.refresh_tree()
-    assert app.tree.row("Umum")["open"] is True
+    assert app.tree.row("General")["open"] is True
 
-    app._toggle_collapsed(str(sample_root / "Umum"))
+    app._toggle_collapsed(str(sample_root / "General"))
 
     assert app.saved_settings, "settings.json tidak ditulis"
     assert app.saved_settings[-1]["collapsed"] == [
-        _norm(sample_root / "Umum")]
+        _norm(sample_root / "General")]
     # berkas .txt tidak ikut dicatat walau event-nya nyasar
-    app._toggle_collapsed(str(sample_root / "Umum" / "Sapaan.txt"))
+    app._toggle_collapsed(str(sample_root / "General" / "Greeting.txt"))
     assert app.saved_settings[-1]["collapsed"] == [
-        _norm(sample_root / "Umum")]
+        _norm(sample_root / "General")]
 
 
 def test_refresh_tree_restores_collapsed_state(gui, sample_root):
@@ -58,7 +58,7 @@ def test_refresh_tree_restores_collapsed_state(gui, sample_root):
     saved = _norm(sample_root / "Email")
     app = gui(roots=[sample_root], settings={"collapsed": [saved]})
     app.refresh_tree()
-    assert app.tree.row("Umum")["open"] is True
+    assert app.tree.row("General")["open"] is True
     assert app.tree.row("Email")["open"] is False
 
 
@@ -79,7 +79,7 @@ def test_collapsed_survives_new_session(sample_root, tmp_path, monkeypatch):
     second = make_app(roots=[sample_root], settings=app_module.load_settings())
     second.refresh_tree()
     assert second.tree.row("Email")["open"] is False
-    assert second.tree.row("Umum")["open"] is True
+    assert second.tree.row("General")["open"] is True
 
 
 def test_opening_again_removes_from_collapsed(gui, sample_root):
@@ -96,7 +96,7 @@ def test_search_expands_everything_and_does_not_overwrite_state(gui, sample_root
     """Saat mencari semua dibuka, tetapi status ciut tersimpan tidak dihapus."""
     saved = _norm(sample_root / "Email")
     app = gui(roots=[sample_root], settings={"collapsed": [saved]})
-    app.search_var.set("Sapaan")
+    app.search_var.set("Greeting")
     app.refresh_tree()
     dirs = [r for r in app.tree.rows if r["tags"] == "dir"]
     assert dirs, "pencarian tidak menemukan kategori"
@@ -116,12 +116,12 @@ def test_deleting_category_prunes_collapsed(gui, sample_root, monkeypatch):
     }))
     app = gui(roots=[sample_root], settings={"collapsed": [
         _norm(sample_root / "Email"), _norm(sample_root / "Email" / "Dalam"),
-        _norm(sample_root / "Umum")]})
+        _norm(sample_root / "General")]})
     app.refresh_tree()
     app.tree.selection_set(str(sample_root / "Email"))
     app.delete_selected()
     assert not (sample_root / "Email").exists()
-    assert app.saved_settings[-1]["collapsed"] == [_norm(sample_root / "Umum")]
+    assert app.saved_settings[-1]["collapsed"] == [_norm(sample_root / "General")]
 
 
 def test_prune_only_removes_subtree(gui, sample_root):

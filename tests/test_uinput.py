@@ -1,11 +1,11 @@
-"""Uji logika izin /dev/uinput (grup paste-teks) — tanpa menyentuh sistem."""
+"""Uji logika izin /dev/uinput (grup pastex) — tanpa menyentuh sistem."""
 import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from paste_teks import uinput
+from pastex import uinput
 
 
 class _FakeGrpEntry:
@@ -21,8 +21,8 @@ def test_user_groups_reads_nss(monkeypatch):
     import grp
     monkeypatch.setattr(
         grp, "getgrgid",
-        lambda gid: _FakeGrpEntry({1000: "budi", 999: "paste-teks"}.get(gid, "x")))
-    assert uinput.user_groups("budi") == {"budi", "paste-teks"}
+        lambda gid: _FakeGrpEntry({1000: "budi", 999: "pastex"}.get(gid, "x")))
+    assert uinput.user_groups("budi") == {"budi", "pastex"}
 
 
 def test_user_groups_unknown_user(monkeypatch):
@@ -109,17 +109,17 @@ def test_can_self_enable_requires_helper_and_pkexec(monkeypatch):
 
 
 def test_explain_mentions_group_and_relogin():
-    assert "paste-teks" in uinput.explain(_status())
-    assert "login ulang" in uinput.explain(_status(in_group=True))
+    assert "pastex" in uinput.explain(_status())
+    assert "Log out and back in" in uinput.explain(_status(in_group=True))
     assert "ydotoold" in uinput.explain(
         _status(ydotoold_binary=True, socket=None))
-    assert "siap" in uinput.explain(_status(device_writable=True)).lower()
+    assert "ready" in uinput.explain(_status(device_writable=True)).lower()
 
 
 def test_summary_marks_missing_permission():
     rows = _status().summary()
     labels = " ".join(label for _m, label, _d in rows)
-    assert "paste-teks" in labels
+    assert "pastex" in labels
     # Belum jadi anggota & perangkat tak bisa ditulis => keduanya ❌.
     assert all(mark != "✅" for mark, _l, _d in rows)
 
@@ -132,13 +132,13 @@ def test_summary_reports_stale_session_after_group_add():
     st = _status(in_group=True, session={"budi"})
     assert st.needs_relogin is True
     assert st.in_session is False
-    row = [r for r in st.summary() if "grup" in r[1]][0]
-    assert "sesi belum memuat" in row[2]
+    row = [r for r in st.summary() if "group" in r[1]][0]
+    assert "session has not loaded" in row[2]
     assert row[0] == "❌"
 
 
 def test_session_groups_active_when_loaded():
-    st = _status(in_group=True, session={"budi", "paste-teks"},
+    st = _status(in_group=True, session={"budi", "pastex"},
                  device_writable=True)
     assert st.in_session is True
     assert st.needs_relogin is False
@@ -162,13 +162,13 @@ def test_daemon_missing_flag():
 def test_explain_orders_relogin_before_daemon():
     text = uinput.explain(_status(
         in_group=True, session={"budi"}, ydotoold_binary=True))
-    assert "login ulang" in text
+    assert "Log out and back in" in text
     assert "ydotoold" in text
-    assert text.index("login ulang") < text.index("ydotoold")
+    assert text.index("Log out and back in") < text.index("ydotoold")
 
 
 def test_explain_mentions_udev_when_rule_missing():
-    text = uinput.explain(_status(in_group=True, session={"budi", "paste-teks"},
+    text = uinput.explain(_status(in_group=True, session={"budi", "pastex"},
                                   rule=False))
     assert "reinstall" in text
 
@@ -213,7 +213,7 @@ def test_manual_command_is_complete():
     cmd = uinput.MANUAL_COMMAND
     assert "groupadd" in cmd
     assert "uinput" in cmd
-    assert "usermod -aG paste-teks" in cmd
+    assert "usermod -aG pastex" in cmd
 
 
 def test_enable_command_builds_pkexec_call():
@@ -230,7 +230,7 @@ def test_enable_for_user_success():
 
     def runner(cmd, **kw):
         seen.append(cmd)
-        return _Proc(0, "Akun 'budi' ditambahkan ke grup 'paste-teks'.", "")
+        return _Proc(0, "Akun 'budi' ditambahkan ke grup 'pastex'.", "")
 
     code, out, err = uinput.enable_for_user("budi", runner=runner)
     assert code == 0 and "ditambahkan" in out and err == ""
@@ -305,4 +305,4 @@ def test_summary_reports_acl_without_group():
     assert st.acl_granted is True
     labels = " ".join(f"{m} {l} {d}" for m, l, d in st.summary())
     assert "ACL" in labels
-    assert "tanpa logout" in labels
+    assert "no group membership" in labels

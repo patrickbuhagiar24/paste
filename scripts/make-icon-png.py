@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Render usr/share/icons/.../paste-teks.svg menjadi PNG untuk ikon jendela.
+"""Render usr/share/icons/.../pastex.svg to PNG files for the window icon.
 
-Kenapa perlu: ikon menu dibaca GNOME dari tema (SVG, tajam di semua ukuran),
-sedangkan ikon JENDELA harus gambar raster yang bisa dimuat Tk
-(`PhotoImage`/`iconphoto`). Tanpa PNG, jendela menampilkan ikon generik
-sehingga berbeda dengan ikon di menu aplikasi.
+GNOME loads menu icons from the theme as SVG, while Tk's PhotoImage/iconphoto
+requires raster images. Without PNG files, the window uses a generic icon that
+does not match the application menu.
 
-Supaya keduanya dijamin sama, PNG di sini dirender dari BERKAS SVG YANG SAMA
-— bukan digambar ulang dengan tangan. Skrip ini hanya mendukung subset SVG
-yang dipakai ikon kita (rect, circle, path garis lurus, fill/stroke), tanpa
-dependensi luar (tidak butuh cairo/rsvg/ImageMagick).
+Render from the same SVG file to guarantee that the menu and window icons
+match. This script supports the SVG subset used by the icon (rect, circle,
+straight-line paths, fill, and stroke), with no external dependencies.
 
-Pakai:
-    python3 scripts/make-icon-png.py            # tulis 64/128/256 px
-    python3 scripts/make-icon-png.py --sizes 64 --out /tmp/uji
+Usage:
+    python3 scripts/make-icon-png.py            # write 64/128/256 px files
+    python3 scripts/make-icon-png.py --sizes 64 --out /tmp/test
 """
 from __future__ import annotations
 
@@ -26,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SVG = ROOT / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "paste-teks.svg"
+SVG = ROOT / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "pastex.svg"
 ICON_DIR = ROOT / "usr" / "share" / "icons" / "hicolor"
 SIZES = (64, 128, 256)
 
@@ -59,14 +57,14 @@ def _color(value: str | None) -> tuple[int, int, int, int] | None:
         if len(hexa) >= 6:
             return (int(hexa[0:2], 16), int(hexa[2:4], 16),
                     int(hexa[4:6], 16), 255)
-    return None  # warna bernama tidak dipakai ikon ini
+    return None  # named colors are not used by this icon
 
 
 _PATH_TOKEN = re.compile(r"[MmLlHhVvZz]|-?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 
 def _path_points(d: str) -> list[tuple[float, float]]:
-    """Ubah path garis lurus menjadi polilin (subset: M L H V Z)."""
+    """Convert a straight-line path to a polyline (M L H V Z subset)."""
     tokens = _PATH_TOKEN.findall(d)
     points: list[tuple[float, float]] = []
     i = 0
@@ -104,13 +102,13 @@ def _path_points(d: str) -> list[tuple[float, float]]:
             i += 1
             y = ny if cmd == "V" else y + ny
             points.append((x, y))
-        else:  # pragma: no cover - perintah tidak didukung
-            raise ValueError(f"perintah path tidak didukung: {cmd!r}")
+        else:  # pragma: no cover - unsupported path command
+            raise ValueError(f"unsupported path command: {cmd!r}")
     return points
 
 
 def parse_svg(path: Path = SVG) -> tuple[float, float, list[Shape]]:
-    """Baca SVG ikon -> (lebar, tinggi, daftar Shape) dalam urutan gambar."""
+    """Read the icon SVG into (width, height, shapes) in draw order."""
     root = ET.parse(path).getroot()
     vb = root.get("viewBox", "").split()
     width = float(vb[2]) if len(vb) == 4 else float(root.get("width", "64"))
@@ -208,7 +206,7 @@ def _bounds(s: Shape, ss: float, size: int) -> tuple[int, int, int, int]:
 
 def render(size: int, view: float = 64.0, supersample: int = 4,
            shapes: list[Shape] | None = None) -> bytes:
-    """Render bentuk menjadi RGBA (size x size) dengan anti-aliasing."""
+    """Render a shape to antialiased RGBA pixels at the requested size."""
     if shapes is None:
         _, _, shapes = parse_svg()
     ss = int(supersample)
@@ -242,7 +240,7 @@ def render(size: int, view: float = 64.0, supersample: int = 4,
                 elif hit_fill and shape.fill:
                     _blend(buf, index, shape.fill)
 
-    # turunkan resolusi: rata-rata kotak ss x ss -> anti-aliasing
+    # Downsample each ss x ss block by averaging pixels for antialiasing.
     out = bytearray(size * size * 4)
     area = ss * ss
     for y in range(size):
@@ -266,7 +264,7 @@ def render(size: int, view: float = 64.0, supersample: int = 4,
 
 
 def write_png(path: Path, size: int, rgba: bytes) -> Path:
-    """Tulis PNG RGBA 8-bit tanpa dependensi (zlib + struct)."""
+    """Write an 8-bit RGBA PNG using only zlib and struct."""
     raw = bytearray()
     stride = size * 4
     for y in range(size):
@@ -287,25 +285,25 @@ def write_png(path: Path, size: int, rgba: bytes) -> Path:
 
 
 def icon_path(size: int, base: Path = ICON_DIR) -> Path:
-    return Path(base) / f"{size}x{size}" / "apps" / "paste-teks.png"
+    return Path(base) / f"{size}x{size}" / "apps" / "pastex.png"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--sizes", default=",".join(str(s) for s in SIZES),
-                        help="daftar ukuran dipisah koma (bawaan: 64,128,256)")
+                        help="Comma-separated image sizes (default: 64,128,256).")
     parser.add_argument("--out", default=str(ICON_DIR),
-                        help="folder dasar hicolor (bawaan: usr/share/icons/hicolor)")
+                        help="Base hicolor theme directory (default: usr/share/icons/hicolor).")
     args = parser.parse_args(argv)
 
     view_w, view_h, shapes = parse_svg()
     if view_w != view_h:  # pragma: no cover - ikon kita persegi
-        print(f"peringatan: viewBox tidak persegi ({view_w}x{view_h})")
+        print(f"warning: viewBox is not square ({view_w}x{view_h})")
     base = Path(args.out)
     for size in (int(s) for s in args.sizes.split(",") if s.strip()):
         rgba = render(size, view=max(view_w, view_h), shapes=shapes)
         path = write_png(icon_path(size, base), size, rgba)
-        print(f"ditulis: {path} ({size}x{size})")
+        print(f"wrote: {path} ({size}x{size})")
     return 0
 
 

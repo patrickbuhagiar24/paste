@@ -1,12 +1,12 @@
 [Unit]
-Description=ydotool daemon (paste otomatis Paste Teks)
+Description=ydotool daemon (Pastex automatic paste)
 Documentation=https://github.com/patrickbuhagiar24/paste
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-# ydotool >= 1.0 mengirim event lewat daemon ini; socket-nya berada di
-# $XDG_RUNTIME_DIR sehingga hanya pengguna pemilik sesi yang bisa memakainya.
+# ydotool >= 1.0 sends events through this daemon; its socket is located in
+# $XDG_RUNTIME_DIR, making it available only to the session owner.
 ExecStart=/usr/bin/ydotoold
 Restart=on-failure
 RestartSec=2

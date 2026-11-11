@@ -1,0 +1,6 @@
+# Example Pastex APT source; copy to /etc/apt/sources.list.d/pastex.list
+# Local repository (file://):
+# deb [trusted=yes] file:///home/user/paste/apt-repo/dist ./
+#
+# HTTP repository (GitHub Pages, signed):
+# deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./

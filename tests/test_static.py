@@ -8,7 +8,7 @@ import ast
 import builtins
 from pathlib import Path
 
-PKG = Path(__file__).resolve().parent.parent / "paste_teks"
+PKG = Path(__file__).resolve().parent.parent / "pastex"
 
 
 def _bound_names(tree: ast.AST) -> set[str]:
@@ -59,7 +59,7 @@ def test_no_undefined_names_in_package():
 
 def test_app_module_imports_threading():
     """Tombol Salin/Paste memakai thread latar."""
-    from paste_teks import app
+    from pastex import app
     assert hasattr(app, "threading")
 
 
@@ -68,10 +68,10 @@ def test_modules_import_cleanly_without_display(monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     import importlib
-    import paste_teks
+    import pastex
     for name in ("app", "clipboard", "snippets", "uinput"):
-        importlib.import_module(f"paste_teks.{name}")
-    assert paste_teks.__version__
+        importlib.import_module(f"pastex.{name}")
+    assert pastex.__version__
 
 
 # --- Konsistensi metadata paket -------------------------------------------
@@ -95,7 +95,7 @@ def test_build_deb_recommends_matches_debian_control():
 def test_reader_tools_declared_in_recommends():
     """Setiap tool pembaca/pembuat clipboard yang dipakai kode harus diusulkan
     sebagai paket, supaya pengguna tidak menemui fitur mati diam-diam."""
-    from paste_teks.clipboard import READER_TOOLS
+    from pastex.clipboard import READER_TOOLS
 
     recommends = _control_recommends((ROOT / "debian" / "control").read_text())
     # nama perintah -> paket Debian

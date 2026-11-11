@@ -20,20 +20,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pasang dependensi build
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils python3-tk xvfb xauth x11-utils
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils python3-tk python3-pytest xvfb xauth x11-utils
 
-      - name: Uji
+      - name: Run tests
         env:
           PASTE_REQUIRE_X11_TEST: "1"
         run: |
-          python3 -m pip install pytest -q
           python3 -m pytest tests/ -q
 
-      - name: Bangun .deb
+      - name: Build the Debian package
         run: ./scripts/build-deb.sh
 
-      - name: Bangun repo APT (Packages + Release)
+      - name: Build APT repository (Packages and Release)
         run: |
           mkdir -p apt-repo/dist
           cp dist/*.deb apt-repo/dist/
@@ -41,25 +40,25 @@ jobs:
           dpkg-scanpackages --arch all . > Packages
           gzip -9 -k -f Packages
           cat > apt-ftparchive.conf <<'EOF'
-          APT::FTPArchive::Release::Origin "Paste Teks";
-          APT::FTPArchive::Release::Label "Paste Teks";
+          APT::FTPArchive::Release::Origin "Pastex";
+          APT::FTPArchive::Release::Label "Pastex";
           APT::FTPArchive::Release::Suite "stable";
           APT::FTPArchive::Release::Codename "stable";
           APT::FTPArchive::Release::Architectures "all";
           APT::FTPArchive::Release::Components "main";
-          APT::FTPArchive::Release::Description "Repo APT Paste Teks untuk Ubuntu 26.10";
+          APT::FTPArchive::Release::Description "Pastex APT repository for Ubuntu 26.10";
           EOF
           apt-ftparchive -c apt-ftparchive.conf release . > Release
           ls -la
 
-      - name: Tandatangani Release dengan GPG (opsional)
+      - name: Sign the Release with GPG (optional)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "Secret GPG_PRIVATE_KEY tidak ada — Release tidak ditandatangani."
-            echo "Repo tetap bisa dipakai dengan [trusted=yes]; lihat apt-repo/README.md untuk tanda tangan."
+            echo "GPG_PRIVATE_KEY secret is missing — Release will not be signed."
+            echo "The repository can still be used with [trusted=yes]; see apt-repo/README.md for signing instructions."
             exit 0
           fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
@@ -67,19 +66,19 @@ jobs:
             --armor --detach-sign -o apt-repo/dist/Release.gpg apt-repo/dist/Release
           gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
             --clearsign -o apt-repo/dist/InRelease apt-repo/dist/Release
-          gpg --batch --armor --export > apt-repo/dist/paste-teks.gpg
+          gpg --batch --armor --export > apt-repo/dist/pastex.gpg
           ls -la apt-repo/dist/
 
-      - name: Buat index.html sederhana
+      - name: Create a simple index.html
         run: |
           {
-            echo "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Repo APT Paste Teks</title></head><body>"
-            echo "<h1>Repo APT Paste Teks</h1><ul>"
+            echo "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Repo APT Pastex</title></head><body>"
+            echo "<h1>Repo APT Pastex</h1><ul>"
             for f in apt-repo/dist/*; do echo "<li><a href='$(basename "$f")'>$(basename "$f")</a></li>"; done
             echo "</ul></body></html>"
           } > apt-repo/dist/index.html
 
-      - name: Terbitkan ke GitHub Pages (branch gh-pages, folder apt/)
+      - name: Publish to GitHub Pages (gh-pages branch, apt/ folder)
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
@@ -89,11 +88,11 @@ jobs:
           mkdir -p apt
           cp -r "$GITHUB_WORKSPACE/apt-repo/dist/"* apt/
           git add apt/
-          git commit -m "APT repo: paste-teks $(date -u +%Y-%m-%d)" || true
+          git commit -m "APT repo: pastex $(date -u +%Y-%m-%d)" || true
           git push origin gh-pages
 
-      - name: Unggah .deb sebagai artefak
+      - name: Upload the Debian package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: paste-teks-deb
+          name: pastex-deb
           path: dist/*.deb

@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "paste-teks"
-version = "1.5.3"
-description = "GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lain satu klik (Ubuntu 26.10)"
+name = "pastex"
+version = "1.6.0"
+description = "One-click desktop text snippet manager for Ubuntu 26.10"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,7 +16,7 @@ dependencies = []
 test = ["pytest"]
 
 [project.scripts]
-paste-teks = "paste_teks.app:main"
+pastex = "pastex.app:main"
 
 [tool.setuptools.packages.find]
-include = ["paste_teks*"]
+include = ["pastex*"]

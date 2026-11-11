@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from paste_teks import clipboard
+from pastex import clipboard
 
 
 def _mk(count=0, stderr=""):
@@ -300,7 +300,7 @@ def test_copy_text_unverified_without_reader(monkeypatch):
     result = clipboard.copy_text("halo", runner=lambda cmd, **kw: _Proc(rc=0))
     assert result.ok is True
     assert result.verified is False
-    assert "belum terverifikasi" in result.message
+    assert "not verified" in result.message
 
 
 def test_copy_text_reports_mismatch(monkeypatch):
@@ -316,7 +316,7 @@ def test_copy_text_reports_mismatch(monkeypatch):
     result = clipboard.copy_text("halo", runner=runner)
     # Tool "berhasil" tetapi isi clipboard tidak cocok -> ditandai tidak terverifikasi
     assert result.verified is False
-    assert "tidak cocok" in result.message or "belum terverifikasi" in result.message
+    assert "do not match" in result.message or "not verified" in result.message
 
 
 # --- Wayland: jangan percaya xdotool -------------------------------------
@@ -326,7 +326,7 @@ def test_wayland_never_uses_xdotool(monkeypatch):
     Wayland asli, tetapi tetap mengembalikan kode 0. Melaporkan "berhasil"
     dalam kondisi itu menyesatkan, jadi xdotool tidak boleh dipakai sama sekali.
     """
-    from paste_teks import clipboard
+    from pastex import clipboard
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("DISPLAY", raising=False)
@@ -341,7 +341,7 @@ def test_wayland_never_uses_xdotool(monkeypatch):
 
 def test_wayland_message_explains_ydotool_requirement(monkeypatch):
     """Tanpa ydotool di Wayland, pesan harus menjelaskan alasannya."""
-    from paste_teks import clipboard
+    from pastex import clipboard
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("DISPLAY", raising=False)
@@ -355,7 +355,7 @@ def test_wayland_message_explains_ydotool_requirement(monkeypatch):
 def test_x11_paste_marks_result_not_confident(monkeypatch):
     """xdotool di X11 tetap dipakai, tetapi hasilnya ditandai belum pasti
     (returncode saja bukan bukti teks benar-benar tertempel)."""
-    from paste_teks import clipboard
+    from pastex import clipboard
 
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setenv("DISPLAY", ":0")
@@ -368,7 +368,7 @@ def test_x11_paste_marks_result_not_confident(monkeypatch):
 
 
 def test_wayland_ydotool_success_is_confident(monkeypatch):
-    from paste_teks import clipboard
+    from pastex import clipboard
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("DISPLAY", raising=False)

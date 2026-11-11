@@ -1,15 +1,15 @@
-"""Uji CLI Paste Teks (tanpa GUI/display)."""
+"""Uji CLI Pastex (tanpa GUI/display)."""
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from paste_teks.app import run_cli
+from pastex.app import run_cli
 
 
 def test_version(capsys):
     assert run_cli(["--version"]) == 0
-    assert "paste-teks" in capsys.readouterr().out
+    assert "pastex" in capsys.readouterr().out
 
 
 def test_check(capsys):
@@ -17,15 +17,15 @@ def test_check(capsys):
     out = capsys.readouterr().out
     assert "Python:" in out
     assert "tkinter:" in out
-    assert "Folder snippets:" in out
+    assert "Snippet folders:" in out
 
 
 def test_list(tmp_path, capsys):
-    (tmp_path / "Umum").mkdir()
-    (tmp_path / "Umum" / "Sapaan.txt").write_text("halo", encoding="utf-8")
+    (tmp_path / "General").mkdir()
+    (tmp_path / "General" / "Greeting.txt").write_text("halo", encoding="utf-8")
     assert run_cli(["--dir", str(tmp_path), "--list"]) == 0
     out = capsys.readouterr().out
-    assert "Umum" in out and "Sapaan" in out
+    assert "General" in out and "Greeting" in out
 
 
 class _FakeTree:
@@ -48,16 +48,16 @@ class _FakeTree:
 
 def test_insert_node_uses_end_index(tmp_path):
     """Regresi: insert(parent, iid, ...) crash (TclError: expected integer)."""
-    from paste_teks.app import PasteTeksApp
-    from paste_teks.snippets import Node
+    from pastex.app import PastexApp
+    from pastex.snippets import Node
 
-    app = PasteTeksApp.__new__(PasteTeksApp)  # tanpa __init__ (tanpa display)
+    app = PastexApp.__new__(PastexApp)  # tanpa __init__ (tanpa display)
     app.tree = _FakeTree()
     # Tk.__getattr__ memerlukan interpreter yang tidak dibuat oleh __new__;
     # inisialisasi atribut yang dibaca _insert_node secara eksplisit.
     app.collapsed = set()
     root = Node(name="snippets", path=tmp_path, is_dir=True)
-    child = Node(name="Sapaan", path=tmp_path / "Sapaan.txt", is_dir=False)
+    child = Node(name="Sapaan", path=tmp_path / "Greeting.txt", is_dir=False)
     root.children = [child]
     app._insert_node("", root)
     assert len(app.tree.calls) == 2
@@ -74,16 +74,16 @@ def test_check_reports_clipboard(capsys):
 
 
 def test_clipboard_status_without_session(monkeypatch):
-    from paste_teks import app
+    from pastex import app
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("paste_teks.clipboard.shutil.which", lambda n: None)
+    monkeypatch.setattr("pastex.clipboard.shutil.which", lambda n: None)
     lines = app.clipboard_status()
-    assert any("tidak terdeteksi" in line for line in lines)
+    assert any("session detected" in line for line in lines)
 
 
 def test_test_paste_flag_exists():
-    from paste_teks import app
+    from pastex import app
     status = {"called": False}
 
     def fake(**kw):
@@ -106,7 +106,7 @@ def test_test_paste_flag_exists():
 def _snippet(tmp_path, text="Halo"):
     d = tmp_path / "Snippets"
     d.mkdir(exist_ok=True)
-    f = d / "Sapaan.txt"
+    f = d / "Greeting.txt"
     f.write_text(text, encoding="utf-8")
     return f
 
@@ -118,12 +118,12 @@ def test_paste_withdraws_before_copying():
     penyalinan lambat atau gagal, jendela tetap memegang fokus dan Ctrl+V
     tidak pernah terkirim (log berhenti di "[paste] mulai").
     """
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     order = []
 
     class FakePath:
-        name = "Sapaan.txt"
+        name = "Greeting.txt"
 
         def is_dir(self):
             return False
@@ -146,11 +146,11 @@ def test_paste_withdraws_before_copying():
             order.append("copy")
 
     app = FakeApp()
-    monkey = __import__("paste_teks.app", fromlist=["read_text"])
+    monkey = __import__("pastex.app", fromlist=["read_text"])
     original = monkey.read_text
     monkey.read_text = lambda p: "isi"
     try:
-        PasteTeksApp.do_paste(app)
+        PastexApp.do_paste(app)
     finally:
         monkey.read_text = original
     # withdraw harus muncul sebelum pekerjaan salin dimulai
@@ -158,8 +158,8 @@ def test_paste_withdraws_before_copying():
 
 
 def test_after_copy_schedules_focus_delay():
-    from paste_teks.app import PasteTeksApp
-    from paste_teks.clipboard import ClipboardResult
+    from pastex.app import PastexApp
+    from pastex.clipboard import ClipboardResult
 
     calls = []
 
@@ -174,13 +174,13 @@ def test_after_copy_schedules_focus_delay():
             calls.append(("send", None))
             return 0
 
-    PasteTeksApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "ok", True))
+    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "ok", True))
     assert calls[0] == ("after", 800)
 
 
 def test_copy_failure_restores_window():
     """Salinan gagal: jendela yang sudah dilepas WAJIB dimunculkan lagi."""
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     calls = []
 
@@ -199,14 +199,14 @@ def test_copy_failure_restores_window():
             calls.append(("dialog", message))
 
     app = FakeApp()
-    PasteTeksApp._paste_failed(app, "tidak ada tool clipboard")
+    PastexApp._paste_failed(app, "tidak ada tool clipboard")
     assert ("deiconify", None) in calls
     assert app._pasting is False
 
 
 def test_paste_done_restores_window():
-    from paste_teks.app import PasteTeksApp
-    from paste_teks.clipboard import PasteResult
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
 
     calls = []
 
@@ -221,14 +221,14 @@ def test_paste_done_restores_window():
             calls.append(("lift", None))
 
     app = FakeApp()
-    PasteTeksApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
+    PastexApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
     assert ("deiconify", None) in calls        # jendela kembali
     assert app._pasting is False
 
 
 def test_paste_done_failure_raises_window(monkeypatch):
-    from paste_teks.app import PasteTeksApp
-    from paste_teks.clipboard import PasteResult
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
 
     calls = []
 
@@ -246,14 +246,14 @@ def test_paste_done_failure_raises_window(monkeypatch):
             calls.append(("dialog", message))
 
     app = FakeApp()
-    PasteTeksApp._paste_done(app, PasteResult(False, "", "gagal"))
+    PastexApp._paste_done(app, PasteResult(False, "", "gagal"))
     assert ("lift", None) in calls             # kegagalan harus terlihat
     assert ("dialog", "gagal") in calls
 
 
 def test_activate_always_pastes():
     """Klik/Enter = satu tindakan: paste. Tidak ada mode 'salin saja'."""
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     calls = []
 
@@ -262,14 +262,14 @@ def test_activate_always_pastes():
             calls.append("paste")
 
     # atribut do_copy sudah tidak ada di versi ini
-    assert not hasattr(PasteTeksApp, "do_copy")
-    PasteTeksApp.on_activate(FakeApp())
+    assert not hasattr(PastexApp, "do_copy")
+    PastexApp.on_activate(FakeApp())
     assert calls == ["paste"]
 
 
 def test_no_legacy_controls_in_source():
     """Tombol Salin / pintasan / hitung mundur sudah dihapus."""
-    src = (Path(__file__).resolve().parent.parent / "paste_teks" / "app.py").read_text()
+    src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     for gone in ("do_copy", "auto_var", "delay_var", "_start_countdown",
                  "install-shortcut", "paste-foreground"):
         assert gone not in src, f"masih ada sisa: {gone}"
@@ -282,7 +282,7 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
     tersambung ke trace_add, dan _search_after_id tidak pernah diinisialisasi.
     Akibatnya setiap huruf memicu pemindaian penuh folder.
     """
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     calls = []
 
@@ -300,9 +300,9 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
             calls.append(("scan",))
 
     app = FakeApp()
-    PasteTeksApp._on_search_changed(app)          # ketikan ke-1
-    PasteTeksApp._on_search_changed(app)          # ketikan ke-2
-    PasteTeksApp._on_search_changed(app)          # ketikan ke-3
+    PastexApp._on_search_changed(app)          # ketikan ke-1
+    PastexApp._on_search_changed(app)          # ketikan ke-2
+    PastexApp._on_search_changed(app)          # ketikan ke-3
     scans = [c for c in calls if c == ("scan",)]
     assert scans == [], "refresh_tree dipanggil langsung, bukan lewat debounce"
     timers = [c for c in calls if c[0] == "after"]
@@ -313,7 +313,7 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
 
 def test_search_var_connected_to_debounce_handler():
     """trace_add harus memanggil _on_search_changed, bukan refresh_tree."""
-    src = (Path(__file__).resolve().parent.parent / "paste_teks" / "app.py").read_text()
+    src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     line = next(ln for ln in src.splitlines() if "trace_add" in ln)
     assert "_on_search_changed" in line, line
     assert "refresh_tree" not in line, line
@@ -321,7 +321,7 @@ def test_search_var_connected_to_debounce_handler():
 
 def test_search_after_id_initialised():
     """_search_after_id harus dibuat sebelum handler dipakai."""
-    src = (Path(__file__).resolve().parent.parent / "paste_teks" / "app.py").read_text()
+    src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     assert "_search_after_id: str | None = None" in src
 
 
@@ -329,8 +329,8 @@ def test_search_after_id_initialised():
 
 def test_paste_done_does_not_claim_success_when_not_confident():
     """xdotool di Wayland bisa lolos dengan kode 0 tanpa menempelkan apa pun."""
-    from paste_teks.app import PasteTeksApp
-    from paste_teks.clipboard import PasteResult
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
 
     calls = []
 
@@ -349,7 +349,7 @@ def test_paste_done_does_not_claim_success_when_not_confident():
 
     result = PasteResult(True, "xdotool", "Paste otomatis terkirim via xdotool.",
                          confident=False)
-    PasteTeksApp._paste_done(FakeApp(), result)
+    PastexApp._paste_done(FakeApp(), result)
     status = next(v for k, v in calls if k == "status")
     assert "Ctrl+V" in status, "pengguna harus diberi langkah lanjutan"
     assert ("lift", None) in calls, "jendela harus terlihat agar pesan terbaca"
@@ -358,7 +358,7 @@ def test_paste_done_does_not_claim_success_when_not_confident():
 # --- Helper thread -------------------------------------------------------
 
 def test_thread_helper_runs_target_with_args():
-    from paste_teks.app import _run_in_thread
+    from pastex.app import _run_in_thread
 
     seen = []
     import threading

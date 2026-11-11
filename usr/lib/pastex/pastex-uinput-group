@@ -1,0 +1,61 @@
+#!/bin/sh
+# Add one user to the pastex system group so it can write to
+# /dev/uinput for automatic paste through ydotool.
+#
+# Invoked by the app through pkexec (Polkit prompt):
+#     pkexec /usr/lib/pastex/pastex-uinput-group <username>
+#
+# Security: accept exactly one existing system username and never execute
+# user-provided commands (no eval). It only adds the account to a group
+# whose permission is limited to /dev/uinput, so no caller validation is needed.
+
+
+set -eu
+
+GROUP="pastex"
+
+fail() {
+    echo "pastex: $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 1 ] || fail "Usage: $0 <username>"
+
+USER_NAME="$1"
+
+case "$USER_NAME" in
+    -*) fail "invalid username" ;;
+esac
+printf '%s' "$USER_NAME" | grep -Eq '^[a-z_][a-z0-9_.-]{0,31}$' \
+    || fail "invalid username: $USER_NAME"
+[ "$USER_NAME" != "root" ] || fail "root does not need to be added"
+id -u "$USER_NAME" >/dev/null 2>&1 || fail "user not found: $USER_NAME"
+[ "$(id -u)" -eq 0 ] || fail "must be run as root (through pkexec)"
+
+# System accounts (for example, daemons) must not receive input-device access.
+UID_NUM="$(id -u "$USER_NAME")"
+[ "$UID_NUM" -ge 1000 ] || [ "$UID_NUM" -eq 0 ] \
+    || fail "only regular user accounts (uid >= 1000) are supported"
+
+if ! getent group "$GROUP" >/dev/null 2>&1; then
+    groupadd --system "$GROUP" || fail "could not create group $GROUP"
+fi
+
+if id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx "$GROUP"; then
+    echo "Account '$USER_NAME' is already a member of group '$GROUP'."
+else
+    usermod -aG "$GROUP" "$USER_NAME" \
+        || fail "could not add '$USER_NAME' to group '$GROUP'"
+    echo "Account '$USER_NAME' was added to group '$GROUP'."
+fi
+
+# Apply device permissions immediately without waiting for a reboot.
+if [ -e /dev/uinput ] && command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules >/dev/null 2>&1 || true
+    udevadm trigger --sysname-match=uinput >/dev/null 2>&1 || true
+    chgrp "$GROUP" /dev/uinput >/dev/null 2>&1 || true
+    chmod 0660 /dev/uinput >/dev/null 2>&1 || true
+fi
+
+echo "Done. Log out and back in to activate the new group in your session."
+exit 0

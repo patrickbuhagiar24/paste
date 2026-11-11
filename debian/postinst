@@ -1,27 +1,27 @@
 #!/bin/sh
-# postinst Paste Teks — buat paste otomatis langsung berfungsi, tanpa langkah
-# manual bagi pengguna yang memasang lewat APT.
+# Pastex post-installation: enable automatic paste with no manual setup.
+
 #
-# Yang disiapkan:
-#   1. udev rule dengan TAG+="uaccess"  -> ACL rw /dev/uinput untuk pengguna
-#      sesi aktif, berlaku SEGERA (tanpa logout).
-#   2. grup cadangan 'paste-teks' + keanggotaan pengguna (untuk kasus ACL
-#      tidak tersedia: sesi SSH, container, sistem tanpa logind).
-#   3. daemon ydotoold diaktifkan per pengguna agar Ctrl+V bisa dikirim.
+# Setup:
+#   1. A udev TAG+="uaccess" rule grants active sessions rw access to /dev/uinput.
+#      It takes effect immediately without logging out.
+#   2. A fallback pastex group for systems without ACL support.
+
+#   3. Enable the per-user ydotoold service to send Ctrl+V.
 #
-# Catatan: postinst berjalan sebagai root dan $USER tidak tersedia, jadi akun
-# pemanggil ditebak berlapis (SUDO_USER -> PKEXEC_UID -> sesi grafis aktif ->
-# akun biasa tunggal). Bila tak yakin, hanya cetak instruksi.
+# Note: postinst runs as root, so $USER is unavailable. Detect the account
+# using SUDO_USER, PKEXEC_UID, the active graphical session, or
+# the only regular account. If uncertain, print instructions only.
 set -eu
 
-GROUP="paste-teks"
-RULE="/usr/lib/udev/rules.d/70-paste-teks-uinput.rules"
-# Dapat diarahkan lewat env untuk pengujian / sistem tak lazim.
+GROUP="pastex"
+RULE="/usr/lib/udev/rules.d/70-pastex-uinput.rules"
+# These paths can be overridden for tests or unusual systems.
 DEV="${PASTE_TEKS_UINPUT_DEV:-/dev/uinput}"
 
-say() { echo "paste-teks: $*"; }
+say() { echo "pastex: $*"; }
 
-# ---------- deteksi akun ----------
+# ---------- account detection ----------
 
 is_real_user() {
     _uid="$(id -u "$1" 2>/dev/null || echo 0)"
@@ -29,8 +29,8 @@ is_real_user() {
 }
 
 detect_users() {
-    # Cetak satu atau beberapa akun kandidat (bisa lebih dari satu bila
-    # beberapa pengguna sedang login). Tidak pernah mengembalikan root.
+    # Print candidate account names (more than one may be logged in).
+    # Never return root.
     found=""
     for candidate in "${SUDO_USER:-}" "${PKEXEC_UID:-}"; do
         [ -n "$candidate" ] || continue
@@ -65,48 +65,48 @@ detect_users() {
     return 1
 }
 
-# ---------- izin /dev/uinput ----------
+# ---------- /dev/uinput permissions ----------
 
 apply_permissions() {
     if [ ! -e "$DEV" ]; then
-        say "$DEV belum ada (modul uinput belum dimuat) — izin diterapkan saat boot."
+        say "$DEV does not exist yet (uinput module is not loaded) — permissions will be applied at boot."
         return 0
     fi
-    # 1) ACL uaccess untuk pengguna sesi aktif (berlaku tanpa logout).
+    # 1) uaccess ACL for the active session (takes effect immediately).
     if command -v udevadm >/dev/null 2>&1; then
         udevadm control --reload-rules >/dev/null 2>&1 || true
         udevadm trigger --sysname-match=uinput >/dev/null 2>&1 || true
     fi
-    # 2) Cadangan grup: 0660 root:paste-teks.
+    # 2) Fallback group permissions: 0660 root:pastex.
     chgrp "$GROUP" "$DEV" >/dev/null 2>&1 || true
     chmod 0660 "$DEV" >/dev/null 2>&1 || true
 }
 
-# ---------- daemon ydotoold ----------
+# ---------- ydotoold service ----------
 
 enable_daemon() {
     _user="$1"
     _home="$(getent passwd "$_user" | cut -d: -f6)"
     if [ -z "${_home:-}" ] || [ ! -d "$_home" ]; then
-        say "folder home '$_user' tidak ditemukan — ydotoold dilewati."
+        say "home directory for '$_user' was not found — skipping ydotoold."
         return 0
     fi
     _uid="$(id -u "$_user")"
     _runtime="${PASTE_TEKS_RUNTIME_BASE:-/run/user}/$_uid"
 
-    # Jangan aktifkan sebelum paket ydotool ada (Recommends, mungkin absen).
+    # Do not enable the service unless ydotool is installed (it is recommended, not required).
     if ! command -v ydotoold >/dev/null 2>&1; then
-        say "ydotool tidak terpasang — paste otomatis memakai xdotool/cadangan."
+        say "ydotool is not installed — automatic paste will use xdotool or a fallback."
         return 0
     fi
 
     if [ -d "$_runtime" ]; then
-        # Sesi sedang aktif: nyalakan & aktifkan sekarang (tanpa menunggu login).
+        # Active session: start and enable it now.
         runuser -u "$_user" -- env XDG_RUNTIME_DIR="$_runtime" \
             systemctl --user enable --now ydotoold.service >/dev/null 2>&1 \
-            || say "ydotoold belum bisa dinyalakan untuk '$_user' — coba dari aplikasi."
+            || say "could not start ydotoold for '$_user' — try from the app."
     else
-        # Pengguna belum login: cukup tautkan agar menyala pada login berikutnya.
+        # User is not logged in: enable it for their next login.
         install -d -o "$_user" -g "$_user" -m 755 "$_home/.config/systemd/user" \
             >/dev/null 2>&1 || true
         ln -sf /usr/lib/systemd/user/ydotoold.service \
@@ -116,13 +116,13 @@ enable_daemon() {
     fi
 }
 
-# ---------- aksi ----------
+# ---------- actions ----------
 
 case "${1:-}" in
     configure|abort-upgrade|abort-remove|abort-deconfigure)
         if ! getent group "$GROUP" >/dev/null 2>&1; then
             groupadd --system "$GROUP" 2>/dev/null \
-                || say "peringatan: gagal membuat grup $GROUP"
+                || say "warning: could not create group $GROUP"
         fi
 
         if [ -e "$RULE" ]; then
@@ -131,23 +131,23 @@ case "${1:-}" in
 
         USERS="$(detect_users || true)"
         if [ -z "${USERS:-}" ]; then
-            say "tidak bisa mendeteksi akun pengguna secara otomatis."
-            say "Paste otomatis biasanya tetap bekerja lewat ACL sesi."
-            say "Bila belum, jalankan `paste-teks --aktifkan-izin`, atau:"
-            say "  sudo usermod -aG $GROUP <nama-akun-anda>"
+            say "could not detect a user account automatically."
+            say "Automatic paste may still work through the session ACL."
+            say "If needed, run `pastex --enable-permissions`, or run:"
+            say "  sudo usermod -aG $GROUP <your-username>"
             exit 0
         fi
 
         NEW_MEMBER=0
         for USER_NAME in $USERS; do
             if id -nG "$USER_NAME" 2>/dev/null | tr ' ' '\n' | grep -qx "$GROUP"; then
-                say "akun '$USER_NAME' sudah menjadi anggota grup '$GROUP'."
+                say "account '$USER_NAME' is already a member of group '$GROUP'."
             else
                 if usermod -aG "$GROUP" "$USER_NAME" 2>/dev/null; then
-                    say "akun '$USER_NAME' ditambahkan ke grup '$GROUP'."
+                    say "account '$USER_NAME' was added to group '$GROUP'."
                     NEW_MEMBER=1
                 else
-                    say "peringatan: gagal menambahkan '$USER_NAME' ke grup $GROUP."
+                    say "warning: could not add '$USER_NAME' to group $GROUP."
                 fi
             fi
             enable_daemon "$USER_NAME"
@@ -156,20 +156,20 @@ case "${1:-}" in
         if ! id -nG "$(echo "$USERS" | head -n1)" 2>/dev/null \
                 | tr ' ' '\n' | grep -qx "$GROUP" \
            && [ "$NEW_MEMBER" -eq 0 ]; then
-            say "peringatan: grup belum aktif untuk akun ini — gunakan tombol"
-            say "`paste-teks --aktifkan-izin` bila paste otomatis gagal."
+            say "warning: the group is not active for this account — run"
+            say "`pastex --enable-permissions` if automatic paste fails."
         fi
 
-        # Uji nyata: apakah perangkat sekarang bisa ditulis akun tersebut?
+        # Check whether the account can actually write to the device now.
         FIRST="$(echo "$USERS" | head -n1)"
         if [ -n "$FIRST" ]; then
             if [ -e "$DEV" ] && runuser -u "$FIRST" -- test -w "$DEV" 2>/dev/null; then
-                say "siap: '$FIRST' bisa menulis $DEV — paste otomatis aktif."
+                say "ready: '$FIRST' can write to $DEV — automatic paste is enabled."
             elif [ ! -e "$DEV" ]; then
-                say "$DEV tidak ada — akan dibuat saat modul uinput dimuat."
+                say "$DEV does not exist — it will be created when the uinput module loads."
             else
-                say "izin $DEV belum berlaku untuk '$FIRST'."
-                say "Jalankan `paste-teks --aktifkan-izin`, atau:"
+                say "permissions for $DEV are not active for '$FIRST'."
+                say "Run `pastex --enable-permissions`, or run:"
                 say "  sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput"
             fi
         fi

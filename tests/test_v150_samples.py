@@ -36,7 +36,7 @@ def test_debian_rules_does_not_copy_samples():
 def test_samples_never_deleted_from_installed_location():
     """Contoh yang SUDAH terpasang tidak boleh dihapus siapa pun.
 
-    postinst/postrm tidak boleh menyentuh /usr/share/paste-teks/snippets:
+    postinst/postrm tidak boleh menyentuh /usr/share/pastex/snippets:
     pengguna lama memakai folder itu sebagai root baca-saja.
     """
     for name in ("debian/postinst", "debian/postrm"):
@@ -48,34 +48,34 @@ def test_samples_never_deleted_from_installed_location():
 
 
 def test_export_data_creates_samples_once(tmp_path, capsys):
-    """Pengganti contoh bawaan: `--ekspor-data` membuat contoh sekali saja."""
-    from paste_teks.app import run_cli
+    """Pengganti contoh bawaan: `--export-data` membuat contoh sekali saja."""
+    from pastex.app import run_cli
 
-    assert run_cli(["--ekspor-data", str(tmp_path)]) == 0
+    assert run_cli(["--export-data", str(tmp_path)]) == 0
     created = sorted(p.name for p in tmp_path.rglob("*.txt"))
-    assert created, "contoh tidak dibuat"
+    assert created, "no samples were created"
     first = {p: p.read_text(encoding="utf-8") for p in tmp_path.rglob("*.txt")}
     # Pengguna mengedit satu contoh, lalu menjalankan ulang: tidak ditimpa.
-    edited = tmp_path / "Umum" / "Sapaan.txt"
+    edited = tmp_path / "General" / "Greeting.txt"
     edited.write_text("editanku", encoding="utf-8")
-    assert run_cli(["--ekspor-data", str(tmp_path)]) == 0
+    assert run_cli(["--export-data", str(tmp_path)]) == 0
     assert edited.read_text(encoding="utf-8") == "editanku"
     for path, content in first.items():
         if path != edited:
             assert path.read_text(encoding="utf-8") == content
-    assert "0 berkas dibuat" in capsys.readouterr().out
+    assert "0 files created" in capsys.readouterr().out
 
 
 def test_export_data_keeps_categories_and_never_overwrites(tmp_path):
-    """--ekspor-data menambah yang belum ada saja, tidak menghapus/menimpa."""
-    from paste_teks.app import export_data
+    """--export-data menambah yang belum ada saja, tidak menghapus/menimpa."""
+    from pastex.app import export_data
 
     manual = tmp_path / "Catatan Saya"
     manual.mkdir()
-    (manual / "Penting.txt").write_text("jangan hilang", encoding="utf-8")
+    (manual / "Penting.txt").write_text("do not remove", encoding="utf-8")
 
     created = export_data(tmp_path)
-    assert created, "contoh tidak dibuat"
-    assert (tmp_path / "Umum" / "Sapaan.txt").read_text(encoding="utf-8")
-    assert (manual / "Penting.txt").read_text(encoding="utf-8") == "jangan hilang"
+    assert created, "no samples were created"
+    assert (tmp_path / "General" / "Greeting.txt").read_text(encoding="utf-8")
+    assert (manual / "Penting.txt").read_text(encoding="utf-8") == "do not remove"
     assert export_data(tmp_path) == [], "dijalankan kedua kali tetap membuat berkas"

@@ -1,17 +1,17 @@
-"""Deteksi & aktivasi izin /dev/uinput untuk paste otomatis (ydotool).
+"""Detect and configure /dev/uinput permissions for automatic paste (ydotool).
 
-ydotool mengirim Ctrl+V dengan menulis event ke ``/dev/uinput``. Perangkat
-itu dimiliki ``root:input`` dengan mode 0660, sehingga pengguna biasa tidak
-punya akses — dan inilah penyebab paling umum "paste otomatis tidak jalan".
+ydotool sends Ctrl+V by writing events to ``/dev/uinput``. The device is owned
+by ``root:input`` with mode 0660, so regular users normally cannot access it.
+This is the most common cause of automatic-paste failures.
 
-Alih-alih memasukkan pengguna ke grup ``input`` (yang memberi akses ke
-SEMUA perangkat input, setara keylogger), paket ini memakai grup khusus
-``paste-teks`` + udev rule yang hanya membuka ``/dev/uinput``.
+Rather than adding users to the ``input`` group (which grants access to every
+input device and can enable keylogging), Pastex uses a dedicated ``pastex``
+group and a udev rule scoped to ``/dev/uinput`` only.
 
-Catatan penting: keanggotaan grup **di sistem** (``/etc/group``) berbeda
-dengan keanggotaan **di sesi berjalan**. Bila akun sudah ditambahkan tetapi
-sesi belum dimulai ulang, proses masih memakai daftar grup yang lama — dan
-itulah yang diperiksa ``session_groups()``.
+System group membership (``/etc/group``) differs from the groups active in a
+running session. If an account is added to the group but the session has not
+been restarted, processes still have the old group list. ``session_groups()``
+checks the active process groups.
 """
 from __future__ import annotations
 
@@ -22,37 +22,37 @@ import stat
 from dataclasses import dataclass, field
 from typing import Callable
 
-GROUP = "paste-teks"
-HELPER = "/usr/lib/paste-teks/paste-teks-uinput-group"
-UDEV_RULE = "/usr/lib/udev/rules.d/70-paste-teks-uinput.rules"
+GROUP = "pastex"
+HELPER = "/usr/lib/pastex/pastex-uinput-group"
+UDEV_RULE = "/usr/lib/udev/rules.d/70-pastex-uinput.rules"
 DEVICE = "/dev/uinput"
 
-# ydotool >= 1.0 berbicara dengan daemon ydotoold lewat socket Unix.
-# Letak resminya di $XDG_RUNTIME_DIR (biasanya /run/user/<uid>/ydotool.sock).
+# ydotool >= 1.0 communicates with ydotoold through a Unix socket.
+# Its standard location is $XDG_RUNTIME_DIR (usually /run/user/<uid>/ydotool.sock).
 SOCKET_PATHS = ("/run/ydotoold.sock", "/tmp/ydotool.sock")
 
 MANUAL_COMMAND = (
-    "sudo groupadd --system paste-teks\n"
-    "echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"paste-teks\", "
+    "sudo groupadd --system pastex\n"
+    "echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"pastex\", "
     "MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' \\\n"
-    "  | sudo tee /usr/lib/udev/rules.d/70-paste-teks-uinput.rules\n"
-    "sudo usermod -aG paste-teks $USER\n"
+    "  | sudo tee /usr/lib/udev/rules.d/70-pastex-uinput.rules\n"
+    "sudo usermod -aG pastex $USER\n"
     "sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput\n"
-    "# lalu logout & login ulang"
+    "# then log out and back in"
 )
 
-# Sejak 1.5.0 tidak ada tombol izin di GUI; aktivasi lewat CLI. Teks ini
-# dicetak `--izin`, `--check`, dan dialog kegagalan paste agar pengguna tahu
-# perintah yang harus dijalankan tanpa harus mencari di dokumentasi.
+# Since 1.5.0, permissions are managed from the CLI rather than a GUI button.
+# This text is shown by --permissions, --check, and paste-failure dialogs so users
+# know which command to run without searching the documentation.
 CLI_HINT = (
-    "Jalankan di terminal:\n"
-    "  paste-teks --izin            # lihat status izin\n"
-    "  paste-teks --aktifkan-izin   # aktifkan (minta kata sandi admin)"
+    "Run in a terminal:\n"
+    "  pastex --permissions            # show permission status\n"
+    "  pastex --enable-permissions   # enable (administrator password required)"
 )
 
 
 def current_user() -> str:
-    """Nama pengguna yang menjalankan aplikasi (bukan root)."""
+    """Return the name of the non-root user running the app."""
     try:
         return pwd.getpwuid(os.getuid()).pw_name
     except KeyError:  # pragma: no cover - sangat jarang
@@ -60,7 +60,7 @@ def current_user() -> str:
 
 
 def user_groups(user: str | None = None, *, grouplist=None) -> set[str]:
-    """Semua grup yang tercatat untuk ``user`` di sistem (NSS/LDAP)."""
+    """Return all groups recorded for ``user`` by the system (NSS/LDAP)."""
     import grp
 
     name = user or current_user()
@@ -73,7 +73,7 @@ def user_groups(user: str | None = None, *, grouplist=None) -> set[str]:
     try:
         gids = grouplist(name, entry.pw_gid)
     except KeyError:
-        # Basis grup NSS tidak bisa diakses (mis. sedang offline).
+        # The NSS group database is unavailable (for example, while offline).
         gids = [entry.pw_gid]
     names = set()
     for gid in gids:
@@ -85,7 +85,7 @@ def user_groups(user: str | None = None, *, grouplist=None) -> set[str]:
 
 
 def _proc_groups(*, path: str = "/proc/self/status") -> set[str] | None:
-    """Grup yang dimiliki proses saat ini (sesi berjalan), dibaca dari /proc."""
+    """Return groups for the current process, read from /proc."""
     import grp
 
     try:
@@ -107,12 +107,12 @@ def _proc_groups(*, path: str = "/proc/self/status") -> set[str] | None:
 
 
 def session_groups() -> set[str] | None:
-    """Grup yang BENAR-BENAR aktif di proses ini (bukan hanya di /etc/group)."""
+    """Return groups actually active in this process, not only in /etc/group."""
     return _proc_groups()
 
 
 def device_writable(*, access=None) -> bool:
-    """Apakah /dev/uinput bisa ditulis proses ini."""
+    """Return whether this process can write to /dev/uinput."""
     if access is None:
         access = os.access
     try:
@@ -122,7 +122,7 @@ def device_writable(*, access=None) -> bool:
 
 
 def socket_candidates() -> list[str]:
-    """Semua lokasi socket yang mungkin dipakai ydotoold."""
+    """Return all possible ydotoold socket locations."""
     uid = os.getuid()
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
     return [f"{runtime}/ydotool.sock",
@@ -131,10 +131,10 @@ def socket_candidates() -> list[str]:
 
 
 def acl_granted(dev: str = DEVICE, *, uid: int | None = None) -> bool:
-    """Apakah ACL memberi izin tulis kepada pengguna ini di ``dev``?
+    """Return whether an ACL grants this user write access to ``dev``.
 
-    TAG+="uaccess" membuat logind menambahkan ACL ``user:<uid>:rw-`` pada
-    perangkat. Karena itu akses bisa ada tanpa keanggotaan grup apa pun.
+    ``TAG+="uaccess"`` makes logind add the ``user:<uid>:rw-`` ACL to the
+    device. Access can therefore be granted without group membership.
     """
     try:
         import subprocess
@@ -152,7 +152,7 @@ def acl_granted(dev: str = DEVICE, *, uid: int | None = None) -> bool:
 
 
 def ydotoold_socket() -> str | None:
-    """Lokasi socket ydotoold bila ada (untuk ydotool >= 1.0)."""
+    """Return the ydotoold socket path, if available (ydotool >= 1.0)."""
     for path in socket_candidates():
         if os.path.exists(path):
             return path
@@ -160,7 +160,7 @@ def ydotoold_socket() -> str | None:
 
 
 def ydotoold_running() -> bool:
-    """Daemon berjalan — terlihat dari socket atau prosesnya."""
+    """Return whether the daemon is running, based on its socket or process."""
     if ydotoold_socket() is not None:
         return True
     for pid in ("/proc",):
@@ -186,10 +186,10 @@ def udev_rule_installed(rule: str = UDEV_RULE) -> bool:
 
 
 def helper_available() -> bool:
-    """Apakah helper root aman dipanggil lewat pkexec?
+    """Return whether the root helper can safely be called through pkexec.
 
-    Hanya percaya pada berkas milik root yang tidak bisa ditulis pengguna
-    lain — mencegah eskalasi hak akses lewat berkas yang bisa dimodifikasi.
+    Trust only a root-owned file that other users cannot modify, preventing
+    privilege escalation through a writable helper.
     """
     try:
         info = os.stat(HELPER)
@@ -221,24 +221,24 @@ class UinputStatus:
     # --- turunan -------------------------------------------------------
     @property
     def in_session(self) -> bool:
-        """Grup paste-teks aktif di sesi berjalan (bukan hanya di sistem)."""
+        """Return whether the pastex group is active in this session."""
         if self.session is None:
             return self.device_writable
         return GROUP in self.session
 
     @property
     def account_ready(self) -> bool:
-        """Akun sudah tercatat di grup (mungkin sesi belum memuat)."""
+        """Return whether the account is listed in the group, even if the session has not loaded it."""
         return self.in_group or self.in_session
 
     @property
     def acl_granted(self) -> bool:
-        """Akses berasal dari ACL uaccess (tanpa perlu grup / logout)."""
+        """Return whether access comes from a uaccess ACL, without group membership or logout."""
         return self.device_writable and self.acl
 
     @property
     def needs_relogin(self) -> bool:
-        """Sudah jadi anggota di sistem, tetapi sesi belum memuatnya."""
+        """Return whether the system group membership is not yet loaded in this session."""
         return self.account_ready and not self.in_session
 
     @property
@@ -247,7 +247,7 @@ class UinputStatus:
 
     @property
     def ready(self) -> bool:
-        """Semua yang dibutuhkan untuk mengirim Ctrl+V sudah tersedia?"""
+        """Return whether everything needed to send Ctrl+V is available."""
         if self.device_writable:
             if not self.ydotoold_binary:
                 return True
@@ -259,55 +259,54 @@ class UinputStatus:
         return self.ydotoold_binary and not self.daemon_ready
 
     def summary(self, prefix: str = "") -> list[tuple[str, str, str]]:
-        """(tanda, label, keterangan) untuk ditampilkan berbaris rapi."""
+        """Return (marker, label, detail) rows for display."""
         def state(ok: bool) -> str:
             return "✅" if ok else "❌"
 
         rows: list[tuple[str, str, str]] = []
 
         if self.device_writable and self.account_ready:
-            group_detail = "anggota, aktif di sesi ini"
+            group_detail = "member, active in this session"
         elif self.needs_relogin:
-            group_detail = "anggota di sistem — sesi belum memuat"
+            group_detail = "member on the system; this session has not loaded the group yet"
         elif self.in_group or self.in_session:
-            group_detail = "anggota, aktif di sesi ini"
+            group_detail = "member, active in this session"
         elif self.group_exists:
-            group_detail = "belum jadi anggota"
+            group_detail = "not a member yet"
         else:
-            group_detail = "grup belum ada — paket belum terpasang benar?"
+            group_detail = "group does not exist — is the package installed correctly?"
 
         if self.acl_granted and not self.account_ready:
-            rows.append(("✅", f"{prefix}akses {DEVICE}",
-                         "ACL sesi aktif (tanpa grup, tanpa logout)"))
+            rows.append(("✅", f"{prefix}access to {DEVICE}",
+                         "active session ACL (no group membership or logout required)"))
         else:
-            # Bila perangkat sudah bisa ditulis, akses pasti aktif — /proc
-            # mungkin tidak terbaca (container, NSS khusus), jadi jangan
-            # salah memberi tanda.
+            # If the device is writable, access is active even if /proc
+            # cannot be read (container or custom NSS); do not
+            # report a false negative.
             group_ok = self.account_ready and (self.in_session
                                                or self.device_writable)
-            rows.append((state(group_ok), f"{prefix}grup '{GROUP}'",
+            rows.append((state(group_ok), f"{prefix}group '{GROUP}'",
                          group_detail))
 
         if self.device_writable:
-            device_detail = f"{DEVICE} bisa ditulis"
+            device_detail = f"{DEVICE} is writable"
         elif not self.rule:
-            device_detail = f"{DEVICE} tidak bisa ditulis — udev rule belum ada"
+            device_detail = f"{DEVICE} is not writable — udev rule is missing"
         elif self.needs_relogin:
-            device_detail = (f"{DEVICE} tidak bisa ditulis — muncul setelah "
-                             "login ulang")
+            device_detail = (f"{DEVICE} is not writable — a new login is required")
         else:
-            device_detail = f"{DEVICE} tidak bisa ditulis"
-        rows.append((state(self.device_writable), f"{prefix}tulis {DEVICE}",
+            device_detail = f"{DEVICE} is not writable"
+        rows.append((state(self.device_writable), f"{prefix}write access to {DEVICE}",
                      device_detail))
 
         if self.ydotoold_binary:
             if self.daemon_ready:
-                where = self.socket or "proses ydotoold"
-                rows.append(("✅", f"{prefix}daemon ydotoold",
-                             f"berjalan ({where})"))
+                where = self.socket or "ydotoold process"
+                rows.append(("✅", f"{prefix}ydotoold daemon",
+                             f"running ({where})"))
             else:
-                rows.append(("❌", f"{prefix}daemon ydotoold",
-                             "belum berjalan"))
+                rows.append(("❌", f"{prefix}ydotoold daemon",
+                             "not running"))
         return rows
 
 
@@ -339,22 +338,22 @@ def status(user: str | None = None) -> UinputStatus:
 
 
 def can_self_enable(st: UinputStatus | None = None) -> bool:
-    """Bisa mengaktifkan sendiri lewat pkexec + helper (dipakai --aktifkan-izin)?"""
+    """Return whether permissions can be enabled through pkexec and the helper."""
     st = st or status()
     return st.helper and st.pkexec and not st.device_writable
 
 
 def enable_command(user: str | None = None) -> list[str]:
-    """Perintah pkexec yang dijalankan untuk menambah pengguna ke grup."""
+    """Return the pkexec command used to add a user to the group."""
     return ["pkexec", HELPER, user or current_user()]
 
 
 def enable_for_user(user: str | None = None, *,
                     runner: Callable[..., object] | None = None,
                     timeout: int = 120) -> tuple[int, str, str]:
-    """Jalankan helper via pkexec. Kembalikan (kode, stdout, stderr).
+    """Run the helper through pkexec and return (code, stdout, stderr).
 
-    kode 126/127 = permintaan kata sandi dibatalkan / pkexec tidak ada.
+    Exit code 126/127 means the password request was canceled or pkexec is missing.
     """
     if runner is None:
         import subprocess
@@ -378,7 +377,7 @@ def daemon_command() -> list[str]:
 
 def start_daemon(*, runner: Callable[..., object] | None = None,
                  timeout: int = 20) -> tuple[int, str, str]:
-    """Nyalakan ydotoold (systemd --user). Kembalikan (kode, out, err)."""
+    """Start ydotoold through systemd --user and return (code, stdout, stderr)."""
     if runner is None:
         import subprocess
 
@@ -395,39 +394,39 @@ def start_daemon(*, runner: Callable[..., object] | None = None,
 
 
 def explain(st: UinputStatus | None = None) -> str:
-    """Langkah perbaikan berikutnya, dalam bahasa Indonesia.
+    """Return the next troubleshooting steps.
 
-    Urutan sengaja: login ulang dulu (persyaratan sesi), baru daemon, lalu
-    aktivasi grup. Bila semuanya siap, kembalikan pesan positif.
+    Check session membership first, then the daemon, then group activation.
+    If everything is ready, return a positive status message.
     """
     st = st or status()
     if st.ready:
-        return "Paste otomatis siap digunakan."
+        return "Automatic paste is ready."
 
     steps: list[str] = []
     if not st.account_ready:
         steps.append(
-            f"Akun '{st.user}' belum menjadi anggota grup '{GROUP}'. Jalankan "
-            "`paste-teks --aktifkan-izin` (atau perintah manual di README).")
+            f"Account '{st.user}' is not a member of group '{GROUP}'. Run "
+            "`pastex --enable-permissions` (or follow the manual steps in the README).")
     if st.needs_relogin:
         steps.append(
-            f"Akun '{st.user}' sudah menjadi anggota grup '{GROUP}' di "
-            "sistem, tetapi SESI INI belum memuatnya. Logout lalu login "
-            "ulang (atau reboot) — langkah ini wajib.")
+            f"Account '{st.user}' is already a member of group '{GROUP}' on the "
+            "system, but THIS SESSION has not loaded it. Log out and back in "
+            "(or reboot); this step is required.")
     if st.daemon_missing:
         steps.append(
-            "ydotoold belum berjalan. Jalankan `systemctl --user start "
-            "ydotoold` (atau `ydotoold &`) lalu coba lagi.")
+            "ydotoold is not running. Run `systemctl --user start "
+            "ydotoold` (or `ydotoold &`) and try again.")
     if st.in_session and not st.device_writable and not st.needs_relogin:
         if not st.rule:
             steps.append(
-                "udev rule grup 'paste-teks' tidak ditemukan. Pasang ulang "
-                "paket: `sudo apt install --reinstall paste-teks`.")
+                "The 'pastex' udev group rule was not found. Reinstall "
+                "the package: `sudo apt install --reinstall pastex`.")
         else:
             steps.append(
-                f"Izin {DEVICE} belum berlaku. Muat ulang aturan udev:\n"
+                f"Permissions for {DEVICE} are not active. Reload the udev rules:\n"
                 "sudo udevadm control --reload-rules && "
                 "sudo udevadm trigger --sysname-match=uinput")
     if not steps:  # pragma: no cover - jaring pengaman
-        steps.append("Periksa `paste-teks --check` untuk detail.")
+        steps.append("Run `pastex --check` for details.")
     return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

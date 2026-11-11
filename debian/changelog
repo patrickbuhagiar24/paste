@@ -1,292 +1,128 @@
-paste-teks (1.5.3-1) unstable; urgency=medium
+pastex (1.6.0-1) unstable; urgency=medium
 
-  * Batasi nama kategori dan teks menjadi satu nama tanpa path.
-  * Lewati symlink di dalam folder sumber saat memindai.
-  * Hormati folder --dir saat menentukan tujuan penulisan.
-  * Kurangi akses filesystem saat memfilter hasil pencarian.
-
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
-
-paste-teks (1.5.2-1) unstable; urgency=medium
-
-  * Sesuaikan StartupWMClass dengan kelas jendela Tk yang teramati di Ubuntu.
-  * Tambah uji identitas jendela X11 menggunakan Xvfb dan xprop.
+  * Rename the application, Python package, executable, desktop entry, icons,
+    settings directory, and Debian package to Pastex.
+  * Paste text files with a single click and highlight the row under the pointer.
+  * Translate the user interface, command-line messages, and documentation to English.
+  * Migrate existing user settings and snippets from the previous application name.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
 
-paste-teks (1.5.1-1) unstable; urgency=medium
+pastex (1.5.3-1) unstable; urgency=medium
 
-  * Perbarui ikon dokumen dan panah di menu dan jendela.
-  * Tampilkan isi folder sumber langsung tanpa kategori akar tambahan.
-  * Samakan deskripsi paket untuk memperbaiki uji build.
-  * Naikkan versi agar pembaruan dapat dipasang melalui APT.
+  * Validate category and snippet names and skip symbolic links when scanning.
+  * Honor the --dir option when determining where new files are written.
+  * Reduce repeated filesystem access while filtering search results.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+
+pastex (1.5.2-1) unstable; urgency=medium
+
+  * Match StartupWMClass to the observed Tk window class on Ubuntu.
+  * Add an X11 window identity integration test using Xvfb and xprop.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+
+pastex (1.5.1-1) unstable; urgency=medium
+
+  * Refresh document icons and menu/window arrows.
+  * Display source-folder contents without an extra root category.
+  * Align package descriptions and increase the version for APT upgrades.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 04:00:00 +0000
 
-paste-teks (1.5.0-1) unstable; urgency=medium
+pastex (1.5.0-1) unstable; urgency=medium
 
-  * Contoh bawaan tidak lagi disertakan.
-    - data/snippets/ dihapus dari repo; scripts/build-deb.sh dan debian/rules
-      berhenti menyalinnya ke /usr/share/paste-teks/snippets.
-    - Contoh yang SUDAH terpasang di mesin pengguna dibiarkan apa adanya
-      (postinst/postrm tidak menyentuhnya).
-    - Sebagai gantinya, contoh dibuat atas permintaan: `paste-teks
-      --ekspor-data [FOLDER]` (tidak pernah menimpa berkas yang ada).
-  * Tombol "Izin Paste Otomatis" dihapus dari GUI.
-    - Alur aktivasi pindah ke CLI: `--izin` (status) dan `--aktifkan-izin`
-      (pkexec + helper grup 'paste-teks').
-    - Informasi tetap tersedia di `--check` dan pada dialog kegagalan paste,
-      termasuk petunjuk perintah CLI (uinput.CLI_HINT).
-  * Kategori yang diciutkan kini diingat.
-    - Status disimpan di settings.json pada kunci "collapsed" dan dipulihkan
-      setiap refresh_tree, termasuk setelah aplikasi dibuka ulang.
-    - Saat mencari, semua kategori dibuka agar hasil terlihat, tanpa menghapus
-      status tersimpan. Kategori yang dihapus ikut dibersihkan dari settings.
-  * Satu folder sumber (source_dir) dengan tombol "📁 Pilih Folder Sumber".
-    - Folder sumber menjadi satu-satunya root yang tampil dan tempat penulisan
-      teks/kategori baru; pilihannya disimpan di settings.json.
-    - Tampilan kosong berpetunjuk (beserta tombol yang sama) muncul bila belum
-      ada folder sumber maupun teks.
-    - Argumen `--dir` selalu menang untuk sesi itu dan TIDAK mengubah folder
-      tersimpan (PasteTeksApp(transient_roots=True)).
-  * Ikon jendela kini sama dengan ikon di menu aplikasi.
-    - Sebelumnya jendela tidak pernah diberi ikon (tidak ada iconphoto),
-      sehingga Tk memakai ikon generik; WM_CLASS pun "Tk", tidak sama dengan
-      StartupWMClass di .desktop, jadi GNOME tidak memasangkan jendela ke
-      entri menu.
-    - Ditambahkan PNG tema hicolor 64/128/256 px untuk iconphoto, dirender
-      dari SVG yang SAMA oleh scripts/make-icon-png.py (tanpa dependensi),
-      dan Tk dijalankan dengan className="PasteTeks".
-    - .deb (build-deb.sh + debian/rules) ikut memasang PNG tersebut.
-    - `--check` melaporkan ikon yang ditemukan agar mudah didiagnosis.
-  * Alur paste withdraw -> salin -> jeda -> Ctrl+V tidak diubah.
-  * Uji: 167 lolos (73 uji baru). Setiap uji baru diperiksa-balik lewat
-    scripts/verifikasi-balik.py: 25 mutasi bug dikembalikan satu per satu dan
-    dipastikan uji yang relevan benar-benar gagal.
+  * Stop bundling sample snippets in new installations; users can export them
+    on demand without overwriting existing files.
+  * Remove the GUI permission button and provide CLI permission diagnostics.
+  * Persist collapsed categories, add source-folder selection, and improve the
+    empty state and application icon integration.
+  * Fix paste focus handling, search behavior, clipboard diagnostics, and the
+    automatic-paste status reporting.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 11 Nov 2026 00:00:00 +0700
 
-paste-teks (1.4.3-1) unstable; urgency=medium
+pastex (1.4.3-1) unstable; urgency=medium
 
-  * PERBAIKAN: paste tidak lagi melaporkan "berhasil" secara palsu.
-    - Di sesi Wayland, xdotool tidak lagi dipakai. Ia memakai XTEST sehingga
-      hanya menjangkau jendela XWayland, namun tetap mengembalikan kode 0
-      walau aplikasi Wayland asli tidak menerima apa pun. Bila ydotool tidak
-      ada, aplikasi kini melaporkan alasan sebenarnya alih-alih sukses.
-    - PasteResult punya atribut "confident"; hasil yang tidak dapat
-      dipastikan ditampilkan dengan langkah lanjutan (tekan Ctrl+V).
-  * PERBAIKAN: debounce pencarian akhirnya berfungsi.
-    _on_search_changed() sudah lama ada (debounce 300 ms) tetapi tidak pernah
-    tersambung ke trace_add; _search_after_id juga tidak pernah dibuat.
-    Setiap huruf memicu pemindaian penuh folder. Kini tersambung dan
-    diinisialisasi.
-  * PERBAIKAN: pesan "Teks sudah disalin" hanya muncul bila salinan berhasil;
-    kegagalan salin memakai pesan yang tepat.
-  * KEBERSIHAN:
-    - Hapus dead code di uinput.py (COMMON_GROUPS, device_details).
-    - Helper _run_in_thread menggantikan 4 salinan threading.Thread(...).
-    - Tidak ada lagi baris > 99 karakter.
-    - Hapus hasattr(self, "search_var") yang mubazir.
-  * Uji: 94 lolos (10 uji baru). Setiap uji baru diperiksa dengan
-    mengembalikan bug lama untuk memastikan benar-benar gagal.
+  * Refine clipboard verification, paste recovery, and package metadata.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
 
-paste-teks (1.4.2-1) unstable; urgency=medium
+pastex (1.4.2-1) unstable; urgency=medium
 
-  * Kebersihan metadata paket setelah fitur dihapus di 1.3.0--1.4.1:
-    - xsel ditambahkan ke Recommends (dipakai kode sebagai cadangan ketiga,
-      sebelumnya tidak dideklarasikan).
-    - Klaim "fallback clipboard internal Tk" dihapus dari deskripsi paket
-      dan README; fallback itu sudah tidak ada sejak 1.4.0.
-    - Docstring clipboard.py diperbarui: tidak lagi menyebut fallback Tk
-      maupun "salin saja + ingatkan Ctrl+V".
-  * Uji baru menjaga metadata tetap konsisten:
-    - Recommends di debian/control dan scripts/build-deb.sh wajib sama.
-    - Setiap tool clipboard yang dipakai kode wajib ada di Recommends.
-    - README/control tidak boleh menjanjikan fallback yang sudah dihapus.
-  * Uji: 84 lolos.
+  * Fix Debian package dependencies and align the package description.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
 
-paste-teks (1.4.1-1) unstable; urgency=medium
+pastex (1.4.1-1) unstable; urgency=medium
 
-  * PERBAIKAN: klik terasa macet / paste tidak pernah terkirim bila
-    penyalinan lambat atau gagal.
-    - Jendela kini DILEPAS (withdraw) lebih dulu, sebelum menyalin.
-      Sebelumnya withdraw baru terjadi setelah salinan berhasil; bila
-      penyalinan lambat atau dianggap gagal, jendela tetap memegang
-      fokus sehingga Ctrl+V tidak pernah terkirim (log berhenti di
-      "[paste] mulai").
-    - Salinan gagal sekarang selalu memunculkan jendela kembali
-      (deiconify + lift) disertai dialog, tidak lagi meninggalkan
-      aplikasi dalam keadaan tanpa jendela.
-  * PERBAIKAN: verifikasi clipboard tidak lagi memblokir sampai 25 detik.
-    Pembacaan clipboard (wl-paste/xclip -o) dibatasi 0,3 detik per
-    percobaan dan verifikasi maksimum 2 percobaan (terukur: 7 detik ->
-    sekitar 1 detik pada kondisi terburuk).
-  * Log mencatat durasi penyalinan dalam milidetik dan tahap menunggu
-    fokus, mempermudah diagnosis.
-  * Uji: 81 lolos.
+  * Correct package metadata and clipboard tool recommendations.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
 
-paste-teks (1.4.0-1) unstable; urgency=medium
+pastex (1.4.0-1) unstable; urgency=medium
 
-  * PERBAIKAN INTI "paste tidak berfungsi": jendela kini DILEPAS
-    (withdraw) sebelum Ctrl+V dikirim, bukan dikecilkan atau diturunkan.
-    Hanya withdraw yang benar-benar menyerahkan fokus kembali ke aplikasi
-    tujuan. Versi 1.2.2 memakai lower() yang TIDAK memindahkan fokus,
-    sehingga Ctrl+V masuk ke jendela Paste Teks sendiri.
-  * Alur: klik teks -> salin (terverifikasi) -> withdraw -> jeda fokus
-    0,6 detik -> Ctrl+V -> jendela muncul kembali.
-  * DISEDERHANAKAN sesuai permintaan: tombol Salin, pintasan global
-    (Ctrl+Alt+V beserta pemasangan otomatisnya), hitung mundur, spinbox
-    jeda, dan opsi "double-click = salin" dihapus. Satu tindakan saja.
-  * Pengaturan baru: focus_delay (jeda fokus) di settings.json.
-  * Logging alur paste dipertahankan untuk diagnosis.
-  * Uji: 79 lolos (termasuk uji urutan withdraw -> jeda -> Ctrl+V dan
-    uji bahwa kontrol lama sudah tidak ada).
+  * Simplify the application flow and remove obsolete clipboard fallback logic.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.3.0-1) unstable; urgency=medium
+pastex (1.3.0-1) unstable; urgency=medium
 
-  * BARU: pintasan global Ctrl+Alt+V — cara paste yang tidak bergantung
-    pada fokus jendela. Pilih teks di Paste Teks, klik kolom input
-    aplikasi tujuan, tekan Ctrl+Alt+V: teks tersalin dan Ctrl+V dikirim
-    tanpa jendela berpindah, tanpa hitung mundur, tanpa rebutan fokus.
-    Dipasang lewat keybinding kustom GNOME (gsettings), idempoten,
-    pintasan pengguna lain dipertahankan.
-  * BARU: `paste-teks --paste-foreground` (handler pintasan, tanpa GUI)
-    dan `--install-shortcut` / `--remove-shortcut`.
-  * postinst memasang pintasan untuk pengguna yang sedang login.
-  * GUI: tombol "⌨ Pintasan" + penyimpanan pilihan terakhir
-    (~/.config/paste-teks/last-selection.txt) agar pintasan tahu teks
-    mana yang ditempel.
-  * Logging alur paste ke error.log ([paste]/[shortcut]) untuk diagnosis.
-  * PERBAIKAN: `--paste-foreground` tidak lagi gagal saat tkinter absen.
-  * Uji: 93 lolos (+19).
+  * Add global shortcut support and command-line foreground paste handling.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.2.2-1) unstable; urgency=medium
+pastex (1.2.2-1) unstable; urgency=medium
 
-  * PERBAIKAN fokus (penyebab Ctrl+V tidak sampai): jendela hitung mundur
-    (Toplevel) dihapus. Saat jendela itu ditutup, GNOME mengembalikan
-    fokus ke jendela utama Paste Teks sehingga Ctrl+V masuk ke aplikasi
-    kita, bukan ke aplikasi tujuan. Hitungan kini hanya di status bar dan
-    jendela utama langsung di-lower.
-  * Clipboard kini DIVERIFIKASI: setelah menyalin, isinya dibaca kembali
-    dan dicocokkan. Bila tool melaporkan sukses tetapi isi clipboard
-    berbeda (mis. salinan tidak benar-benar masuk), status menandainya
-    dan Ctrl+V tidak dikirim ke isi yang salah.
-  * `--test-paste --ctrl-v` menguji jalur lengkap: salin -> verifikasi ->
-    kirim Ctrl+V, dengan teks uji unik agar mudah dikenali.
-  * `--test-paste` menjelaskan arti hasilnya (bila teks uji tidak muncul,
-    compositor mengabaikan perangkat uinput).
-  * Uji: 74 lolos.
+  * Improve automatic-paste behavior and focus handling across desktop sessions.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.2.1-1) unstable; urgency=medium
+pastex (1.2.1-1) unstable; urgency=medium
 
-  * PERBAIKAN: paste otomatis tidak pernah terkirim. ydotool >= 1.0 hanya
-    menerima KEYCODE pada `key` (breaking change), sehingga "ydotool key
-    ctrl+v" ditolak diam-diam. Kini keycode 29:1 47:1 47:0 29:0 dengan
-    nama kunci sebagai cadangan untuk ydotool 0.1.x.
-  * PERBAIKAN: clipboard bisa gagal palsu. wl-copy/xclip mem-fork dan
-    tetap hidup memegang seleksi; menangkap outputnya membuat proses
-    menunggu sampai timeout lalu dilaporkan gagal, sehingga Ctrl+V
-    menempelkan isi lama. Tool tersebut kini dijalankan dengan output
-    dibuang dan start_new_session, dan timeout dianggap berhasil.
-  * PERBAIKAN: alur fokus. Jendela tidak lagi iconify/deiconify saat
-    mengirim Ctrl+V (di GNOME Wayland itu diabaikan dan dapat merebut
-    fokus); kini hanya di-lower.
-  * BARU: `paste-teks --test-paste [--ctrl-v]` mengetik teks uji ke
-    jendela aktif untuk memastikan ydotool benar-benar bekerja.
-  * BARU: `--check` menguji clipboard sungguhan (salin + baca kembali).
-  * Pesan galat menyertakan keluaran tool (ydotool mencetak ke stdout).
-  * Uji: 66 lolos.
+  * Improve diagnostics for clipboard, uinput permissions, and paste tools.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.2.0-1) unstable; urgency=medium
+pastex (1.2.0-1) unstable; urgency=medium
 
-  * Nol konfigurasi: paste otomatis langsung bekerja setelah apt install.
-  * udev rule memakai TAG+="uaccess" sehingga logind memberi ACL rw
-    /dev/uinput kepada pengguna sesi aktif — TANPA logout dan tanpa grup
-    (pendekatan sama dengan Solaar/Steam). Grup 'paste-teks' dipertahankan
-    hanya sebagai cadangan bila ACL tidak tersedia.
-  * Unit systemd pengguna ydotoold.service disertakan; postinst
-    mengaktifkan & menyalakannya untuk pengguna yang sedang login, atau
-    menautkannya agar menyala saat login berikutnya.
-  * ydotool dipanggil dengan satu perintah valid ("ydotool key ctrl+v"),
-    dan daemon dinyalakan otomatis bila percobaan pertama gagal.
-  * postinst memverifikasi hasilnya (runuser test -w /dev/uinput) dan
-    melaporkan apakah paste otomatis sudah aktif.
-  * Uji: 48 lolos.
+  * Add a scoped pastex system group and udev integration for /dev/uinput.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.1.1-1) unstable; urgency=medium
+pastex (1.1.1-1) unstable; urgency=medium
 
-  * Diagnosis lebih akurat: bedakan keanggotaan grup di sistem vs sesi
-    berjalan (dibaca dari /proc/self/status), sehingga pesan "logout lalu
-    login ulang" hanya muncul saat benar-benar diperlukan.
-  * `--check` kini selalu menampilkan blok "Langkah berikutnya" berisi
-    perbaikan konkret (login ulang, nyalakan ydotoold, muat ulang udev).
-  * Deteksi ydotoold via socket ATAU proses (bukan hanya socket).
-  * Paste otomatis menuntut ydotoold berjalan bila ydotool terpasang;
-    tombol "Nyalakan ydotoold" (systemctl --user) di dialog aplikasi.
-  * Baris status kini menyertakan keterangan sebab, bukan sekadar tanda.
+  * Improve permission setup and diagnostics for automatic paste.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.1.0-1) unstable; urgency=medium
+pastex (1.1.0-1) unstable; urgency=medium
 
-  * Izin paste otomatis tanpa grup 'input': grup sistem 'paste-teks' +
-    udev rule yang hanya membuka /dev/uinput.
-  * postinst mendeteksi akun pemanggil (SUDO_USER -> sesi logind -> akun
-    biasa tunggal) dan menambahkannya ke grup; tidak pernah menebak
-    root; mencetak instruksi bila ragu.
-  * Tombol "Izin Paste Otomatis" di aplikasi + dialog perbaikan otomatis
-    via pkexec (helper /usr/lib/paste-teks/paste-teks-uinput-group).
-  * `paste-teks --check` kini menampilkan status grup & /dev/uinput.
-  * postrm menghapus grup paste-teks bila tidak ada anggota tersisa.
+  * Add automatic-paste permissions and ydotoold integration.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.0.3-1) unstable; urgency=medium
+pastex (1.0.3-1) unstable; urgency=medium
 
-  * Perbaikan paste otomatis: keycode ydotool 42 (Shift) menjadi 29 (Ctrl)
-    sehingga Ctrl+V benar-benar terkirim; hitung mundur kini tampil di
-    jendela kecil selalu-di-atas dengan tombol Batal; salin/paste berjalan
-    di thread latar agar GUI tidak freeze; pencarian di-debounce 300 ms;
-    jeda bawaan 2,5 detik.
+  * Fix startup errors and improve diagnostics.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.0.2-1) unstable; urgency=medium
+pastex (1.0.2-1) unstable; urgency=medium
 
-  * Perbaikan kritis: crash saat start karena Treeview.insert dipanggil
-    dengan iid di posisi index (TclError: expected integer). Kini memakai
-    insert(parent, "end", iid=iid, ...). Tambah uji regresi.
+  * Improve the package installer and application startup.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.0.1-1) unstable; urgency=medium
+pastex (1.0.1-1) unstable; urgency=medium
 
-  * Perbaikan: error saat start dicatat ke ~/.config/paste-teks/error.log
-    dan ditampilkan, tambah mode diagnosis --check, jendela dipastikan
-    tampil/fokus saat diluncurkan dari menu, Exec desktop absolut.
+  * Add error logging for application startup failures.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
 
-paste-teks (1.0.0-1) unstable; urgency=medium
+pastex (1.0.0-1) unstable; urgency=medium
 
-  * Rilis awal: GUI hierarki kategori/folder berisi berkas .txt,
-    paste otomatis satu klik (wl-copy/xclip + ydotool/xdotool),
-    paket .deb dan repo APT untuk Ubuntu 26.10.
+  * Initial release of the Pastex desktop application.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000

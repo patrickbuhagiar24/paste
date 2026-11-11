@@ -1,6 +1,0 @@
-# Contoh apt source Paste Teks — salin ke /etc/apt/sources.list.d/paste-teks.list
-# Repo lokal (file://):
-# deb [trusted=yes] file:///home/pengguna/paste/apt-repo/dist ./
-#
-# Repo HTTP (GitHub Pages, bertanda tangan):
-# deb [signed-by=/usr/share/keyrings/paste-teks.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./

@@ -1,8 +1,8 @@
 """Uji v1.5.0 #2: izin paste otomatis pindah dari GUI ke CLI.
 
 Tombol "Izin Paste Otomatis" dihapus dari GUI. Alurnya kini:
-  * `--izin`            -> menampilkan status (sama seperti bagian --check)
-  * `--aktifkan-izin`   -> meminta akses /dev/uinput (pkexec + helper)
+  * `--permissions`            -> menampilkan status (sama seperti bagian --check)
+  * `--enable-permissions`   -> meminta akses /dev/uinput (pkexec + helper)
 Informasi tetap muncul di `--check` dan pada dialog kegagalan paste.
 """
 from __future__ import annotations
@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from paste_teks import app as app_module
-from paste_teks import uinput
+from pastex import app as app_module
+from pastex import uinput
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_SRC = (ROOT / "paste_teks" / "app.py").read_text(encoding="utf-8")
+APP_SRC = (ROOT / "pastex" / "app.py").read_text(encoding="utf-8")
 
 
 class FakeStatus:
@@ -34,8 +34,8 @@ class FakeStatus:
 
     def summary(self, prefix: str = ""):
         state = "✅" if self.device_writable else "❌"
-        return [(state, f"{prefix}tulis {uinput.DEVICE}",
-                 "bisa ditulis" if self.device_writable else "tidak bisa")]
+        return [(state, f"{prefix}write access to {uinput.DEVICE}",
+                 "is writable" if self.device_writable else "is not writable")]
 
 
 class FakeBox:
@@ -84,28 +84,28 @@ def test_gui_has_no_permission_widgets():
     """Metode GUI pembuka izin sudah hilang, bukan hanya tombolnya."""
     for gone in ("enable_auto_paste", "_enable_worker", "_enable_done",
                  "start_ydotoold", "_daemon_worker", "_daemon_done"):
-        assert not hasattr(app_module.PasteTeksApp, gone), gone
+        assert not hasattr(app_module.PastexApp, gone), gone
 
 
-# --- CLI: --izin -----------------------------------------------------------
+# --- CLI: --permissions -----------------------------------------------------------
 
 def test_izin_flag_reports_status(capsys, monkeypatch):
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
     monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
-    assert app_module.run_cli(["--izin"]) == 0
+    assert app_module.run_cli(["--permissions"]) == 0
     out = capsys.readouterr().out
-    assert "Izin paste otomatis" in out
-    assert "tulis /dev/uinput" in out
+    assert "Automatic-paste permissions" in out
+    assert "write access to /dev/uinput" in out
     assert "lakukan X" in out
 
 
 def test_izin_flag_points_to_activation_command(capsys, monkeypatch):
-    """Bila belum siap, --izin harus menyebut perintah aktivasi."""
+    """Bila belum siap, --permissions harus menyebut perintah aktivasi."""
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
     monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
-    app_module.run_cli(["--izin"])
+    app_module.run_cli(["--permissions"])
     out = capsys.readouterr().out
-    assert "--aktifkan-izin" in out
+    assert "--enable-permissions" in out
 
 
 def test_check_still_reports_permission_and_cli_hint(capsys, monkeypatch):
@@ -114,11 +114,11 @@ def test_check_still_reports_permission_and_cli_hint(capsys, monkeypatch):
     monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
     assert app_module.run_cli(["--check"]) == 0
     out = capsys.readouterr().out
-    assert "Izin paste otomatis" in out
-    assert "--aktifkan-izin" in out
+    assert "Automatic-paste permissions" in out
+    assert "--enable-permissions" in out
 
 
-# --- CLI: --aktifkan-izin -------------------------------------------------
+# --- CLI: --enable-permissions -------------------------------------------------
 
 def test_aktifkan_izin_calls_helper(monkeypatch, capsys):
     calls = []
@@ -131,11 +131,11 @@ def test_aktifkan_izin_calls_helper(monkeypatch, capsys):
                         lambda *a, **k: FakeStatus(writable=False))
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: True)
     monkeypatch.setattr(uinput, "enable_for_user", fake_enable)
-    assert app_module.run_cli(["--aktifkan-izin"]) == 0
+    assert app_module.run_cli(["--enable-permissions"]) == 0
     assert calls == ["tester"]
     out = capsys.readouterr().out
-    assert "Izin diaktifkan" in out
-    assert "Login" in out or "login" in out
+    assert "Permissions enabled" in out
+    assert "Log out" in out or "log out" in out
 
 
 def test_aktifkan_izin_noop_when_already_writable(monkeypatch, capsys):
@@ -144,18 +144,18 @@ def test_aktifkan_izin_noop_when_already_writable(monkeypatch, capsys):
                         lambda *a, **k: FakeStatus(writable=True))
     monkeypatch.setattr(uinput, "enable_for_user",
                         lambda *a, **k: calls.append(a) or (0, "", ""))
-    assert app_module.run_cli(["--aktifkan-izin"]) == 0
+    assert app_module.run_cli(["--enable-permissions"]) == 0
     assert calls == []
-    assert "sudah aktif" in capsys.readouterr().out
+    assert "already enabled" in capsys.readouterr().out
 
 
 def test_aktifkan_izin_without_pkexec_prints_manual_command(monkeypatch, capsys):
     monkeypatch.setattr(uinput, "status",
                         lambda *a, **k: FakeStatus(writable=False))
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: False)
-    assert app_module.run_cli(["--aktifkan-izin"]) == 2
+    assert app_module.run_cli(["--enable-permissions"]) == 2
     out = capsys.readouterr().out
-    assert "sudo usermod -aG paste-teks" in out
+    assert "sudo usermod -aG pastex" in out
 
 
 def test_aktifkan_izin_cancelled_password(monkeypatch, capsys):
@@ -164,15 +164,15 @@ def test_aktifkan_izin_cancelled_password(monkeypatch, capsys):
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: True)
     monkeypatch.setattr(uinput, "enable_for_user",
                         lambda *a, **k: (126, "", "dibatalkan"))
-    assert app_module.run_cli(["--aktifkan-izin"]) == 1
-    assert "dibatalkan" in capsys.readouterr().out
+    assert app_module.run_cli(["--enable-permissions"]) == 1
+    assert "cancelled" in capsys.readouterr().out
 
 
 # --- Dialog kegagalan paste ----------------------------------------------
 
 def test_paste_failure_dialog_mentions_cli(monkeypatch):
     """Kegagalan paste tetap menjelaskan izin + menyebut perintah CLI."""
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     shown = []
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
@@ -180,28 +180,28 @@ def test_paste_failure_dialog_mentions_cli(monkeypatch):
     monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
 
     fake = type("F", (), {})()
-    PasteTeksApp._show_paste_failure(fake, "ydotool tidak tersedia")
+    PastexApp._show_paste_failure(fake, "ydotool tidak tersedia")
     assert shown, "dialog kegagalan harus muncul"
     text = shown[-1][2]
     assert "ydotool tidak tersedia" in text
     assert "Ctrl+V" in text
-    assert "--aktifkan-izin" in text
+    assert "--enable-permissions" in text
 
 
 def test_paste_failure_dialog_ready_case_stays_simple(monkeypatch):
-    from paste_teks.app import PasteTeksApp
+    from pastex.app import PastexApp
 
     shown = []
     monkeypatch.setattr(uinput, "status",
                         lambda *a, **k: FakeStatus(writable=True))
     monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
-    PasteTeksApp._show_paste_failure(type("F", (), {})(), "clipboard kosong")
+    PastexApp._show_paste_failure(type("F", (), {})(), "clipboard kosong")
     assert "clipboard kosong" in shown[-1][2]
 
 
 def test_cli_hint_mentions_both_flags():
-    assert "--izin" in uinput.CLI_HINT
-    assert "--aktifkan-izin" in uinput.CLI_HINT
+    assert "--permissions" in uinput.CLI_HINT
+    assert "--enable-permissions" in uinput.CLI_HINT
 
 
 def test_no_gui_dependency_left_in_permission_paths():

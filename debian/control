@@ -1,4 +1,4 @@
-Source: paste-teks
+Source: pastex
 Section: utils
 Priority: optional
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
@@ -7,19 +7,20 @@ Standards-Version: 4.6.2
 Homepage: https://github.com/patrickbuhagiar24/paste
 Rules-Requires-Root: no
 
-Package: paste-teks
+Package: pastex
 Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.10), python3-tk
+Conflicts: paste-teks
+Replaces: paste-teks
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
-Description: GUI paste teks hierarki dari berkas .txt — tempel ke aplikasi lain satu klik
- Paste Teks menampilkan berkas .txt dalam hierarki kategori/folder (GUI).
- Double-click atau tombol "Paste ke Aplikasi Lain" menyalin teks ke clipboard
- dan mengirim Ctrl+V otomatis ke aplikasi yang sedang fokus.
+Description: One-click desktop text snippet manager for Ubuntu 26.10
+ Pastex displays .txt files as a hierarchy of categories and folders.
+ Click a text file once to copy its contents and send Ctrl+V to the previously
+ active app. A preview, search, and built-in editor are also included.
  .
- Mendukung Ubuntu 26.10 (GNOME Wayland & X11): clipboard via
- wl-copy/xclip/xsel, paste otomatis via ydotool/xdotool.
+ Supports Ubuntu 26.10 (GNOME Wayland and X11), using wl-copy/xclip/xsel
+ for clipboard access and ydotool/xdotool for automatic paste.
  .
- Paket tidak lagi membawa contoh bawaan; pilih satu folder sumber lewat
- tombol "Pilih Folder Sumber" di GUI, atau minta contoh dengan
- paste-teks --ekspor-data. Teks pribadi disimpan di
- ~/.local/share/paste-teks/snippets dan bisa ditambah/diedit dari GUI.
+ Choose a source folder in the GUI, or create example snippets with
+ pastex --export-data. User snippets are stored under
+ ~/.local/share/pastex/snippets and can be managed in the GUI.

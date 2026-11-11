@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Buat repo APT lokal dari .deb paste-teks dan daftarkan sebagai apt source.
+# Build a local Pastex APT repository and register it as an APT source.
 #
-# Pakai:
-#   ./scripts/setup-apt-repo.sh            # bangun .deb + repo lokal (file://)
-#   ./scripts/setup-apt-repo.sh --serve    # + jalankan server HTTP di port 8080
-#   GPG_KEY=... ./scripts/setup-apt-repo.sh  # tanda tangani Release dengan GPG
+# Usage:
+#   ./scripts/setup-apt-repo.sh            # build the package and local repo
+#   ./scripts/setup-apt-repo.sh --serve    # also serve on port 8080
+#   GPG_KEY=... ./scripts/setup-apt-repo.sh  # sign the Release with GPG
 #
-# Setelah selesai:
-#   sudo apt update && sudo apt install paste-teks
+# When complete:
+#   sudo apt update && sudo apt install pastex
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,64 +17,64 @@ REPO_DIR="apt-repo/dist"
 mkdir -p "$REPO_DIR"
 cp dist/*.deb "$REPO_DIR/"
 
-# Generate Packages (+ Packages.gz) — butuh dpkg-scanpackages (dpkg-dev).
+# Generate Packages and Packages.gz (requires dpkg-scanpackages from dpkg-dev).
 if command -v dpkg-scanpackages >/dev/null 2>&1; then
   (cd "$REPO_DIR" && dpkg-scanpackages --arch all . > Packages)
   gzip -9 -k -f "$REPO_DIR/Packages"
 else
-  echo "Peringatan: dpkg-scanpackages tidak ditemukan (pasang dpkg-dev)." >&2
+  echo "Warning: dpkg-scanpackages was not found (install dpkg-dev)." >&2
   exit 1
 fi
 
-# Generate Release (butuh apt-ftparchive dari apt-utils; fallback manual).
+# Generate Release (needs apt-ftparchive from apt-utils; manual fallback).
 if command -v apt-ftparchive >/dev/null 2>&1; then
   cat > "$REPO_DIR/apt-ftparchive.conf" <<'EOF'
-APT::FTPArchive::Release::Origin "Paste Teks";
-APT::FTPArchive::Release::Label "Paste Teks";
+APT::FTPArchive::Release::Origin "Pastex";
+APT::FTPArchive::Release::Label "Pastex";
 APT::FTPArchive::Release::Suite "stable";
 APT::FTPArchive::Release::Codename "stable";
 APT::FTPArchive::Release::Architectures "all";
 APT::FTPArchive::Release::Components "main";
-APT::FTPArchive::Release::Description "Repo APT Paste Teks untuk Ubuntu 26.10";
+APT::FTPArchive::Release::Description "Pastex APT repository for Ubuntu 26.10";
 EOF
   (cd "$REPO_DIR" && apt-ftparchive -c apt-ftparchive.conf release . > Release)
 else
-  echo "Peringatan: apt-ftparchive tidak ditemukan (pasang apt-utils); Release dibuat manual." >&2
+  echo "Warning: apt-ftparchive was not found (install apt-utils); creating Release manually." >&2
   {
-    echo "Origin: Paste Teks"
-    echo "Label: Paste Teks"
+    echo "Origin: Pastex"
+    echo "Label: Pastex"
     echo "Suite: stable"
     echo "Codename: stable"
     echo "Architectures: all"
     echo "Components: main"
-    echo "Description: Repo APT Paste Teks untuk Ubuntu 26.10"
+    echo "Description: Pastex APT repository for Ubuntu 26.10"
     echo "Date: $(date -Ru)"
   } > "$REPO_DIR/Release"
 fi
 
-# Tandatangani Release bila GPG_KEY diisi.
+# Sign the Release when GPG_KEY is set.
 if [ -n "${GPG_KEY:-}" ]; then
   gpg --default-key "$GPG_KEY" --armor --detach-sign -o "$REPO_DIR/Release.gpg" "$REPO_DIR/Release"
   gpg --default-key "$GPG_KEY" --clearsign -o "$REPO_DIR/InRelease" "$REPO_DIR/Release"
-  echo "Release ditandatangani dengan kunci $GPG_KEY."
-  echo "Ekspor kunci publik: gpg --armor --export $GPG_KEY > paste-teks.gpg"
+  echo "Release signed with key $GPG_KEY."
+  echo "Export the public key: gpg --armor --export $GPG_KEY > pastex.gpg"
 fi
 
 REPO_ABS="$(pwd)/$REPO_DIR"
-echo "Repo APT siap di: $REPO_ABS"
+echo "APT repository is ready at: $REPO_ABS"
 echo
-echo "Tambahkan source (file://):"
-echo "  echo \"deb [trusted=yes] file://$REPO_ABS ./\" | sudo tee /etc/apt/sources.list.d/paste-teks.list"
+echo "Add the source (file://):"
+echo "  echo \"deb [trusted=yes] file://$REPO_ABS ./\" | sudo tee /etc/apt/sources.list.d/pastex.list"
 if [ -n "${GPG_KEY:-}" ]; then
-  echo "Atau dengan tanda tangan (lebih aman):"
-  echo "  gpg --armor --export $GPG_KEY | sudo gpg --dearmor -o /usr/share/keyrings/paste-teks.gpg"
-  echo "  echo \"deb [signed-by=/usr/share/keyrings/paste-teks.gpg] file://$REPO_ABS ./\" | sudo tee /etc/apt/sources.list.d/paste-teks.list"
+  echo "Or use signed metadata (recommended):"
+  echo "  gpg --armor --export $GPG_KEY | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg"
+  echo "  echo \"deb [signed-by=/usr/share/keyrings/pastex.gpg] file://$REPO_ABS ./\" | sudo tee /etc/apt/sources.list.d/pastex.list"
 fi
 echo
-echo "Lalu: sudo apt update && sudo apt install paste-teks"
+echo "Then run: sudo apt update && sudo apt install pastex"
 
 if [ "${1:-}" = "--serve" ]; then
-  echo "Menjalankan server HTTP di http://localhost:8080 (Ctrl+C untuk berhenti)..."
-  echo "Di mesin lain tambahkan: deb [trusted=yes] http://<IP>:8080 ./"
+  echo "Serving HTTP at http://localhost:8080 (press Ctrl+C to stop)..."
+  echo "On another machine, add: deb [trusted=yes] http://<IP>:8080 ./"
   (cd "$REPO_DIR" && python3 -m http.server 8080)
 fi

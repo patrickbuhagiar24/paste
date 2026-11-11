@@ -1,0 +1,18 @@
+# Narrowly scoped permissions for Pastex automatic paste (ydotool).
+#
+# Allow users in the active graphical session to write /dev/uinput without joining
+# the 'input' group, which grants access to all keyboards and mice (like a keylogger),
+# and without logging out and back in.
+#
+# TAG+="uaccess" tells systemd-logind to grant an rw ACL to the active session.
+# It takes effect as soon as the device appears or the rule is reloaded,
+# without requiring a new session. This is also used by
+# Solaar, Steam, and game-devices-udev.
+#
+# OPTIONS+="static_node=uinput" ensures the node (with its ACL) exists from
+# boot, even before the uinput module is loaded.
+#
+# GROUP/MODE remain as a fallback when ACLs are unavailable
+# (for example, SSH sessions, containers, or systems without logind). Members of
+# the 'pastex' group only gain access to uinput, not other devices.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", GROUP="pastex", MODE="0660"
