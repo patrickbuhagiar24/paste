@@ -462,8 +462,10 @@ class PasteTeksApp(_TkBase):  # type: ignore[misc,valid-type]
         self.collapsed = set() if query else self._collapsed_paths()
         total = 0
         for root_node in nodes:
-            self._insert_node(
-                "", root_node, label=self._root_label(root_node.path))
+            # Folder sumber adalah wadah, bukan kategori: tampilkan isinya
+            # langsung di tingkat teratas, termasuk berkas di akar folder.
+            for child in root_node.children:
+                self._insert_node("", child)
             total += root_node.count_texts()
         self._show_empty_state(not nodes)
         if query:
