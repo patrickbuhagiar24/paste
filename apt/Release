@@ -1,24 +1,24 @@
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 12 Nov 2026 05:46:02 +0000
+Date: Thu, 12 Nov 2026 05:47:46 +0000
 Description: Pastex APT repository for Ubuntu 26.10
 Label: Pastex
 Origin: Pastex
 Suite: stable
 MD5Sum:
- d60f41c58d74439ee4125c0e9bcd272b             1175 Packages
- 23bdea80b896256bcdc13dad1094b796              750 Packages.gz
- 032a7b5d8d6e25e551653bf24683cb39              186 Release
+ d947a57a674694e6670f6289b16a1ba9             1175 Packages
+ d5c7cafab7763de5240fd0db5856a9b8              753 Packages.gz
+ 2428fed608a47e24732e2fd80d40bd09              186 Release
 SHA1:
- b4bd2acb9a383ad740fc392899c2c084a4402edc             1175 Packages
- 3b52eb8bda422da62bbff6e5e3e06575916918ed              750 Packages.gz
- 3eb2a456bdeaace9cee741fcb6e2473232d774f4              186 Release
+ 80b21bac821631f7f58cbce2d8df0c974c1c198e             1175 Packages
+ 5a2f7d083d9232a4e32c22a4245182bc7b411602              753 Packages.gz
+ 7109457137904c6075318620375a6a66d75cf802              186 Release
 SHA256:
- 21fc3f07bbea5eb5f9d1e2499289c776d24c79b55a472c1727a2dcfc6bd46764             1175 Packages
- ec9dc60df79a12a8bb2f576b162c17bd2031080d5a89b92dcd4edeb8021d8282              750 Packages.gz
- daa780ee6a287f2a300c44efbc325fdf5acf297fdef7b3ff11bace8ad874d063              186 Release
+ b2523b739f9f86f20ec79be490fa9b00b7c2fd097f1eb3a1caf7b6314da1a204             1175 Packages
+ 720ed60dad750a6968b937d9194225342c0ab5815ccbb51efe69f0ca17fc905e              753 Packages.gz
+ 6892efd49267d525f3519f5bf4445dbaceeae2ba174a25e9441284763756addd              186 Release
 SHA512:
- 8e59d82282a1f8fe302e23340e1cd3708be0225ead3d2503086e4ed608e25bbcb5b24b49855a9f1483757e15281990f1df890b46171461e6647f156906099d41             1175 Packages
- 268cb6e4b4557a5ec2423c36b3e727bc18b736716cae7669dfed2aee9e118f7d54bdc1e08a3a3aee15463f1e6c3d1ee532069e5e763f7cd7366e90292d781df5              750 Packages.gz
- 37c4e171f4d998a865f4398fd72d37d6547905a71f027a0dd41aa3e3793907e31b9c708bbfc3dd2433ddff63f6892ad869c734111dd4176e547f24d72cb3ada5              186 Release
+ dd7a795f8476d16bb319d858e7c5a7d8d5cfce2a237889b67655f2a7bb5581caee73137769dca308efd280504d06d3bc1973a7e67a9e8e7fc82b13e4af2844f0             1175 Packages
+ d39756f57bdb2dea7a718d46f8f1ff7c67279444d52e8f8d06b2053cacfb8114a881ab250b7236ff825aef28e1a40d3cfccc454e82fb59c7d370d9bb49fbbb31              753 Packages.gz
+ a3ff1410788b32ca9b77d6dd0023f7114aae40880953088826c236fc8650f94c93c27c263419628a04656d6e644dcf3be5d30a4657bc698b817e736bfcd0ae63              186 Release
