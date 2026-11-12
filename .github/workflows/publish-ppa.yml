@@ -76,6 +76,8 @@ jobs:
         run: |
           set -euo pipefail
           upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
+          rm -rf .pytest_cache
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
           git archive --format=tar --prefix="pastex-${upstream_version}/" HEAD -- . ':(exclude)debian' \
             | gzip -n > "../pastex_${upstream_version}.orig.tar.gz"
           source_version="$(dpkg-parsechangelog --show-field Version)"
