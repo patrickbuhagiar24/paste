@@ -27,11 +27,7 @@ PPA uploads are started manually by a maintainer when requested; pushing ordinar
 After the GitHub Pages APT repository has been published, add it to your APT sources and install Pastex:
 
 ```bash
-curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg
-```
-
-```bash
-echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg && echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
 ```
 
 ```bash
