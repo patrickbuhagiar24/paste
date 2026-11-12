@@ -7,10 +7,10 @@ Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
 Conflicts: paste-teks
 Replaces: paste-teks
 Filename: ./pastex_1.6.1-1_all.deb
-Size: 38200
-MD5sum: 6ae3fd5321aa10a67267255082e07b14
-SHA1: e4bc566eb340226a57f2674526e028b3c77b2ee4
-SHA256: b9df01adccc1465026307e0513d655cd41af79d81600f3029219fcbb026876df
+Size: 38340
+MD5sum: 86ce9bf6c7f9f98d560294fdfa9fadbc
+SHA1: 062c6bde5529136cad05e25c188ed6e31fec1c93
+SHA256: 3dfc4344535b6371cd2b43632585727a54cda55add90a61cfe1928697313d216
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
