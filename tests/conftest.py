@@ -25,15 +25,29 @@ class FakeTree:
         self.deleted = 0
         self._selection: tuple[str, ...] = ()
         self._focus = ""
+        self._child_order: dict[str, list[str]] = {}
         self.packed = None
 
     # -- API yang dipakai app.py --
     def delete(self, *items):
         self.deleted += 1
         self.rows.clear()
+        self._child_order.clear()
 
     def get_children(self, item=""):
-        return tuple(r["iid"] for r in self.rows if r["parent"] == item)
+        children = [r["iid"] for r in self.rows if r["parent"] == item]
+        saved = self._child_order.get(item, [])
+        rank = {iid: index for index, iid in enumerate(saved)}
+        return tuple(sorted(children, key=lambda iid: rank.get(iid, len(rank))))
+
+    def parent(self, iid):
+        return next(r["parent"] for r in self.rows if r["iid"] == iid)
+
+    def move(self, iid, parent, index):
+        children = list(self.get_children(parent))
+        children.remove(iid)
+        children.insert(int(index), iid)
+        self._child_order[parent] = children
 
     def exists(self, iid):
         return any(r["iid"] == iid for r in self.rows)

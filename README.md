@@ -1,53 +1,44 @@
 # Pastex
 
-Pastex is a lightweight desktop app for browsing and pasting text snippets from `.txt` files on Ubuntu (GNOME Wayland and X11). Organize files in folders, hover over an item to highlight it, then click a text file once to paste its contents into the previously active app.
+Pastex is a desktop app for organizing and pasting text snippets from `.txt` files on Ubuntu (GNOME Wayland and X11). Arrange files in folders, hover to preview, and click a text file once to paste it into the previously active app.
 
-## Features
+## Install (APT only)
 
-- Folder hierarchy displayed as categories and text snippets.
-- One-click paste: Pastex copies the selected file, briefly hides its window, sends `Ctrl+V`, then reappears.
-- Hover highlighting and a live text preview.
-- Search by file name or contents.
-- Create categories and snippets, edit or delete entries, and open the source folder.
-- Choose one source folder; new and edited snippets are saved there.
-- Optional always-on-top setting and persistent folder expansion state.
-- Clipboard support through `wl-copy`, `xclip`, or `xsel`; paste simulation through `ydotool` or `xdotool`.
+APT is the only documented installation method for Pastex. On Ubuntu 26.10, install it from the Pastex PPA:
+
+```bash
+sudo add-apt-repository ppa:unisys/pastex
+sudo apt update
+sudo apt install pastex
+```
+
+PPA uploads are started manually by a maintainer when requested; pushing ordinary source changes does not upload a package to the PPA. Launchpad must finish building and publishing the package before APT can install it.
 
 ## Use
 
 1. Launch Pastex and choose **Choose Source Folder**.
-2. Move the pointer over a `.txt` entry to highlight it.
-3. Click a text entry once. Pastex pastes it into the app that was active before Pastex.
+2. Click a text file once to paste its contents into the app that was active before Pastex.
+3. Right-click a text file or folder to select it, edit it, delete it, or move it up or down within its folder. Editing a folder changes its name.
+4. Click the displayed source-folder name to open that location in the file manager.
 
-Press `Enter` to paste the selected file, `F5` to refresh, `F2` to edit, and `Delete` to remove the selected item. Selecting a folder only navigates the tree; it does not paste.
+Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the selected item, and `Delete` to remove it. Folders are not pasted.
 
-## Install
+## Features
 
-### Build a Debian package
-
-```bash
-./scripts/build-deb.sh
-sudo apt install ./dist/pastex_*_all.deb
-```
-
-The package installs the `pastex` command, desktop launcher, application icon, udev rule, and optional `ydotoold` integration.
-
-### Run from a checkout
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
-pastex
-```
-
-Alternatively, run `./bin/pastex` from the repository root. Python 3.10+ and `python3-tk` are required.
+- Nested folders and `.txt` snippets.
+- One-click paste with hover highlighting and a live preview.
+- Search by file name or contents.
+- Create folders and text files; edit snippets or rename folders.
+- Select and reorder text files and folders from the context menu.
+- Choose one source folder; new and edited snippets are saved there.
+- Optional always-on-top setting and persistent folder expansion state.
+- Clipboard tools: `wl-copy`, `xclip`, or `xsel`; paste simulation: `ydotool` or `xdotool`.
 
 ## Clipboard and permissions
 
 Pastex uses `wl-clipboard` on Wayland where available, and `xclip` or `xsel` on X11. Automatic paste on Wayland uses `ydotool` and `/dev/uinput`; X11 can use `xdotool`.
 
-The Debian package installs a narrowly scoped udev rule for `/dev/uinput` and configures the `pastex` system group as a fallback. Usually, no manual setup is needed. If paste does not work, inspect the environment:
+If paste does not work, inspect the environment:
 
 ```bash
 pastex --check
@@ -87,12 +78,13 @@ pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
 
 A chosen source folder is remembered between sessions. The `--dir` option only affects the current run and does not change that saved choice.
 
-## Build and tests
+## Maintainer checks
+
+The application is distributed to users through APT. To run the test suite on Ubuntu, install the test prerequisites with APT and run the tests from the checkout:
 
 ```bash
-python3 -m pip install -e '.[test]'
-pytest -q
-./scripts/build-deb.sh
+sudo apt install python3-pytest python3-tk xvfb xauth x11-utils
+python3 -m pytest tests/ -q
 ```
 
-See [`apt-repo/README.md`](apt-repo/README.md) for the APT repository publishing guide.
+See [`apt-repo/README.md`](apt-repo/README.md) for details about the optional GitHub Pages APT repository.

@@ -60,7 +60,7 @@ Conflicts: paste-teks
 Replaces: paste-teks
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
 Description: One-click desktop text snippet manager for Ubuntu 26.10
- Pastex displays .txt files as a hierarchy of categories and folders.
+ Pastex displays .txt files in a hierarchy of folders.
  Click a text file once to copy its contents and send Ctrl+V to the previously
  active app. A preview, search, and built-in editor are also included.
  .
