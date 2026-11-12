@@ -4,40 +4,40 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 12 Nov 2026 05:49:11 +0000
+Date: Thu, 12 Nov 2026 05:50:24 +0000
 Description: Pastex APT repository for Ubuntu 26.10
 Label: Pastex
 Origin: Pastex
 Suite: stable
 MD5Sum:
- 2c34c1af0599de90bd18ae18d2fa09bc             1175 Packages
- 207cb4b474018c4a820d7399a08bbed8              752 Packages.gz
- d751888351f57ae03f68a1b15b078e8f              186 Release
+ d13b40cbb30301f3a1a8f1a1f7fa208d             1175 Packages
+ 2b385f0a5933164428046d999ab925cb              753 Packages.gz
+ 51be80409957db9b33930ed0e3549238              186 Release
 SHA1:
- 83c6bad1b9f5c124e0b1a0ae960f0a941c6f7a63             1175 Packages
- 13941581c79666515de28188ade6865f20194cba              752 Packages.gz
- c67c4fd0dd1fd37681a5a15b3d0bbc235ba53fcc              186 Release
+ 9f8b20efa03f771d90f72f671d30559fc6220fca             1175 Packages
+ 34dee51e307b0ca04b49580ec6ef5e1384a1370e              753 Packages.gz
+ 0acd83568d0a24137e89b84a1da0e9e27cd86a27              186 Release
 SHA256:
- 939ba193126c6333ee046c75a9eb6b88da5d1d138a8c846d1cc5b6e159596a8e             1175 Packages
- cfaf668cbe84aada27c9b945a43d7f6f7fe8ff104f16ac8617cd07ad9018938c              752 Packages.gz
- 17b1efdd64fed936a52b5e31848f923fb1942eb018b02e6407ed0c7007e13960              186 Release
+ 529f057b76ebbc4cbb2e0c6b13399a02628099c126f673c2f2f03b22805dcfb0             1175 Packages
+ e972cb4c013ca4552d3e1acaccc231f409c9cfcd57b44a50aec911dad43f0334              753 Packages.gz
+ 301ed18c605d1971a3a3e91a769551ed72efff8a6759a7b01f3bff7d1fbe525e              186 Release
 SHA512:
- 3df332bc123f33993f7ef1f7d45d4d3283807c5543238c5728b0ecf629e38e4f250dcbc09b29a31222274f6728e6ce1886658c763add0d0ef028d637c1aaea6f             1175 Packages
- 5b33eef37310455b10281dd1497ae25abaeeda865b7457bd759a8e8f71f8e26652cbe857c7363f27398a723e3ae92feb7e3d3a28c333bd35339611d2dfe8d664              752 Packages.gz
- f3a62f25e8c720f09a4a500cd655304811ac3a9424654d4a995a3de37abced9f28a265530757fcad54fa241e7c821caf8a54981fbd07170bd08d7a33261a42fb              186 Release
+ cbfb2ab0bd1d5db3911c43549afb97e12579169a5187698ac7cf091aeab2c1e27d41592822516e82da5d42076fdb16122b17fddad210b1a951b9aaec3ecdf0f9             1175 Packages
+ 926b4a421d2f5b0ed761e3bcdf10259f6b92b6daf5bb771324a47c09a327ce8900d3ff83f8ec4507a65c77b0f9111bf41a536a0f459214bd758eff723d65d397              753 Packages.gz
+ 330679c149066a3679ae364c222c9d89d718e43ed4d8f5ba24de7baa1ebaf44edbd25477c427583b8459693d44485946cf480cbba375f4bc913616ae160ea4d0              186 Release
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr1U1kACgkQ5gn+foNK
-lYiXNg/9FXAYI0e0O2chexRTvVJd2Z9zDG/IFhMdTRtMF9yu+OhIokoiYQib9yhm
-33Om+XobeHJoHiJ13h6y3AxN9rLruvYsr98dT/ZDLMerzwBZ8/ouLBDCxhNGyxli
-aZ3sH5+N9YPMdapfYDrFuNhed/XLrnP63umlgHY1vwJNofST66ym7zRk2x2W8k1R
-XNuSiXHN8Wou3BKcutVO/OtUVVLrnLgwfviQ9APCKIObbg8C59bI7zitoMlYsC9H
-CS4UJYoMRQLMfgWqMsG/aE6C5GIl2cPw3P2Uwx3y4PEVxV5TwwpvN3gucg5Q0u1z
-KvxnA+ROx0hyjB/MNFx+j9XyFBeal3oEJGOcKNFvDXvzRVw29HIpEzugMRV1U2tG
-uKVm8fKojyI8hPnFOQbUtObCIf4NsHufD/qMdImj+DXkIcHB0UxSP8nLK0WrdNYp
-WFXa5GlYtjCKO9L0hN4xTM/M9U8bsXwzklqAGd681QBGnEyx+tKOPlePHywmySEy
-H68kTOb7WrBX4ADC0+rRRT4vdC25b3FyQFgtrWWCxis1VAqBBvJAP70mBrVXh/kP
-xjvQQxCneWc0X9BHdgsiD9X7YuJa8Ovrl6JREpQY1h8f+d5+zh2HIJxsG64WHfvJ
-RB6aP7C9+F0EdEJDy0nzJH2Z5rvd6YqAT6ra5cOUHewAhXcX9ZQ=
-=Hv9T
+iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr1U6EACgkQ5gn+foNK
+lYgO0Q//YBCW/VjdMTE6cEugByosE4DGxOVuooV2m2r1e7/LakQDqSnD7mso/rqd
+STlK0c+u6G1wfY7CRvpWbqQ6ishxe1MVsU1BbuVaziteanm4gfxWo5wwsHnYDuu5
+RaTH6/ObKN45Q9qcRNN0kL3sZaDy1r8Z0pZI5FnQBbMFjA0FgfGz+54Vqq9lIgO4
+23H7hidkla//Bh9tSpWWE0pU9khNZVe6oD4pA3TXwP546mj2CKHl/Qq0kJbXTMnB
+joQP8stNvgPS1bU/jBTjr2eTNwkYi8A+S3a4Q0GkwHtKkzC3W8tH5ocUtwgwhz2A
+jP1VOnWJ5Xcs9wYsrYwI1Vi6wUrg1q1rqii5enSto6c3JAP3K1Q2HYxC8oGfPEhr
+cSdPCd8394uGVM+Dk0SOn9xKYwPfg8UFU+glGQ/WKGwTOSo0dyGaR0GqAkyRcjik
+vU0luwEzAARsyvCUV6mDp2GvICAqSbUBkvNbegnneFmXkbfFSB0Kt3vVX5jzA6ji
+FFrjqS+bBUiONBiYVKLB46lHAXycBsGXhw722nkXV68HcU4WGD7TxLYFIEPFcDeb
+6msBNOYXj0akifCc2dSZm6NeZHjTlCt+3vUvRyuT3+HIafJF/HtVoZdhfijRRLbr
+2UO92jOop97cHNVJbg66JTzgYCy5Qd3VNXUfJFiymVqR9rRQPtg=
+=FHx4
 -----END PGP SIGNATURE-----
