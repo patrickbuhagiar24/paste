@@ -2,9 +2,11 @@
 
 Pastex is a desktop app for organizing and pasting text snippets from `.txt` files on Ubuntu (GNOME Wayland and X11). Arrange files in folders, hover to preview, and click a text file once to paste it into the previously active app.
 
-## Install (APT only)
+## Install
 
-APT is the only documented installation method for Pastex. On Ubuntu 26.10, install it from the Pastex PPA:
+Pastex is installed through APT on Ubuntu 26.10. Choose either the Launchpad PPA or the GitHub Pages APT repository.
+
+### Launchpad PPA
 
 ```bash
 sudo add-apt-repository ppa:unisys/pastex
@@ -13,6 +15,18 @@ sudo apt install pastex
 ```
 
 PPA uploads are started manually by a maintainer when requested; pushing ordinary source changes does not upload a package to the PPA. Launchpad must finish building and publishing the package before APT can install it.
+
+### GitHub Pages APT repository
+
+After the GitHub Pages APT repository has been published, add it to your APT sources and install Pastex:
+
+```bash
+echo 'deb [trusted=yes] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+sudo apt update
+sudo apt install pastex
+```
+
+`[trusted=yes]` skips repository signature verification. For signed repository setup and troubleshooting, see [`apt-repo/README.md`](apt-repo/README.md).
 
 ## Use
 
