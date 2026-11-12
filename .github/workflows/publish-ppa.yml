@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
-          ppa_version="${upstream_version}-1ubuntu1~ppa${PPA_REVISION}"
+          ppa_version="${upstream_version}-2~ppa${PPA_REVISION}"
           DEBFULLNAME="Patrick Buhagiar"
           DEBEMAIL="patrickbuhagiar24@users.noreply.github.com"
           export DEBFULLNAME DEBEMAIL
