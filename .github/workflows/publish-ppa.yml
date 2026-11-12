@@ -78,9 +78,23 @@ jobs:
           upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
           git archive --format=tar --prefix="pastex-${upstream_version}/" HEAD -- . ':(exclude)debian' \
             | gzip -n > "../pastex_${upstream_version}.orig.tar.gz"
-          dpkg-source -b .
           source_version="$(dpkg-parsechangelog --show-field Version)"
-          dpkg-genchanges -S -sa -O"../pastex_${source_version}_source.changes"
+          build_log="$RUNNER_TEMP/source-build.log"
+          set +e
+          dpkg-source -b . > "$build_log" 2>&1
+          build_status=$?
+          if [[ $build_status -eq 0 ]]; then
+            dpkg-genchanges -S -sa -O"../pastex_${source_version}_source.changes" >> "$build_log" 2>&1
+            build_status=$?
+          fi
+          set -e
+          cat "$build_log"
+          if [[ $build_status -ne 0 ]]; then
+            while IFS= read -r line; do
+              echo "::error title=Source package build::$line"
+            done < "$build_log"
+            exit "$build_status"
+          fi
 
       - name: Sign source package with the Launchpad-registered key
         shell: bash
