@@ -1,4 +1,4 @@
-"""Pastex GUI — a hierarchy of categories and folders containing .txt files.
+"""Pastex GUI — a hierarchy of folders containing .txt files.
 
 Run: pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
 Click or press Enter on a .txt file to copy and paste it into another app.
@@ -22,8 +22,9 @@ from .clipboard import copy_text, simulate_paste
 from .snippets import (
     DEFAULT_SAMPLES,
     Node,
-    create_category,
+    create_folder,
     create_snippet,
+    rename_folder,
     default_roots,
     delete_path,
     flatten_texts,
@@ -151,8 +152,10 @@ DEFAULT_SETTINGS = {
     # User-selected source folder. If set, only this folder is displayed
     # and used for writes. The --dir argument does not change this value.
     "source_dir": None,
-    # Categories currently collapsed in the tree (absolute paths).
+    # Folders currently collapsed in the tree (absolute paths).
     "collapsed": [],
+    # Optional per-folder child ordering, keyed by absolute parent path.
+    "order": {},
 }
 
 def load_settings() -> dict:
@@ -171,6 +174,12 @@ def load_settings() -> dict:
     collapsed = settings.get("collapsed")
     settings["collapsed"] = [str(p) for p in collapsed] if isinstance(
         collapsed, (list, tuple)) else []
+    order = settings.get("order")
+    settings["order"] = {
+        str(parent): [str(name) for name in names if isinstance(name, str)]
+        for parent, names in order.items()
+        if isinstance(order, dict) and isinstance(names, (list, tuple))
+    } if isinstance(order, dict) else {}
     source = settings.get("source_dir")
     settings["source_dir"] = str(source) if isinstance(source, str) and source else None
     if settings_path == legacy_path:
@@ -297,31 +306,29 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.search_entry.pack(side="left", padx=(2, 6))
         buttons = (
             (self.refresh_tree, "↻ Refresh (F5)", (0, 0)),
-            (self.open_folder, "📂 Open Folder", (4, 0)),
-            (self.add_category, "＋ Category", (4, 0)),
+            (self.add_category, "＋ Folder", (4, 0)),
             (self.add_text, "＋ Text", (4, 0)),
-            (self.edit_selected, "✏️ Edit", (4, 0)),
-            (self.delete_selected, "🗑 Delete", (4, 0)),
-            (self.collapse_all_categories, "⊟ Collapse All", (4, 0)),
         )
         for command, label, padx in buttons:
             ttk.Button(toolbar, text=label, command=command).pack(
                 side="left", padx=padx)
-        # The source-folder button selects a single folder that is also the
-        # write destination. It is on the right so primary actions stay on the left.
+        # Choosing a source folder stays separate from opening its location.
         self.source_button = ttk.Button(toolbar, text="📁 Choose Source Folder",
                                         command=self.choose_source_dir)
         self.source_button.pack(side="right")
         self.source_var = tk.StringVar(value="")
-        ttk.Label(toolbar, textvariable=self.source_var,
-                  foreground="gray").pack(side="right", padx=(0, 6))
+        self.source_label = ttk.Label(toolbar, textvariable=self.source_var,
+                                      foreground="gray", cursor="hand2")
+        self.source_label.pack(side="right", padx=(0, 6))
+        self.source_label.bind("<Button-1>",
+                               lambda _event: self.open_source_folder())
 
         # Main panel: tree on the left, preview on the right.
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=6)
 
         left = ttk.Frame(paned)
-        ttk.Label(left, text="Categories / Folders → .txt Files").pack(anchor="w")
+        ttk.Label(left, text="Folders → .txt Files").pack(anchor="w")
         # Keep one container and switch between the tree and the empty state.
         self.tree_area = ttk.Frame(left)
         self.tree_area.pack(fill="both", expand=True)
@@ -338,7 +345,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ttk.Label(
             self.empty_frame,
             text="No source folder selected.\n\nChoose a folder containing .txt files —\n"
-                 "its folder hierarchy will become categories, and new files will be saved there.",
+                 "its folder hierarchy will appear here, and new files will be saved there.",
             justify="center", foreground="gray").pack()
         ttk.Button(self.empty_frame, text="📁 Choose Source Folder",
                    command=self.choose_source_dir).pack(pady=12)
@@ -374,16 +381,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ttk.Label(self, textvariable=self.status_var, relief="sunken",
                   anchor="w", padding=4).pack(fill="x", side="bottom")
 
-        # Context menu (right-click)
+        # Context menu is populated for each right-clicked text or folder.
         self.menu = tk.Menu(self, tearoff=0)
-        self.menu.add_command(label="⚡ Paste into Another App",
-                              command=self.do_paste)
-        self.menu.add_separator()
-        self.menu.add_command(label="✏️ Edit", command=self.edit_selected)
-        self.menu.add_command(label="🗑 Delete", command=self.delete_selected)
-        self.menu.add_separator()
-        self.menu.add_command(label="⊟ Collapse All Categories",
-                              command=self.collapse_all_categories)
+        self._context_iid = ""
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Button-2>", self._on_right_click)
         self.tree.bind("<Control-Button-1>", self._on_right_click)
@@ -391,7 +391,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind("<Leave>", self._clear_tree_hover)
         self.tree.bind("<ButtonRelease-1>", self._on_single_click)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
-        # Save expanded/collapsed category state so it survives refreshes
+        # Save expanded/collapsed folder state so it survives refreshes
         # and future sessions (settings.json -> "collapsed").
         self.tree.bind("<<TreeviewOpen>>",
                        lambda e: self._toggle_collapsed(self._event_iid(e)))
@@ -454,18 +454,45 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.do_paste()
 
     def _on_right_click(self, event):
-        """Select the clicked row and open the context menu at the pointer."""
+        """Open actions for the row under the pointer without selecting it yet."""
         row = self.tree.identify_row(event.y)
         if not row:
             return "break"
-        self.tree.selection_set(row)
+        self._context_iid = row
         self.tree.focus(row)
-        self.show_preview()
+        self.menu.delete(0, "end")
+        self.menu.add_command(label="Select", command=self.select_context_item)
+        self.menu.add_separator()
+        self.menu.add_command(
+            label="Edit", command=lambda: self._run_context_action(self.edit_selected))
+        self.menu.add_command(
+            label="Delete", command=lambda: self._run_context_action(self.delete_selected))
+        self.menu.add_separator()
+        self.menu.add_command(
+            label="↑ Up", command=lambda: self._run_context_action(
+                lambda: self.move_selected(-1)))
+        self.menu.add_command(
+            label="↓ Down", command=lambda: self._run_context_action(
+                lambda: self.move_selected(1)))
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
         return "break"
+
+    def select_context_item(self) -> None:
+        """Select and preview the row that opened the context menu."""
+        iid = getattr(self, "_context_iid", "")
+        if not iid or not self.tree.exists(iid):
+            return
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self.show_preview()
+
+    def _run_context_action(self, action) -> None:
+        """Run a context-menu action against the row that was right-clicked."""
+        self.select_context_item()
+        action()
 
     def _event_iid(self, event) -> str:
         """Get a Treeview item id from an event, with focus/row lookup as fallback."""
@@ -511,20 +538,35 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.tree.pack(side="left", fill="both", expand=True)
             self.scroll.pack(side="right", fill="y")
 
+    def _apply_saved_order(self, nodes: list[Node]) -> None:
+        """Apply each folder's persisted sibling order, keeping new items visible."""
+        order_map = self.settings.get("order") or {}
+        for node in nodes:
+            if not node.is_dir:
+                continue
+            preferred = order_map.get(_norm_path(node.path), [])
+            rank = {name: index for index, name in enumerate(preferred)}
+            default_index = {child.path.name: index
+                             for index, child in enumerate(node.children)}
+            node.children.sort(key=lambda child: (
+                rank.get(child.path.name, len(rank) + default_index[child.path.name])))
+            self._apply_saved_order(node.children)
+
     def refresh_tree(self) -> None:
         self._hover_iid = ""
         self.tree.delete(*self.tree.get_children())
         roots = self.active_roots()
         nodes = scan_roots(roots)
+        self._apply_saved_order(nodes)
         query = self.search_var.get().strip()
         if query:
             nodes = filter_tree(nodes, search_nodes(nodes, query))
-        # Expand all categories during search so results are visible. Otherwise,
+        # Expand all folders during search so results are visible. Otherwise,
         # restore the saved collapsed state.
         self.collapsed = set() if query else self._collapsed_paths()
         total = 0
         for root_node in nodes:
-            # The source folder is a container, not a category; show its contents
+            # The source folder is a container; show its contents
             # directly at the top level, including files at the root.
             for child in root_node.children:
                 self._insert_node("", child)
@@ -544,7 +586,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         source = getattr(self, "settings", {}).get("source_dir")
         if source:
-            var.set(f"📁 {Path(source).name}")
+            var.set(f"📁 {Path(source).name} ↗")
         else:
             var.set("")
 
@@ -564,7 +606,40 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._insert_node(iid, child)
         return iid
 
-    # ---------- Source folder and collapsed categories ----------
+    def move_selected(self, direction: int) -> None:
+        """Move the selected text or folder among its siblings and save its order."""
+        path = self.selected_path()
+        if path is None:
+            return
+        if self.search_var.get().strip():
+            self.status_var.set("Clear the search before changing item order.")
+            return
+        selection = self.tree.selection()
+        if not selection:
+            return
+        iid = selection[0]
+        parent_iid = self.tree.parent(iid)
+        siblings = list(self.tree.get_children(parent_iid))
+        try:
+            index = siblings.index(iid)
+        except ValueError:
+            return
+        target = index + (-1 if direction < 0 else 1)
+        if target < 0 or target >= len(siblings):
+            self.status_var.set("Item is already at the edge of this folder.")
+            return
+        self.tree.move(iid, parent_iid, target)
+        siblings = list(self.tree.get_children(parent_iid))
+        order = dict(self.settings.get("order") or {})
+        order[_norm_path(path.parent)] = [
+            Path(item.split("#", 1)[0]).name for item in siblings
+        ]
+        self.settings["order"] = order
+        if not getattr(self, "transient_roots", False):
+            save_settings(self.settings)
+        self.status_var.set(f"Moved '{path.name}' {'up' if direction < 0 else 'down'}.")
+
+    # ---------- Source folder and collapsed folders ----------
     def choose_source_dir(self) -> Path | None:
         """Choose one source folder, which will also be the write destination.
 
@@ -590,18 +665,18 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return path
 
     def _collapsed_paths(self) -> set[str]:
-        """Return the saved collapsed categories as normalized paths."""
+        """Return the saved collapsed folders as normalized paths."""
         stored = self.settings.get("collapsed") or []
         return {_norm_path(p) for p in stored if str(p).strip()}
 
     def _save_collapsed(self, paths) -> None:
-        """Save the collapsed category state to settings.json."""
+        """Save the collapsed folder state to settings.json."""
         unique = sorted({_norm_path(p) for p in paths if str(p).strip()})
         self.settings["collapsed"] = unique
         save_settings(self.settings)
 
     def _toggle_collapsed(self, iid: str) -> None:
-        """Record whether a category was opened or closed, then save the state.
+        """Record whether a folder was opened or closed, then save the state.
 
         Called by the TreeviewOpen and TreeviewClose events.
         """
@@ -616,33 +691,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             collapsed.add(key)
         self._save_collapsed(collapsed)
         self.collapsed = collapsed
-
-    def collapse_all_categories(self) -> None:
-        """Collapse every category and remember the state across refreshes."""
-        collapsed: set[str] = set()
-
-        def collect(node: Node) -> None:
-            if node.is_dir:
-                collapsed.add(_norm_path(node.path))
-                for child in node.children:
-                    collect(child)
-
-        # The source roots are containers and are not displayed as categories.
-        for root in scan_roots(self.active_roots()):
-            for child in root.children:
-                collect(child)
-
-        def close_visible(item: str) -> None:
-            for child_iid in self.tree.get_children(item):
-                tags = self.tree.item(child_iid, "tags")
-                if "dir" in tags:
-                    self.tree.item(child_iid, open=False)
-                close_visible(child_iid)
-
-        close_visible("")
-        self._save_collapsed(collapsed)
-        self.collapsed = collapsed
-        self.status_var.set("All categories collapsed.")
 
     def _prune_collapsed(self, path: Path) -> None:
         """Remove the collapsed-state entry for ``path``, such as after deletion."""
@@ -800,7 +848,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     # ---------- Create, edit, and delete ----------
     def _target_dir(self) -> Path:
-        """Return the folder where new categories and snippets should be created.
+        """Return the folder where new folders and snippets should be created.
 
         When a source folder is selected, all writes must remain inside it;
         the parent root is outside the selected source and cannot be used.
@@ -828,13 +876,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return self.writable
 
     def add_category(self) -> None:
-        name = simpledialog.askstring("New category", "Category folder name:")
+        name = simpledialog.askstring("New Folder", "Folder name:")
         if not name:
             return
         try:
-            create_category(self._target_dir(), name)
+            create_folder(self._target_dir(), name)
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Could not create category", str(exc))
+            messagebox.showerror("Could not create folder", str(exc))
             return
         self.refresh_tree()
 
@@ -850,10 +898,58 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.refresh_tree()
         self.edit_selected()
 
+    def _remap_folder_settings(self, old_path: Path, new_path: Path) -> None:
+        """Keep collapsed and ordering preferences attached after a folder rename."""
+        old = old_path.resolve()
+        new = new_path.resolve()
+
+        def remap(value: str) -> str:
+            path = Path(value)
+            try:
+                relative = path.resolve().relative_to(old)
+            except (OSError, ValueError):
+                return value
+            return str(new / relative)
+
+        self.settings["collapsed"] = [
+            remap(value) for value in self.settings.get("collapsed", [])
+        ]
+        old_parent = str(old.parent)
+        order = self.settings.get("order") or {}
+        remapped_order = {}
+        for parent, names in order.items():
+            mapped_parent = remap(parent)
+            mapped_names = list(names)
+            if str(Path(parent).resolve()) == old_parent:
+                mapped_names = [new.name if name == old.name else name
+                                for name in mapped_names]
+            remapped_order[mapped_parent] = mapped_names
+        self.settings["order"] = remapped_order
+        save_settings(self.settings)
+
     def edit_selected(self) -> None:
         path = self.selected_path()
-        if path is None or path.is_dir():
-            self.status_var.set("Select a .txt file to edit.")
+        if path is None:
+            self.status_var.set("Select a text file or folder to edit.")
+            return
+        if path.is_dir():
+            name = simpledialog.askstring(
+                "Rename Folder", "New folder name:", initialvalue=path.name)
+            if not name:
+                return
+            try:
+                renamed = rename_folder(path, name)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("Could not rename folder", str(exc))
+                return
+            self._remap_folder_settings(path, renamed)
+            self.refresh_tree()
+            iid = str(renamed)
+            if self.tree.exists(iid):
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.show_preview()
+            self.status_var.set(f"Renamed folder to '{renamed.name}'.")
             return
         editor = EditorWindow(self, path)
         self.wait_window(editor)
@@ -873,13 +969,16 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._prune_collapsed(path)
         self.refresh_tree()
 
-    def open_folder(self) -> None:
-        target = self._target_dir()
-        target.mkdir(parents=True, exist_ok=True)
+    def open_source_folder(self) -> None:
+        """Open the chosen source folder when its clickable name is activated."""
+        source = self.settings.get("source_dir")
+        if not source or not Path(source).is_dir():
+            self.status_var.set("Choose a source folder first.")
+            return
         try:
-            subprocess.Popen(["xdg-open", str(target)])
+            subprocess.Popen(["xdg-open", str(Path(source))])
         except OSError as exc:
-            messagebox.showerror("Could not open folder", str(exc))
+            messagebox.showerror("Could not open source folder", str(exc))
 
     # ---------- Settings ----------
     def _save_current_settings(self) -> None:

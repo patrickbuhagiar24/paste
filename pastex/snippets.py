@@ -10,7 +10,7 @@ both the CLI and GUI. The folder structure defines the hierarchy:
         Application Reply.txt
         Follow Up.txt
 
-Each folder is a category, and each .txt file is a text snippet ready to paste.
+Folders organize .txt files, which are text snippets ready to paste.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 @dataclass
 class Node:
-    """A node in the category and text tree."""
+    """A node in the folder and text tree."""
 
     name: str
     path: Path
@@ -62,7 +62,7 @@ def is_text_file(path: Path) -> bool:
 def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
     """Recursively scan a folder into a Node tree.
 
-    Only .txt files are included. Empty folders remain visible as categories.
+    Only .txt files are included. Empty folders remain visible.
     Hidden files/folders (names beginning with '.') and symlinks inside the
     source folder are skipped to avoid traversing outside the source or creating
     cycles. The source folder itself may be a symlink. Sort folders first, then
@@ -178,13 +178,30 @@ def ensure_txt_suffix(name: str) -> str:
     return name
 
 
-def create_category(parent: Path, name: str) -> Path:
-    """Create a category folder under parent."""
+def create_folder(parent: Path, name: str) -> Path:
+    """Create a folder under parent."""
     target = Path(parent) / _single_name(name)
     if target.is_symlink():
-        raise ValueError("A category cannot be a symbolic link.")
+        raise ValueError("A folder cannot be a symbolic link.")
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+# Backwards-compatible internal alias for older callers and existing data tools.
+create_category = create_folder
+
+
+def rename_folder(path: Path, name: str) -> Path:
+    """Rename a folder without replacing an existing filesystem entry."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("Select a folder to rename.")
+    target = path.with_name(_single_name(name))
+    if target == path:
+        return path
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"A file or folder named '{target.name}' already exists.")
+    return path.rename(target)
 
 
 def create_snippet(parent: Path, filename: str, content: str = "") -> Path:
@@ -197,7 +214,7 @@ def create_snippet(parent: Path, filename: str, content: str = "") -> Path:
 
 
 def delete_path(path: Path) -> None:
-    """Delete a .txt file or category folder recursively."""
+    """Delete a .txt file or folder recursively."""
     path = Path(path)
     if path.is_dir():
         shutil.rmtree(path)

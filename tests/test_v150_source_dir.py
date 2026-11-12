@@ -131,7 +131,7 @@ def test_empty_state_has_guidance_and_button():
     block = src[start:start + 900]
     assert "No source folder selected" in block
     assert "Choose Source Folder" in block
-    assert "categories" in block.lower()
+    assert "folder hierarchy" in block.lower()
 
 
 # --- penulisan di dalam folder sumber ------------------------------------
