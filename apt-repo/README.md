@@ -44,11 +44,7 @@ The `[trusted=yes]` option skips signature verification. For signed repository m
 4. Install the public key and add the signed source:
 
    ```bash
-   curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg
-   ```
-
-   ```bash
-   echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+   curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg && echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
    ```
 
    ```bash
