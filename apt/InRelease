@@ -4,40 +4,40 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 12 Nov 2026 05:40:13 +0000
+Date: Thu, 12 Nov 2026 05:42:56 +0000
 Description: Pastex APT repository for Ubuntu 26.10
 Label: Pastex
 Origin: Pastex
 Suite: stable
 MD5Sum:
- cdbb8cd8fc9b28dacd90717a0d3db852             1175 Packages
- b726fb168c2e23843aa1bc3cf2c2b02c              754 Packages.gz
- 9ddc2cff04e15dd745d93789be3fb6e9              186 Release
+ b588b05a7dd080eb0c86a9755f2c0b5c             1175 Packages
+ 689e9d4e0d61f8daa9be02a77a3605d2              753 Packages.gz
+ c4c2a3ffb3c066bed7f556c7706a4161              186 Release
 SHA1:
- 3f5d3dde22aa3fe49581497fe3d8ebe01a58842f             1175 Packages
- a0ac911f64da60d14505eeeb85e4fa26b31ecad6              754 Packages.gz
- 22580fd109049b4b563a56da217f9b3607050382              186 Release
+ 6ee22ac1365d1177ff3d1fcbbd972b22cf6e7667             1175 Packages
+ 5501d90f3cec231902b6bc92f6e9e0880d63343a              753 Packages.gz
+ 787f0a7b6e60b636d1492d10cc902ee8595838b4              186 Release
 SHA256:
- 0460d75f9e67ba66daaad24792475e405446f0a4e9fd4b781228949e5084342d             1175 Packages
- e960472f14404ae6667872a092f9be152798751f283484e4a1758ae16688766f              754 Packages.gz
- 1ecc6581f42a4bff3f8e46d6f9d4245d5446133be0165317035c0fefa37bc97e              186 Release
+ 7cb1e5ea639b28676b1588c45264cfecc88fde34646a8575c304bb57f7e1abb2             1175 Packages
+ e270bb130d5692c23514296b2e402d169714cc8dbd1b687d7ab803ce5451486a              753 Packages.gz
+ 792491ba0484e326994c2a7f562865683a9674cdaee4344c6a3a412ad32ae079              186 Release
 SHA512:
- 99ca1bb09820aa69e11a2f1e4a6c105c27d0644d3a9d9804cd5355e33ce9c81b9949d2708f95a431b8908c2b8db9235980d1d5a7a68d82990b138e5ccac575a4             1175 Packages
- e1ce6f92f01c8a7e662b09a76504d903542af7d854df4e2f2ee88b4c0a85b1cd1877fa497b77c174340e1865f26ebad6687bf689016ee2231cb85bb25653cb49              754 Packages.gz
- 58dee59f6f7c9a935e634fa3d5a66b741a9a085fecbdf27ca0472c49251e251fa0197aeae83da724da26362ec223c40a7e01f65b6dcc642e58f2ade3b93f01db              186 Release
+ 07a8c317851c0d3dce465a1fe94a2ce7a86c360d702e39b73d4af051e3b2e02cd1bf2ef9f655be7675df7debecab003180969a30ba13e7aec8a6b84ecb6835ad             1175 Packages
+ f35ad576389ec9b5b1ced5f6537abb8276cf03c340a286d7394a50b70e36d98fdc73b23823f0012f7e416fecd50765edf07450a609a5d88ecf99fcfeea8879a9              753 Packages.gz
+ 4b38bb218ca7bcf829f386ca375d7d8557891bc928f21a73da5f5aaf2de99a9b2392aae6f3a62b6523c32dcb3744d73fed759f01b784aa1f419988ab4e786f4a              186 Release
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr1UT4ACgkQ5gn+foNK
-lYgeig//R7NVg5JXRFtyqtlHaC4hrKpeo076PULYLNulNGIiRQI88zUbUFY+x8ZA
-dGTyxsBrrGAbNAiP4vlpRvWB4N7fNXZ9YUpLAoUtrChApSEAjXFDVYb9M1w7UulU
-ZrmZxef50JlOjWC8iyNLhTak8krkxQ4vq/S8nsVcHiEibw5/hvit1HyDfW1e0COs
-YZ21rk3ZjAZede/dn1x8ZrCUPEJvh8riPj0bS0/as7HGEAcTZRCd0tidX72mBwuG
-EMAjgST6Ss8OJ3jSOUzzKDvbXip+t2sQp83dbj4duBEDdoqMBelR04mA9oAPG9YQ
-FTqWm4Iqq289/u08D8NKe+DA1dHBsXXOpBWTgUn2qBewwfYYzD5hYDSOgQlEN5OU
-Z4lhiNP9MD4NxEeW64VNrpV4O5P+U3Q1M1ODEGyOBt/++87wxLOP3R+6HpHSim+H
-bnXPfIBO8PtIAn+RuvCibaY5wA55b4evRmmuwSpHA2fDhbj3RCxDb+IyBBedNhEq
-A7NmOGvWqBSJLjM3D+E06eukVVJxEEGpGfO29H1+c2MFPQh0WLpyCDARg7GRwCZz
-+aWfcNkEKDarG1qkrSCjshbAPuw3y1rSNWN0/RNcrDbZepgYQCdYHNUGt97NbZUr
-wKEZavqn8e5lIAeFHzYsDoUNYBo+u2EhAmcUUVmW3BW+8Tipks0=
-=4Cw0
+iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr1UeEACgkQ5gn+foNK
+lYjgPhAA6ViXl9C0jm82WAkHJjl9FYdsmrWxNKG0ztTT8rqHHypwAGTTbps6uSaQ
+89PaWX9z6aR+Td5L/IbxpD/l2YnromopasuzMRCDiRUNRZR8W+xrxaznCCYWMCSS
+3SD3cobr572QxkcA6ISn/rFFxfOjP5kmpaMycEj4UF9g4EfblSyQG7ltWWyycZkR
+uZj+Op9RReGGVd0pXGjkYbNUewShxkMu89s4qvAbWzadX/Xz3geq58mYK+psfJfB
+2pudh10yWd8O9r4cX/vHGwoL5GfvXwwZ1n0GKTjv5qkFsIIGIufXGy4/qBE0lq0/
+9azxtfV9swRNytHtXinH6VOwXwBcCO5UVfQGHJLYrqLNs7NM7kYFenvAZ00jJpTm
+X5rGmk1sOJ3Ur9QMYeFMj88kDDZUXvJwNAFNwMEmpEcNIPQW8WslVeXKoFnjv7xZ
+8k5bf27Lf3+TSbxYVpUXD23yipVCwz4s448bQeHjZKnlIdY25Ev+W3VBs6naAY9o
+FQ9gqtWiMgm4rZ8kq9w8Pj7SOiVakCD8gBFZl19EtfxJMt0DdHECiYpGHvec2nLz
+Qq2MN0RQLBIXfb7hqUChuloHXvpssaE8/KR4J+y4UkD/j+eETklFhOKnwTEGyjX4
+iA49OWP3D87u2WuD1k5gB3bOGd6b9GlJxUOQ7iZpRteTvR6q13I=
+=kfHA
 -----END PGP SIGNATURE-----
