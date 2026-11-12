@@ -4,31 +4,40 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 12 Nov 2026 05:16:09 +0000
+Date: Thu, 12 Nov 2026 05:40:13 +0000
 Description: Pastex APT repository for Ubuntu 26.10
 Label: Pastex
 Origin: Pastex
 Suite: stable
 MD5Sum:
- 42cd0828d421b67d7b893cd47226ae62             1175 Packages
- 14109762409b1c51946e04130ccee17f              750 Packages.gz
- 4a1bd042d469e7fc8cdbf367f9a82a55              186 Release
+ cdbb8cd8fc9b28dacd90717a0d3db852             1175 Packages
+ b726fb168c2e23843aa1bc3cf2c2b02c              754 Packages.gz
+ 9ddc2cff04e15dd745d93789be3fb6e9              186 Release
 SHA1:
- 4e14a202e3925c3dffceabc1b01a06c32ae34cb4             1175 Packages
- 5b570507dd3d44545d9d5b3ba6a919e4e408a52e              750 Packages.gz
- 6b3920e483d8df2266d6cb982b218e74de311683              186 Release
+ 3f5d3dde22aa3fe49581497fe3d8ebe01a58842f             1175 Packages
+ a0ac911f64da60d14505eeeb85e4fa26b31ecad6              754 Packages.gz
+ 22580fd109049b4b563a56da217f9b3607050382              186 Release
 SHA256:
- 75e5330fafa21fade38df60638a91799e1e694d459ac724a6a0d1aa7b0d5677c             1175 Packages
- 85e56968695a47e2eae8e37076757bb9086fcf714967a377e7c466d6797613d3              750 Packages.gz
- 4d7b1aaf67380c75ab86b5a1bfbdc589dd04413864ed494ca4cda44ff5eeabec              186 Release
+ 0460d75f9e67ba66daaad24792475e405446f0a4e9fd4b781228949e5084342d             1175 Packages
+ e960472f14404ae6667872a092f9be152798751f283484e4a1758ae16688766f              754 Packages.gz
+ 1ecc6581f42a4bff3f8e46d6f9d4245d5446133be0165317035c0fefa37bc97e              186 Release
 SHA512:
- 37e70a4582a6ebb83a6ce642e424b2b2812fa22af374c0a75fa8eed2685d6b5b954699a55de8617fa9965164753a5eb21b7b89e92c596f3669c9b20391d690c0             1175 Packages
- d5cff9b925cc927a51f7050f5d5e5d572c32bf6d7b495be2d6d10f9e202e17cd6fb6c84935810b5a51a5064e02d883963c3d1ff982a935bd51a48d6c8cba1a94              750 Packages.gz
- 529b8fb642923219f2cacf7def00225b2feb07ffe66efe9799255c4f5f0d41313bce49b8310cdc4405321a3e6daf512d3c379850047332f9c68f6c1598468466              186 Release
+ 99ca1bb09820aa69e11a2f1e4a6c105c27d0644d3a9d9804cd5355e33ce9c81b9949d2708f95a431b8908c2b8db9235980d1d5a7a68d82990b138e5ccac575a4             1175 Packages
+ e1ce6f92f01c8a7e662b09a76504d903542af7d854df4e2f2ee88b4c0a85b1cd1877fa497b77c174340e1865f26ebad6687bf689016ee2231cb85bb25653cb49              754 Packages.gz
+ 58dee59f6f7c9a935e634fa3d5a66b741a9a085fecbdf27ca0472c49251e251fa0197aeae83da724da26362ec223c40a7e01f65b6dcc642e58f2ade3b93f01db              186 Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRVR5Ox3GKMxO4fgIVlaI09nc9lhwUCavVLmgAKCRBlaI09nc9l
-h00XAP0exnPVYmA08312NwsF75NB5dMeXhGZAI1g2YYI7eU0qwD/XWFIdiGHMotM
-GVd9NBLM3r9KYqO92S+pCrO//LYEagI=
-=4mFs
+iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr1UT4ACgkQ5gn+foNK
+lYgeig//R7NVg5JXRFtyqtlHaC4hrKpeo076PULYLNulNGIiRQI88zUbUFY+x8ZA
+dGTyxsBrrGAbNAiP4vlpRvWB4N7fNXZ9YUpLAoUtrChApSEAjXFDVYb9M1w7UulU
+ZrmZxef50JlOjWC8iyNLhTak8krkxQ4vq/S8nsVcHiEibw5/hvit1HyDfW1e0COs
+YZ21rk3ZjAZede/dn1x8ZrCUPEJvh8riPj0bS0/as7HGEAcTZRCd0tidX72mBwuG
+EMAjgST6Ss8OJ3jSOUzzKDvbXip+t2sQp83dbj4duBEDdoqMBelR04mA9oAPG9YQ
+FTqWm4Iqq289/u08D8NKe+DA1dHBsXXOpBWTgUn2qBewwfYYzD5hYDSOgQlEN5OU
+Z4lhiNP9MD4NxEeW64VNrpV4O5P+U3Q1M1ODEGyOBt/++87wxLOP3R+6HpHSim+H
+bnXPfIBO8PtIAn+RuvCibaY5wA55b4evRmmuwSpHA2fDhbj3RCxDb+IyBBedNhEq
+A7NmOGvWqBSJLjM3D+E06eukVVJxEEGpGfO29H1+c2MFPQh0WLpyCDARg7GRwCZz
++aWfcNkEKDarG1qkrSCjshbAPuw3y1rSNWN0/RNcrDbZepgYQCdYHNUGt97NbZUr
+wKEZavqn8e5lIAeFHzYsDoUNYBo+u2EhAmcUUVmW3BW+8Tipks0=
+=4Cw0
 -----END PGP SIGNATURE-----
