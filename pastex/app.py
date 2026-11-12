@@ -302,6 +302,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             (self.add_text, "＋ Text", (4, 0)),
             (self.edit_selected, "✏️ Edit", (4, 0)),
             (self.delete_selected, "🗑 Delete", (4, 0)),
+            (self.collapse_all_categories, "⊟ Collapse All", (4, 0)),
         )
         for command, label, padx in buttons:
             ttk.Button(toolbar, text=label, command=command).pack(
@@ -325,7 +326,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree_area = ttk.Frame(left)
         self.tree_area.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="browse")
-        self.tree.tag_configure("hover", background="#dbeafe")
+        self.tree.tag_configure("hover", background="#86bfff", foreground="#102a43")
         self._hover_iid = ""
         self._click_after_id = None
         self.scroll = ttk.Scrollbar(self.tree_area, orient="vertical",
@@ -380,7 +381,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.menu.add_separator()
         self.menu.add_command(label="✏️ Edit", command=self.edit_selected)
         self.menu.add_command(label="🗑 Delete", command=self.delete_selected)
+        self.menu.add_separator()
+        self.menu.add_command(label="⊟ Collapse All Categories",
+                              command=self.collapse_all_categories)
         self.tree.bind("<Button-3>", self._on_right_click)
+        self.tree.bind("<Button-2>", self._on_right_click)
+        self.tree.bind("<Control-Button-1>", self._on_right_click)
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", self._clear_tree_hover)
         self.tree.bind("<ButtonRelease-1>", self._on_single_click)
@@ -447,12 +453,19 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._click_after_id = None
         self.do_paste()
 
-    def _on_right_click(self, event) -> None:
+    def _on_right_click(self, event):
+        """Select the clicked row and open the context menu at the pointer."""
         row = self.tree.identify_row(event.y)
-        if row:
-            self.tree.selection_set(row)
-            self.show_preview()
-        self.menu.post(event.x_root, event.y_root)
+        if not row:
+            return "break"
+        self.tree.selection_set(row)
+        self.tree.focus(row)
+        self.show_preview()
+        try:
+            self.menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.menu.grab_release()
+        return "break"
 
     def _event_iid(self, event) -> str:
         """Get a Treeview item id from an event, with focus/row lookup as fallback."""
@@ -603,6 +616,33 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             collapsed.add(key)
         self._save_collapsed(collapsed)
         self.collapsed = collapsed
+
+    def collapse_all_categories(self) -> None:
+        """Collapse every category and remember the state across refreshes."""
+        collapsed: set[str] = set()
+
+        def collect(node: Node) -> None:
+            if node.is_dir:
+                collapsed.add(_norm_path(node.path))
+                for child in node.children:
+                    collect(child)
+
+        # The source roots are containers and are not displayed as categories.
+        for root in scan_roots(self.active_roots()):
+            for child in root.children:
+                collect(child)
+
+        def close_visible(item: str) -> None:
+            for child_iid in self.tree.get_children(item):
+                tags = self.tree.item(child_iid, "tags")
+                if "dir" in tags:
+                    self.tree.item(child_iid, open=False)
+                close_visible(child_iid)
+
+        close_visible("")
+        self._save_collapsed(collapsed)
+        self.collapsed = collapsed
+        self.status_var.set("All categories collapsed.")
 
     def _prune_collapsed(self, path: Path) -> None:
         """Remove the collapsed-state entry for ``path``, such as after deletion."""

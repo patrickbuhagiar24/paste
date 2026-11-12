@@ -51,8 +51,15 @@ class FakeTree:
     def selection_set(self, iid):
         self._selection = (iid,)
 
-    def focus(self):
+    def focus(self, iid=None):
+        if iid is not None:
+            self._focus = iid
         return self._focus
+
+    def item(self, iid, option=None, **kwargs):
+        row = next(r for r in self.rows if r["iid"] == iid)
+        row.update(kwargs)
+        return row.get(option) if option else row
 
     def bind(self, *_a, **_kw):
         pass
