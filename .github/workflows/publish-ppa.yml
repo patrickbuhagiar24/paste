@@ -48,8 +48,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential debhelper devscripts dput fakeroot dpkg-dev \
-            python3-pytest python3-tk xvfb xauth x11-utils
+            devscripts dput dpkg-dev python3-pytest python3-tk xvfb xauth x11-utils
 
       - name: Run tests
         env:
@@ -79,14 +78,9 @@ jobs:
           upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
           git archive --format=tar --prefix="pastex-${upstream_version}/" HEAD -- . ':(exclude)debian' \
             | gzip -n > "../pastex_${upstream_version}.orig.tar.gz"
-          if ! dpkg-buildpackage -S -sa -us -uc -d > "$RUNNER_TEMP/source-build.log" 2>&1; then
-            cat "$RUNNER_TEMP/source-build.log" >&2
-            while IFS= read -r line; do
-              echo "::error title=Source package build::$line"
-            done < <(tail -n 30 "$RUNNER_TEMP/source-build.log")
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/source-build.log"
+          dpkg-source -b .
+          source_version="$(dpkg-parsechangelog --show-field Version)"
+          dpkg-genchanges -S -sa -O"../pastex_${source_version}_source.changes"
 
       - name: Sign source package with the Launchpad-registered key
         shell: bash
