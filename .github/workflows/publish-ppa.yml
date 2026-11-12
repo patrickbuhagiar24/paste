@@ -1,0 +1,111 @@
+name: Publish Pastex to Launchpad PPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      ppa_revision:
+        description: "PPA upload revision; increase this if this package version was already uploaded"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pastex-ppa-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PPA_TARGET: ppa:unisys/pastex
+      UBUNTU_SERIES: stonking
+      PPA_REVISION: ${{ inputs.ppa_revision }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check required signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$GPG_PRIVATE_KEY" ]]; then
+            echo "Missing Actions secret: GPG_PRIVATE_KEY" >&2
+            exit 1
+          fi
+          if [[ ! "$PPA_REVISION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ppa_revision must be a positive integer." >&2
+            exit 1
+          fi
+          echo "Will upload to $PPA_TARGET for Ubuntu series $UBUNTU_SERIES."
+
+      - name: Install packaging tools and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential debhelper devscripts dput fakeroot dpkg-dev \
+            python3-pytest python3-tk xvfb xauth x11-utils
+
+      - name: Run tests
+        env:
+          PASTE_REQUIRE_X11_TEST: "1"
+        run: python3 -m pytest tests/ -q
+
+      - name: Prepare PPA source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
+          ppa_version="${upstream_version}-1ubuntu1~ppa${PPA_REVISION}"
+          DEBFULLNAME="Patrick Buhagiar"
+          DEBEMAIL="patrickbuhagiar24@users.noreply.github.com"
+          export DEBFULLNAME DEBEMAIL
+          dch --newversion "$ppa_version" \
+            --distribution "$UBUNTU_SERIES" \
+            --force-distribution \
+            "Build Pastex for Ubuntu 26.10 Stonking Stingray PPA."
+          dpkg-parsechangelog --show-field Version
+          dpkg-parsechangelog --show-field Distribution
+
+      - name: Build unsigned Debian source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
+          git archive --format=tar --prefix="pastex-${upstream_version}/" HEAD -- . ':(exclude)debian' \
+            | gzip -n > "../pastex_${upstream_version}.orig.tar.gz"
+          dpkg-buildpackage -S -sa -us -uc
+
+      - name: Sign source package with the Launchpad-registered key
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          key_fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          if [[ -z "$key_fingerprint" ]]; then
+            echo "No secret signing key was imported." >&2
+            exit 1
+          fi
+          printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-passphrase"
+          chmod 600 "$RUNNER_TEMP/gpg-passphrase"
+          changes_file="$(find .. -maxdepth 1 -type f -name 'pastex_*_source.changes' -print -quit)"
+          if [[ -z "$changes_file" ]]; then
+            echo "Source .changes file was not produced." >&2
+            exit 1
+          fi
+          signing_program="gpg --batch --yes --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/gpg-passphrase"
+          debsign -k"$key_fingerprint" -p "$signing_program" "$changes_file"
+          rm -f "$RUNNER_TEMP/gpg-passphrase"
+
+      - name: Upload source package to Launchpad PPA
+        run: |
+          changes_file="$(find .. -maxdepth 1 -type f -name 'pastex_*_source.changes' -print -quit)"
+          dput "$PPA_TARGET" "$changes_file"
