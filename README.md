@@ -4,13 +4,19 @@ Pastex is a desktop app for organizing and pasting text snippets from `.txt` fil
 
 ## Install
 
-Pastex is installed through APT on Ubuntu 26.10. Choose either the Launchpad PPA or the GitHub Pages APT repository.
+Pastex is installed through APT on Ubuntu 26.10. Choose either the Launchpad PPA or the GitHub Pages APT repository. Each command is in a separate code block so GitHub shows an individual copy button for it.
 
 ### Launchpad PPA
 
 ```bash
 sudo add-apt-repository ppa:unisys/pastex
+```
+
+```bash
 sudo apt update
+```
+
+```bash
 sudo apt install pastex
 ```
 
@@ -21,12 +27,22 @@ PPA uploads are started manually by a maintainer when requested; pushing ordinar
 After the GitHub Pages APT repository has been published, add it to your APT sources and install Pastex:
 
 ```bash
-echo 'deb [trusted=yes] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg
+```
+
+```bash
+echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+```
+
+```bash
 sudo apt update
+```
+
+```bash
 sudo apt install pastex
 ```
 
-`[trusted=yes]` skips repository signature verification. For signed repository setup and troubleshooting, see [`apt-repo/README.md`](apt-repo/README.md).
+This setup uses the repository's GPG key to verify signed APT metadata. The GitHub Pages repository must have been published with GPG signing enabled for these commands to work.
 
 ## Use
 
@@ -100,5 +116,3 @@ The application is distributed to users through APT. To run the test suite on Ub
 sudo apt install python3-pytest python3-tk xvfb xauth x11-utils
 python3 -m pytest tests/ -q
 ```
-
-See [`apt-repo/README.md`](apt-repo/README.md) for details about the optional GitHub Pages APT repository.

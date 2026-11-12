@@ -15,9 +15,14 @@ The workflow builds the Debian package and APT metadata, then publishes the repo
 4. Add the repository on Ubuntu:
 
    ```bash
-   echo 'deb [trusted=yes] https://patrickbuhagiar24.github.io/paste/apt/ ./' \
-     | sudo tee /etc/apt/sources.list.d/pastex.list
+   echo 'deb [trusted=yes] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+   ```
+
+   ```bash
    sudo apt update
+   ```
+
+   ```bash
    sudo apt install pastex
    ```
 
@@ -39,11 +44,18 @@ The `[trusted=yes]` option skips signature verification. For signed repository m
 4. Install the public key and add the signed source:
 
    ```bash
-   curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg \
-     | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg
-   echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' \
-     | sudo tee /etc/apt/sources.list.d/pastex.list
+   curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg
+   ```
+
+   ```bash
+   echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+   ```
+
+   ```bash
    sudo apt update
+   ```
+
+   ```bash
    sudo apt install pastex
    ```
 
@@ -51,9 +63,17 @@ The `[trusted=yes]` option skips signature verification. For signed repository m
 
 ```bash
 ./scripts/setup-apt-repo.sh
-echo "deb [trusted=yes] file://$(pwd)/apt-repo/dist ./" \
-  | sudo tee /etc/apt/sources.list.d/pastex-local.list
+```
+
+```bash
+echo "deb [trusted=yes] file://$(pwd)/apt-repo/dist ./" | sudo tee /etc/apt/sources.list.d/pastex-local.list
+```
+
+```bash
 sudo apt update
+```
+
+```bash
 sudo apt install pastex
 ```
 
