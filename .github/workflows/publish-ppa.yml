@@ -79,7 +79,14 @@ jobs:
           upstream_version="$(python3 -c 'from pastex import __version__; print(__version__)')"
           git archive --format=tar --prefix="pastex-${upstream_version}/" HEAD -- . ':(exclude)debian' \
             | gzip -n > "../pastex_${upstream_version}.orig.tar.gz"
-          dpkg-buildpackage -S -sa -us -uc
+          if ! dpkg-buildpackage -S -sa -us -uc -d > "$RUNNER_TEMP/source-build.log" 2>&1; then
+            cat "$RUNNER_TEMP/source-build.log" >&2
+            while IFS= read -r line; do
+              echo "::error title=Source package build::$line"
+            done < <(tail -n 30 "$RUNNER_TEMP/source-build.log")
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/source-build.log"
 
       - name: Sign source package with the Launchpad-registered key
         shell: bash
