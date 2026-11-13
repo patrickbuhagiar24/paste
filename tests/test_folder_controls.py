@@ -11,6 +11,7 @@ class FakeMenu:
         self.items = []
         self.popup_calls = []
         self.releases = 0
+        self.unposts = 0
 
     def delete(self, *_args):
         self.items.clear()
@@ -26,6 +27,9 @@ class FakeMenu:
 
     def grab_release(self):
         self.releases += 1
+
+    def unpost(self):
+        self.unposts += 1
 
     @property
     def labels(self):
@@ -94,10 +98,52 @@ def test_right_click_in_select_mode_shows_only_bulk_actions(gui, sample_root):
 def test_click_outside_tree_exits_select_mode(gui):
     app = gui()
     app._select_mode = True
+    app.menu = FakeMenu()
     app._exit_select_mode_outside_tree(SimpleNamespace(widget=object()))
 
     assert app._select_mode is False
     assert app.status_var.get() == "Selection mode ended."
+
+
+def test_context_menu_dismisses_on_left_or_right_click_outside(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.winfo_containing = lambda _x, _y: "outside"
+
+    app._dismiss_context_menu_outside(
+        SimpleNamespace(x_root=400, y_root=300, widget=None, num=1)
+    )
+    assert app.menu.unposts == 1
+    assert app._context_menu_active is False
+
+    app._context_menu_active = True
+    app._dismiss_context_menu_outside(
+        SimpleNamespace(x_root=400, y_root=300, widget=None, num=3)
+    )
+    assert app.menu.unposts == 2
+    assert app._context_menu_active is False
+
+
+def test_click_inside_context_menu_keeps_it_posted(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.winfo_containing = lambda _x, _y: app.menu
+
+    app._dismiss_context_menu_outside(
+        SimpleNamespace(x_root=10, y_root=10, widget=app.menu)
+    )
+
+    assert app.menu.unposts == 0
+    assert app._context_menu_active is True
+
+
+def test_search_has_no_separate_search_button(gui):
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+    assert "self.search_button" not in source
+    assert "self.search_entry.trace_add" not in source
+    assert "self.search_var.trace_add" in source
 
 
 def test_right_click_blank_dismisses_without_posting_menu(gui, sample_root):

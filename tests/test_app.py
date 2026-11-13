@@ -157,12 +157,11 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_withdraws_before_copying():
-    """Jendela dilepas SEBELUM menyalin.
+def test_paste_minimizes_before_copying():
+    """Jendela diminimalkan SEBELUM penyalinan agar target menerima fokus.
 
-    Bug 1.4.0: withdraw baru dilakukan setelah penyalinan berhasil. Bila
-    penyalinan lambat atau gagal, jendela tetap memegang fokus dan Ctrl+V
-    tidak pernah terkirim (log berhenti di "[paste] mulai").
+    Bila penyalinan lambat atau gagal, Pastex tetap harus melepas fokus sebelum
+    proses salin dimulai agar Ctrl+V dapat dikirim ke aplikasi target.
     """
     from pastex.app import PastexApp
 
@@ -184,8 +183,8 @@ def test_paste_withdraws_before_copying():
         def selected_path(self):
             return FakePath()
 
-        def withdraw(self):
-            order.append("withdraw")
+        def iconify(self):
+            order.append("iconify")
 
         def after(self, ms, fn=None):
             order.append("after")
@@ -201,8 +200,8 @@ def test_paste_withdraws_before_copying():
         PastexApp.do_paste(app)
     finally:
         monkey.read_text = original
-    # withdraw harus muncul sebelum pekerjaan salin dimulai
-    assert order.index("withdraw") < order.index("copy")
+    # iconify harus muncul sebelum pekerjaan salin dimulai
+    assert order.index("iconify") < order.index("copy")
 
 
 def test_do_paste_ignores_repeat_while_paste_is_in_progress():
