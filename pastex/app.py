@@ -649,7 +649,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 self.tree.item(row, tags=(*tags, "hover"))
 
     def _clear_tree_hover(self, _event=None) -> None:
-        hover_iid = getattr(self, "_hover_iid", "")
+        # Avoid tkinter.Misc.__getattr__ on uninitialized Tk instances (the
+        # test suite often constructs PastexApp with __new__ and no Tcl interpreter).
+        hover_iid = self.__dict__.get("_hover_iid", "")
         if hover_iid and self.tree.exists(hover_iid):
             tags = tuple(
                 tag for tag in self.tree.item(hover_iid, "tags") if tag != "hover"
