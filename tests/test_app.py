@@ -157,15 +157,12 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_minimizes_before_copying():
-    """Jendela diminimalkan SEBELUM penyalinan agar target menerima fokus.
-
-    Bila penyalinan lambat atau gagal, Pastex tetap harus melepas fokus sebelum
-    proses salin dimulai agar Ctrl+V dapat dikirim ke aplikasi target.
-    """
+def test_paste_copies_before_withdrawing(monkeypatch):
+    """Pastex tetap tampil saat copy; hide baru dilakukan setelah copy sukses."""
+    from pastex import app as app_module
     from pastex.app import PastexApp
 
-    order = []
+    calls = []
 
     class FakePath:
         name = "Greeting.txt"
@@ -174,34 +171,62 @@ def test_paste_minimizes_before_copying():
             return False
 
     class FakeApp:
-        settings: ClassVar[dict[str, float]] = {"restore_delay": 0.1}
         _pasting = False
-        status_var = type(
-            "V", (), {"set": staticmethod(lambda v: order.append("status"))}
-        )()
+        status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
 
         def selected_path(self):
             return FakePath()
 
-        def iconify(self):
-            order.append("iconify")
-
-        def after(self, ms, fn=None):
-            order.append("after")
-
         def _paste_worker(self, text):
-            order.append("copy")
+            calls.append(("copy", text))
 
-    app = FakeApp()
-    monkey = __import__("pastex.app", fromlist=["read_text"])
-    original = monkey.read_text
-    monkey.read_text = lambda p: "isi"
-    try:
-        PastexApp.do_paste(app)
-    finally:
-        monkey.read_text = original
-    # iconify harus muncul sebelum pekerjaan salin dimulai
-    assert order.index("iconify") < order.index("copy")
+    monkeypatch.setattr(app_module, "read_text", lambda _path: "isi")
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: calls.append(("start", target.__name__, *args)),
+    )
+
+    PastexApp.do_paste(FakeApp())
+
+    assert calls == [("start", "_paste_worker", "isi")]
+
+
+def test_after_copy_withdraws_then_sends_paste():
+    from pastex.app import PastexApp
+    from pastex.clipboard import ClipboardResult
+
+    calls = []
+
+    class FakeApp:
+        def withdraw(self):
+            calls.append("withdraw")
+
+        def _send_paste(self):
+            calls.append("send")
+
+    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "Text copied."))
+    assert calls == ["withdraw", "send"]
+
+
+def test_copy_failure_does_not_withdraw_or_send():
+    from pastex.app import PastexApp
+    from pastex.clipboard import ClipboardResult
+
+    calls = []
+
+    class FakeApp:
+        def _paste_failed(self, message):
+            calls.append(("failed", message))
+
+        def withdraw(self):
+            calls.append("withdraw")
+
+        def _send_paste(self):
+            calls.append("send")
+
+    PastexApp._after_copy(FakeApp(), ClipboardResult(False, "", "no clipboard"))
+    assert calls == [("failed", "no clipboard")]
 
 
 def test_do_paste_ignores_repeat_while_paste_is_in_progress():
@@ -216,20 +241,6 @@ def test_do_paste_ignores_repeat_while_paste_is_in_progress():
     PastexApp.do_paste(FakeApp())
 
     assert calls == ["Paste in progress..."]
-
-
-def test_after_copy_sends_paste_without_focus_wait():
-    from pastex.app import PastexApp
-    from pastex.clipboard import ClipboardResult
-
-    calls = []
-
-    class FakeApp:
-        def _send_paste(self):
-            calls.append("send")
-
-    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "Text copied."))
-    assert calls == ["send"]
 
 
 def test_paste_done_waits_100ms_after_sending_before_restoring():
@@ -265,7 +276,7 @@ def test_paste_done_waits_100ms_after_sending_before_restoring():
 
 
 def test_copy_failure_restores_window():
-    """Salinan gagal: jendela yang sudah dilepas WAJIB dimunculkan lagi."""
+    """Saat copy gagal, pastikan jendela terlihat untuk membaca pesan."""
     from pastex.app import PastexApp
 
     calls = []
