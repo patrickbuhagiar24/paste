@@ -5,6 +5,7 @@ Regresi yang dijaga: `data/snippets/` muncul kembali di repo, atau
 itu bertentangan dengan keputusan 1.5.0 — "biarkan contoh yang sudah
 terpasang, jangan bawa contoh baru".
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,15 +22,21 @@ def test_no_bundled_sample_tree_in_repo():
 def test_build_deb_does_not_copy_samples():
     """build-deb.sh tidak boleh menyalin data/snippets ke staging .deb."""
     script = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
-    copies = [ln for ln in script.splitlines()
-              if "data/snippets" in ln and not ln.strip().startswith("#")]
+    copies = [
+        ln
+        for ln in script.splitlines()
+        if "data/snippets" in ln and not ln.strip().startswith("#")
+    ]
     assert copies == [], f"masih menyalin contoh bawaan: {copies}"
 
 
 def test_debian_rules_does_not_copy_samples():
     rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
-    copies = [ln for ln in rules.splitlines()
-              if "data/snippets" in ln and not ln.strip().startswith("#")]
+    copies = [
+        ln
+        for ln in rules.splitlines()
+        if "data/snippets" in ln and not ln.strip().startswith("#")
+    ]
     assert copies == [], f"masih menyalin contoh bawaan: {copies}"
 
 
@@ -41,9 +48,12 @@ def test_samples_never_deleted_from_installed_location():
     """
     for name in ("debian/postinst", "debian/postrm"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        offending = [ln for ln in text.splitlines()
-                     if "snippets" in ln and any(
-                         word in ln for word in ("rm ", "rm -", "unlink"))]
+        offending = [
+            ln
+            for ln in text.splitlines()
+            if "snippets" in ln
+            and any(word in ln for word in ("rm ", "rm -", "unlink"))
+        ]
         assert offending == [], f"{name} menghapus contoh: {offending}"
 
 
@@ -66,7 +76,7 @@ def test_export_data_creates_samples_once(tmp_path, capsys):
     assert "0 files created" in capsys.readouterr().out
 
 
-def test_export_data_keeps_categories_and_never_overwrites(tmp_path):
+def test_export_data_keeps_folders_and_never_overwrites(tmp_path):
     """--export-data menambah yang belum ada saja, tidak menghapus/menimpa."""
     from pastex.app import export_data
 

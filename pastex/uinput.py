@@ -13,14 +13,16 @@ running session. If an account is added to the group but the session has not
 been restarted, processes still have the old group list. ``session_groups()``
 checks the active process groups.
 """
+
 from __future__ import annotations
 
 import os
 import pwd
 import shutil
 import stat
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 GROUP = "pastex"
 HELPER = "/usr/lib/pastex/pastex-uinput-group"
@@ -33,8 +35,8 @@ SOCKET_PATHS = ("/run/ydotoold.sock", "/tmp/ydotool.sock")
 
 MANUAL_COMMAND = (
     "sudo groupadd --system pastex\n"
-    "echo 'KERNEL==\"uinput\", SUBSYSTEM==\"misc\", GROUP=\"pastex\", "
-    "MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' \\\n"
+    'echo \'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="pastex", '
+    'MODE="0660", OPTIONS+="static_node=uinput"\' \\\n'
     "  | sudo tee /usr/lib/udev/rules.d/70-pastex-uinput.rules\n"
     "sudo usermod -aG pastex $USER\n"
     "sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput\n"
@@ -125,9 +127,7 @@ def socket_candidates() -> list[str]:
     """Return all possible ydotoold socket locations."""
     uid = os.getuid()
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
-    return [f"{runtime}/ydotool.sock",
-            f"{runtime}/.ydotool_socket",
-            *SOCKET_PATHS]
+    return [f"{runtime}/ydotool.sock", f"{runtime}/.ydotool_socket", *SOCKET_PATHS]
 
 
 def acl_granted(dev: str = DEVICE, *, uid: int | None = None) -> bool:
@@ -137,11 +137,14 @@ def acl_granted(dev: str = DEVICE, *, uid: int | None = None) -> bool:
     device. Access can therefore be granted without group membership.
     """
     try:
-        import subprocess
-
-        out = subprocess.run(["getfacl", "--absolute-names", "-p", dev],
-                             capture_output=True, text=True, timeout=5).stdout
-    except (OSError, Exception):
+        out = subprocess.run(
+            ["getfacl", "--absolute-names", "-p", dev],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
         return False
     want = f"user:{uid if uid is not None else os.getuid()}:"
     for line in out.splitlines():
@@ -172,8 +175,9 @@ def ydotoold_running() -> bool:
             if not entry.isdigit():
                 continue
             try:
-                with open(f"/proc/{entry}/comm", encoding="utf-8",
-                          errors="replace") as handle:
+                with open(
+                    f"/proc/{entry}/comm", encoding="utf-8", errors="replace"
+                ) as handle:
                     if handle.read().strip() == "ydotoold":
                         return True
             except OSError:
@@ -260,6 +264,7 @@ class UinputStatus:
 
     def summary(self, prefix: str = "") -> list[tuple[str, str, str]]:
         """Return (marker, label, detail) rows for display."""
+
         def state(ok: bool) -> str:
             return "✅" if ok else "❌"
 
@@ -268,7 +273,9 @@ class UinputStatus:
         if self.device_writable and self.account_ready:
             group_detail = "member, active in this session"
         elif self.needs_relogin:
-            group_detail = "member on the system; this session has not loaded the group yet"
+            group_detail = (
+                "member on the system; this session has not loaded the group yet"
+            )
         elif self.in_group or self.in_session:
             group_detail = "member, active in this session"
         elif self.group_exists:
@@ -277,36 +284,42 @@ class UinputStatus:
             group_detail = "group does not exist — is the package installed correctly?"
 
         if self.acl_granted and not self.account_ready:
-            rows.append(("✅", f"{prefix}access to {DEVICE}",
-                         "active session ACL (no group membership or logout required)"))
+            rows.append(
+                (
+                    "✅",
+                    f"{prefix}access to {DEVICE}",
+                    "active session ACL (no group membership or logout required)",
+                )
+            )
         else:
             # If the device is writable, access is active even if /proc
             # cannot be read (container or custom NSS); do not
             # report a false negative.
-            group_ok = self.account_ready and (self.in_session
-                                               or self.device_writable)
-            rows.append((state(group_ok), f"{prefix}group '{GROUP}'",
-                         group_detail))
+            group_ok = self.account_ready and (self.in_session or self.device_writable)
+            rows.append((state(group_ok), f"{prefix}group '{GROUP}'", group_detail))
 
         if self.device_writable:
             device_detail = f"{DEVICE} is writable"
         elif not self.rule:
             device_detail = f"{DEVICE} is not writable — udev rule is missing"
         elif self.needs_relogin:
-            device_detail = (f"{DEVICE} is not writable — a new login is required")
+            device_detail = f"{DEVICE} is not writable — a new login is required"
         else:
             device_detail = f"{DEVICE} is not writable"
-        rows.append((state(self.device_writable), f"{prefix}write access to {DEVICE}",
-                     device_detail))
+        rows.append(
+            (
+                state(self.device_writable),
+                f"{prefix}write access to {DEVICE}",
+                device_detail,
+            )
+        )
 
         if self.ydotoold_binary:
             if self.daemon_ready:
                 where = self.socket or "ydotoold process"
-                rows.append(("✅", f"{prefix}ydotoold daemon",
-                             f"running ({where})"))
+                rows.append(("✅", f"{prefix}ydotoold daemon", f"running ({where})"))
             else:
-                rows.append(("❌", f"{prefix}ydotoold daemon",
-                             "not running"))
+                rows.append(("❌", f"{prefix}ydotoold daemon", "not running"))
         return rows
 
 
@@ -348,26 +361,31 @@ def enable_command(user: str | None = None) -> list[str]:
     return ["pkexec", HELPER, user or current_user()]
 
 
-def enable_for_user(user: str | None = None, *,
-                    runner: Callable[..., object] | None = None,
-                    timeout: int = 120) -> tuple[int, str, str]:
+def enable_for_user(
+    user: str | None = None,
+    *,
+    runner: Callable[..., object] | None = None,
+    timeout: int = 120,
+) -> tuple[int, str, str]:
     """Run the helper through pkexec and return (code, stdout, stderr).
 
     Exit code 126/127 means the password request was canceled or pkexec is missing.
     """
     if runner is None:
-        import subprocess
 
         def runner(cmd, **kw):
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, **kw)
+            return subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, check=False, **kw
+            )
 
     try:
         proc = runner(enable_command(user))
-        return (getattr(proc, "returncode", -1),
-                (getattr(proc, "stdout", "") or "").strip(),
-                (getattr(proc, "stderr", "") or "").strip())
-    except (OSError, Exception) as exc:  # SubprocessError & TimeoutExpired
+        return (
+            getattr(proc, "returncode", -1),
+            (getattr(proc, "stdout", "") or "").strip(),
+            (getattr(proc, "stderr", "") or "").strip(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
         return -1, "", str(exc)
 
 
@@ -375,21 +393,25 @@ def daemon_command() -> list[str]:
     return ["systemctl", "--user", "start", "ydotoold"]
 
 
-def start_daemon(*, runner: Callable[..., object] | None = None,
-                 timeout: int = 20) -> tuple[int, str, str]:
+def start_daemon(
+    *, runner: Callable[..., object] | None = None, timeout: int = 20
+) -> tuple[int, str, str]:
     """Start ydotoold through systemd --user and return (code, stdout, stderr)."""
     if runner is None:
-        import subprocess
 
         def runner(cmd, **kw):
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, **kw)
+            return subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, check=False, **kw
+            )
+
     try:
         proc = runner(daemon_command())
-        return (getattr(proc, "returncode", -1),
-                (getattr(proc, "stdout", "") or "").strip(),
-                (getattr(proc, "stderr", "") or "").strip())
-    except (OSError, Exception) as exc:
+        return (
+            getattr(proc, "returncode", -1),
+            (getattr(proc, "stdout", "") or "").strip(),
+            (getattr(proc, "stderr", "") or "").strip(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
         return -1, "", str(exc)
 
 
@@ -407,26 +429,31 @@ def explain(st: UinputStatus | None = None) -> str:
     if not st.account_ready:
         steps.append(
             f"Account '{st.user}' is not a member of group '{GROUP}'. Run "
-            "`pastex --enable-permissions` (or follow the manual steps in the README).")
+            "`pastex --enable-permissions` (or follow the manual steps in the README)."
+        )
     if st.needs_relogin:
         steps.append(
             f"Account '{st.user}' is already a member of group '{GROUP}' on the "
             "system, but THIS SESSION has not loaded it. Log out and back in "
-            "(or reboot); this step is required.")
+            "(or reboot); this step is required."
+        )
     if st.daemon_missing:
         steps.append(
             "ydotoold is not running. Run `systemctl --user start "
-            "ydotoold` (or `ydotoold &`) and try again.")
+            "ydotoold` (or `ydotoold &`) and try again."
+        )
     if st.in_session and not st.device_writable and not st.needs_relogin:
         if not st.rule:
             steps.append(
                 "The 'pastex' udev group rule was not found. Reinstall "
-                "the package: `sudo apt install --reinstall pastex`.")
+                "the package: `sudo apt install --reinstall pastex`."
+            )
         else:
             steps.append(
                 f"Permissions for {DEVICE} are not active. Reload the udev rules:\n"
                 "sudo udevadm control --reload-rules && "
-                "sudo udevadm trigger --sysname-match=uinput")
+                "sudo udevadm trigger --sysname-match=uinput"
+            )
     if not steps:  # pragma: no cover - jaring pengaman
         steps.append("Run `pastex --check` for details.")
     return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

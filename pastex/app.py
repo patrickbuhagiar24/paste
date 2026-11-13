@@ -4,6 +4,7 @@ Run: pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
 Click or press Enter on a .txt file to copy and paste it into another app.
 
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,22 +19,24 @@ import traceback
 from pathlib import Path
 
 from . import __version__, uinput
-from .clipboard import copy_text, simulate_paste
+from .clipboard import available_tools, copy_text, detect_session, simulate_paste
 from .snippets import (
     DEFAULT_SAMPLES,
     Node,
     create_folder,
     create_snippet,
-    rename_folder,
     default_roots,
     delete_path,
     flatten_texts,
     read_text,
+    rename_folder,
     scan_roots,
-    search as search_nodes,
     user_root,
     writable_root,
     write_text,
+)
+from .snippets import (
+    search as search_nodes,
 )
 
 try:
@@ -48,7 +51,9 @@ _TkBase = tk.Tk if tk is not None else object  # type: ignore[union-attr]
 _ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-attr]
 
 
-SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "pastex"
+SETTINGS_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "pastex"
+)
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 ERROR_LOG = SETTINGS_DIR / "error.log"
 
@@ -70,6 +75,7 @@ def log_error(message: str) -> None:
             fh.write(f"[{stamp}] {message}\n")
     except OSError:
         pass
+
 
 def _run_in_thread(target, *args) -> None:
     """Run target in a daemon thread so I/O does not block the GUI."""
@@ -99,8 +105,10 @@ def icon_dirs() -> list[Path]:
     """Return available hicolor theme directories in the checkout or installation."""
     base = Path(__file__).resolve().parent.parent
     dirs: list[Path] = []
-    for candidate in (base / "usr" / "share" / "icons" / "hicolor",
-                      Path("/usr/share/icons/hicolor")):
+    for candidate in (
+        base / "usr" / "share" / "icons" / "hicolor",
+        Path("/usr/share/icons/hicolor"),
+    ):
         if candidate.is_dir() and candidate not in dirs:
             dirs.append(candidate)
     return dirs
@@ -135,19 +143,18 @@ def apply_window_icon(window) -> list[Path]:
         images.append(image)
         used.append(path)
     if images:
-        window.iconphoto(True, *images)   # True also applies to child Toplevels.
-        window._icon_images = images      # cegah garbage-collect
+        window.iconphoto(True, *images)  # True also applies to child Toplevels.
+        window._icon_images = images  # cegah garbage-collect
     try:
-        window.wm_iconname(ICON_NAME)     # cadangan: nama ikon tema
-    except Exception:  # pragma: no cover - WM tanpa dukungan iconname
-        pass
+        window.wm_iconname(ICON_NAME)  # cadangan: nama ikon tema
+    except (tk.TclError, AttributeError):  # pragma: no cover - optional WM icon name
+        return used
     return used
 
 
 DEFAULT_SETTINGS = {
-    # Delay after withdrawing the window so the compositor can restore focus
-    # before Ctrl+V is sent. 0.6 seconds is sufficient on GNOME Wayland.
-    "focus_delay": 0.6,
+    # Keep Pastex hidden briefly after Ctrl+V is sent before restoring its window.
+    "restore_delay": 0.1,
     "always_on_top": False,
     # User-selected source folder. If set, only this folder is displayed
     # and used for writes. The --dir argument does not change this value.
@@ -156,7 +163,57 @@ DEFAULT_SETTINGS = {
     "collapsed": [],
     # Optional per-folder child ordering, keyed by absolute parent path.
     "order": {},
+    "setup_assistant_seen": False,
 }
+
+
+def startup_setup_issues(
+    session: str, tools: dict[str, bool], status=None
+) -> tuple[list[str], bool]:
+    """Return first-launch setup issues and whether permissions can be requested."""
+    issues = []
+    if not any(tools.get(name, False) for name in ("wl-copy", "xclip", "xsel")):
+        issues.append(
+            "Clipboard tools are missing. Install them with: "
+            "sudo apt install wl-clipboard xclip xsel."
+        )
+
+    use_ydotool = session == "wayland" or (
+        session == "x11" and not tools.get("xdotool", False)
+    )
+    if session == "wayland" and not tools.get("ydotool", False):
+        issues.append(
+            "ydotool is missing. Automatic paste is unavailable on Wayland; "
+            "install it with: sudo apt install ydotool."
+        )
+    elif session == "x11" and not (
+        tools.get("xdotool", False) or tools.get("ydotool", False)
+    ):
+        issues.append(
+            "No automatic-paste tool is installed. Install one with: "
+            "sudo apt install xdotool ydotool."
+        )
+    elif session not in {"wayland", "x11"}:
+        issues.append(
+            "Pastex could not identify a Wayland or X11 session. "
+            "Automatic paste may not be available in this environment."
+        )
+
+    can_enable = False
+    if use_ydotool and tools.get("ydotool", False):
+        status = status or uinput.status()
+        if not status.device_writable:
+            issues.append(
+                "Pastex cannot access /dev/uinput, which ydotool needs to send Ctrl+V."
+            )
+            can_enable = uinput.can_self_enable(status)
+        if status.ydotoold_binary and not status.daemon_ready:
+            issues.append(
+                "The ydotoold service is not running. Pastex tried to start it; "
+                "if it remains unavailable, run: systemctl --user start ydotoold."
+            )
+    return issues, can_enable
+
 
 def load_settings() -> dict:
     settings_path = SETTINGS_FILE
@@ -170,16 +227,23 @@ def load_settings() -> dict:
     if not isinstance(data, dict):
         return dict(DEFAULT_SETTINGS)
     settings = {**DEFAULT_SETTINGS, **data}
+    # The old pre-paste focus delay has been replaced by a post-paste restore delay.
+    settings.pop("focus_delay", None)
     # Normalize values to prevent malformed settings from breaking the GUI.
     collapsed = settings.get("collapsed")
-    settings["collapsed"] = [str(p) for p in collapsed] if isinstance(
-        collapsed, (list, tuple)) else []
+    settings["collapsed"] = (
+        [str(p) for p in collapsed] if isinstance(collapsed, (list, tuple)) else []
+    )
     order = settings.get("order")
-    settings["order"] = {
-        str(parent): [str(name) for name in names if isinstance(name, str)]
-        for parent, names in order.items()
-        if isinstance(order, dict) and isinstance(names, (list, tuple))
-    } if isinstance(order, dict) else {}
+    settings["order"] = (
+        {
+            str(parent): [str(name) for name in names if isinstance(name, str)]
+            for parent, names in order.items()
+            if isinstance(order, dict) and isinstance(names, (list, tuple))
+        }
+        if isinstance(order, dict)
+        else {}
+    )
     source = settings.get("source_dir")
     settings["source_dir"] = str(source) if isinstance(source, str) and source else None
     if settings_path == legacy_path:
@@ -190,8 +254,9 @@ def load_settings() -> dict:
 def save_settings(settings: dict) -> None:
     try:
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(json.dumps(settings, indent=2, ensure_ascii=False),
-                                 encoding="utf-8")
+        SETTINGS_FILE.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     except OSError:
         pass
 
@@ -206,9 +271,9 @@ def export_data(target_dir: Path) -> list[Path]:
     target_dir.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
     skipped: list[Path] = []
-    for category, files in DEFAULT_SAMPLES.items():
+    for folder, files in DEFAULT_SAMPLES.items():
         for name, content in files.items():
-            target = target_dir / category / f"{name}.txt"
+            target = target_dir / folder / f"{name}.txt"
             if target.exists():
                 skipped.append(target)
                 continue
@@ -234,8 +299,13 @@ def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
         kept = [k for child in node.children if (k := keep(child)) is not None]
         if not kept:
             return None
-        clone = Node(name=node.name, path=node.path, is_dir=True,
-                     children=kept, source_root=node.source_root)
+        clone = Node(
+            name=node.name,
+            path=node.path,
+            is_dir=True,
+            children=kept,
+            source_root=node.source_root,
+        )
         return clone
 
     return [k for n in nodes if (k := keep(n)) is not None]
@@ -244,8 +314,9 @@ def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
 class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     """The main Pastex window."""
 
-    def __init__(self, roots: list[Path] | None = None,
-                 *, transient_roots: bool = False):
+    def __init__(
+        self, roots: list[Path] | None = None, *, transient_roots: bool = False
+    ):
         """Use ``roots`` instead of the default list for this session only.
 
         ``transient_roots=True`` is used by the CLI ``--dir`` option. These roots
@@ -253,16 +324,18 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         so the user's selected source folder remains unchanged.
         """
         if tk is None:
-            raise RuntimeError("tkinter is unavailable. Install python3-tk "
-                               "(sudo apt install python3-tk).")
+            raise RuntimeError(
+                "tkinter is unavailable. Install python3-tk "
+                "(sudo apt install python3-tk)."
+            )
         try:
             # Tk normalizes className into WM_CLASS; the integration test compares
             # xprop output with the desktop StartupWMClass.
             super().__init__(className=TK_CLASS_NAME)
-        except Exception as exc:
+        except tk.TclError as exc:
             raise RuntimeError(
-                "Could not open window (is a display available?). "
-                f"Detail: {exc}") from exc
+                f"Could not open window (is a display available?). Detail: {exc}"
+            ) from exc
         self.title(f"Pastex v{__version__} — One-Click Paste")
         # Use the same icon as the application menu.
         self.icon_files_used = apply_window_icon(self)
@@ -285,6 +358,85 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.lift()
         self.focus_force()
         self._center_window()
+        if not self.settings.get("setup_assistant_seen", False):
+            # Check in the background so system permission probes never delay startup.
+            self.after(250, self._start_first_run_setup_check)
+
+    def _start_first_run_setup_check(self) -> None:
+        """Inspect paste prerequisites once, before the user clicks a snippet."""
+        if getattr(self, "_setup_check_started", False):
+            return
+        self._setup_check_started = True
+        threading.Thread(
+            target=self._first_run_setup_worker,
+            name="pastex-setup-check",
+            daemon=True,
+        ).start()
+
+    def _first_run_setup_worker(self) -> None:
+        try:
+            session = detect_session()
+            tools = available_tools()
+            use_ydotool = session == "wayland" or (
+                session == "x11" and not tools.get("xdotool", False)
+            )
+            status = None
+            if use_ydotool and tools.get("ydotool", False):
+                status = uinput.status()
+                if status.ydotoold_binary and not status.daemon_ready:
+                    uinput.start_daemon()
+                    status = uinput.status()
+            issues, can_enable = startup_setup_issues(session, tools, status)
+        except Exception as exc:  # noqa: BLE001 - setup diagnostics must not stop the GUI
+            issues = [f"Pastex could not complete its setup check: {exc}"]
+            can_enable = False
+        self.after(0, self._finish_first_run_setup_check, issues, can_enable)
+
+    def _finish_first_run_setup_check(
+        self, issues: list[str], can_enable: bool
+    ) -> None:
+        """Record the one-time check and show only actionable setup guidance."""
+        self.settings["setup_assistant_seen"] = True
+        save_settings(self.settings)
+        if not issues:
+            self.status_var.set("Automatic paste is ready.")
+            return
+        details = "\n\n".join(f"• {issue}" for issue in issues)
+        if can_enable and messagebox.askyesno(
+            "Set Up Automatic Paste",
+            f"Pastex found setup items to review:\n\n{details}\n\n"
+            "Would you like to authorize Pastex to configure the required "
+            "uinput access now? Your administrator password may be requested.",
+        ):
+            status = uinput.status()
+            code, out, err = uinput.enable_for_user(status.user)
+            if code == 0:
+                remaining = [issue for issue in issues if "/dev/uinput" not in issue]
+                message = (
+                    "Permission setup completed. If your account was newly added "
+                    "to the pastex group, log out and back in before automatic "
+                    "paste can use it."
+                )
+                if remaining:
+                    message += (
+                        "\n\nOther setup items still need attention:\n"
+                        + "\n".join(f"• {issue}" for issue in remaining)
+                    )
+                message += "\n\nRun `pastex --check` to review the environment."
+                messagebox.showinfo("Setup Requested", message)
+                return
+            message = err or out or f"The setup helper exited with code {code}."
+            messagebox.showwarning(
+                "Setup Not Completed",
+                f"Pastex could not configure automatic paste.\n\n{message}\n\n"
+                "You can run `pastex --check` for details.",
+            )
+            return
+        messagebox.showwarning(
+            "Automatic Paste Setup",
+            f"Pastex checked its clipboard and paste prerequisites before use.\n\n"
+            f"{details}\n\nRun `pastex --check` for a full diagnostic report.",
+        )
 
     def _center_window(self) -> None:
         self.update_idletasks()
@@ -301,27 +453,28 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._on_search_changed())
         ttk.Label(toolbar, text="🔍").pack(side="left")
-        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var,
-                                      width=26)
+        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=26)
         self.search_entry.pack(side="left", padx=(2, 6))
         buttons = (
             (self.refresh_tree, "↻ Refresh (F5)", (0, 0)),
-            (self.add_category, "＋ Folder", (4, 0)),
+            (self.add_folder, "＋ Folder", (4, 0)),
             (self.add_text, "＋ Text", (4, 0)),
         )
         for command, label, padx in buttons:
             ttk.Button(toolbar, text=label, command=command).pack(
-                side="left", padx=padx)
+                side="left", padx=padx
+            )
         # Choosing a source folder stays separate from opening its location.
-        self.source_button = ttk.Button(toolbar, text="📁 Choose Source Folder",
-                                        command=self.choose_source_dir)
+        self.source_button = ttk.Button(
+            toolbar, text="📁 Choose Source Folder", command=self.choose_source_dir
+        )
         self.source_button.pack(side="right")
         self.source_var = tk.StringVar(value="")
-        self.source_label = ttk.Label(toolbar, textvariable=self.source_var,
-                                      foreground="gray", cursor="hand2")
+        self.source_label = ttk.Label(
+            toolbar, textvariable=self.source_var, foreground="gray", cursor="hand2"
+        )
         self.source_label.pack(side="right", padx=(0, 6))
-        self.source_label.bind("<Button-1>",
-                               lambda _event: self.open_source_folder())
+        self.source_label.bind("<Button-1>", lambda _event: self.open_source_folder())
 
         # Main panel: tree on the left, preview on the right.
         paned = ttk.PanedWindow(self, orient="horizontal")
@@ -332,12 +485,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Keep one container and switch between the tree and the empty state.
         self.tree_area = ttk.Frame(left)
         self.tree_area.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="browse")
+        self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="extended")
         self.tree.tag_configure("hover", background="#86bfff", foreground="#102a43")
         self._hover_iid = ""
-        self._click_after_id = None
-        self.scroll = ttk.Scrollbar(self.tree_area, orient="vertical",
-                                    command=self.tree.yview)
+        self.scroll = ttk.Scrollbar(
+            self.tree_area, orient="vertical", command=self.tree.yview
+        )
         self.tree.configure(yscrollcommand=self.scroll.set)
         # Guided empty state shown when no source folder is selected.
         self.empty_frame = ttk.Frame(self.tree_area)
@@ -345,41 +498,54 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ttk.Label(
             self.empty_frame,
             text="No source folder selected.\n\nChoose a folder containing .txt files —\n"
-                 "its folder hierarchy will appear here, and new files will be saved there.",
-            justify="center", foreground="gray").pack()
-        ttk.Button(self.empty_frame, text="📁 Choose Source Folder",
-                   command=self.choose_source_dir).pack(pady=12)
+            "its folder hierarchy will appear here, and new files will be saved there.",
+            justify="center",
+            foreground="gray",
+        ).pack()
+        ttk.Button(
+            self.empty_frame,
+            text="📁 Choose Source Folder",
+            command=self.choose_source_dir,
+        ).pack(pady=12)
         self._show_empty_state(True)
         paned.add(left, weight=2)
 
         right = ttk.Frame(paned)
         ttk.Label(right, text="Text Preview:").pack(anchor="w")
-        self.preview = tk.Text(right, wrap="word", font=("Monospace", 11),
-                               state="disabled", height=16)
+        self.preview = tk.Text(
+            right, wrap="word", font=("Monospace", 11), state="disabled", height=16
+        )
         self.preview.pack(fill="both", expand=True)
         self.info_var = tk.StringVar(value="Select a .txt file on the left.")
-        ttk.Label(right, textvariable=self.info_var, wraplength=420,
-                  foreground="gray").pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            right, textvariable=self.info_var, wraplength=420, foreground="gray"
+        ).pack(anchor="w", pady=(4, 0))
 
         actions = ttk.Frame(right, padding=(0, 6, 0, 0))
         actions.pack(fill="x")
-        ttk.Button(actions, text="⚡ Paste into Another App",
-                   command=self.do_paste).pack(side="left")
+        ttk.Button(
+            actions, text="⚡ Paste into Another App", command=self.do_paste
+        ).pack(side="left")
 
         # Settings row
         opts = ttk.Frame(self, padding=(6, 0, 6, 4))
         opts.pack(fill="x")
         self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
-        ttk.Checkbutton(opts, text="Always on top", variable=self.top_var,
-                        command=self._apply_settings).pack(side="left")
+        ttk.Checkbutton(
+            opts,
+            text="Always on top",
+            variable=self.top_var,
+            command=self._apply_settings,
+        ).pack(side="left")
         # Note: the automatic-paste permission button was removed in 1.5.0.
         # Configure /dev/uinput through the CLI (`pastex --permissions`, `--enable-permissions`).
         # Status information remains available in `--check` and on paste failures.
 
         # Status bar
         self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(self, textvariable=self.status_var, relief="sunken",
-                  anchor="w", padding=4).pack(fill="x", side="bottom")
+        ttk.Label(
+            self, textvariable=self.status_var, relief="sunken", anchor="w", padding=4
+        ).pack(fill="x", side="bottom")
 
         # Context menu is populated for each right-clicked text or folder.
         self.menu = tk.Menu(self, tearoff=0)
@@ -393,15 +559,19 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_preview())
         # Save expanded/collapsed folder state so it survives refreshes
         # and future sessions (settings.json -> "collapsed").
-        self.tree.bind("<<TreeviewOpen>>",
-                       lambda e: self._toggle_collapsed(self._event_iid(e)))
-        self.tree.bind("<<TreeviewClose>>",
-                       lambda e: self._toggle_collapsed(self._event_iid(e)))
+        self.tree.bind(
+            "<<TreeviewOpen>>", lambda e: self._toggle_collapsed(self._event_iid(e))
+        )
+        self.tree.bind(
+            "<<TreeviewClose>>", lambda e: self._toggle_collapsed(self._event_iid(e))
+        )
         self.tree.bind("<Return>", lambda _e: self.on_activate())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<F2>", lambda _e: self.edit_selected())
         self.bind("<F5>", lambda _e: self.refresh_tree())
-        self.bind("<Control-f>", lambda _e: self.search_var.set("") or self._focus_search())
+        self.bind(
+            "<Control-f>", lambda _e: self.search_var.set("") or self._focus_search()
+        )
 
     def _on_search_changed(self) -> None:
         """Debounce searches by 300 ms to avoid rescanning on every keystroke."""
@@ -419,8 +589,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if row == self._hover_iid:
             return
         if self._hover_iid and self.tree.exists(self._hover_iid):
-            tags = tuple(tag for tag in self.tree.item(self._hover_iid, "tags")
-                         if tag != "hover")
+            tags = tuple(
+                tag for tag in self.tree.item(self._hover_iid, "tags") if tag != "hover"
+            )
             self.tree.item(self._hover_iid, tags=tags)
         self._hover_iid = row
         if row:
@@ -430,8 +601,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _clear_tree_hover(self, _event=None) -> None:
         if self._hover_iid and self.tree.exists(self._hover_iid):
-            tags = tuple(tag for tag in self.tree.item(self._hover_iid, "tags")
-                         if tag != "hover")
+            tags = tuple(
+                tag for tag in self.tree.item(self._hover_iid, "tags") if tag != "hover"
+            )
             self.tree.item(self._hover_iid, tags=tags)
         self._hover_iid = ""
 
@@ -440,59 +612,75 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         row = self.tree.identify_row(event.y)
         if not row:
             return
+        modifiers = getattr(event, "state", 0) & 0x0005  # Shift or Control
+        if modifiers:
+            self.tree.focus(row)
+            return
         self.tree.selection_set(row)
         self.tree.focus(row)
         path = Path(row.split("#", 1)[0])
         if path.is_file():
-            # Debounce the second tap of a double-click to prevent duplicate pastes.
-            if self._click_after_id is not None:
-                self.after_cancel(self._click_after_id)
-            self._click_after_id = self.after(250, self._activate_single_click)
-
-    def _activate_single_click(self) -> None:
-        self._click_after_id = None
-        self.do_paste()
+            # Start immediately. do_paste() guards against another activation
+            # while the current copy-and-paste operation is still in progress.
+            self.do_paste()
 
     def _on_right_click(self, event):
-        """Open actions for the row under the pointer without selecting it yet."""
+        """Show a native-feeling context menu without discarding a selection."""
         row = self.tree.identify_row(event.y)
         if not row:
             return "break"
         self._context_iid = row
         self.tree.focus(row)
         self.menu.delete(0, "end")
+        # Keep selection actions together; they act on the context row or selection.
         self.menu.add_command(label="Select", command=self.select_context_item)
+        self.menu.add_command(label="Edit", command=self.edit_context_item)
+        self.menu.add_command(
+            label="Delete",
+            command=lambda: self.delete_selected(self._context_target_iids()),
+        )
         self.menu.add_separator()
         self.menu.add_command(
-            label="Edit", command=lambda: self._run_context_action(self.edit_selected))
+            label="↑ Up",
+            command=lambda: self.move_selected(
+                -1, item_ids=self._context_target_iids()
+            ),
+        )
         self.menu.add_command(
-            label="Delete", command=lambda: self._run_context_action(self.delete_selected))
-        self.menu.add_separator()
-        self.menu.add_command(
-            label="↑ Up", command=lambda: self._run_context_action(
-                lambda: self.move_selected(-1)))
-        self.menu.add_command(
-            label="↓ Down", command=lambda: self._run_context_action(
-                lambda: self.move_selected(1)))
+            label="↓ Down",
+            command=lambda: self.move_selected(1, item_ids=self._context_target_iids()),
+        )
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
         return "break"
 
+    def _context_target_iids(self) -> list[str]:
+        """Use the whole selection when right-clicking within it; otherwise the row."""
+        selection = list(self.tree.selection())
+        iid = getattr(self, "_context_iid", "")
+        if iid and self.tree.exists(iid):
+            return selection if iid in selection else [iid]
+        return selection
+
     def select_context_item(self) -> None:
-        """Select and preview the row that opened the context menu."""
+        """Add the context row to the current multi-selection."""
+        iid = getattr(self, "_context_iid", "")
+        if not iid or not self.tree.exists(iid):
+            return
+        self.tree.selection_add(iid)
+        self.tree.focus(iid)
+        self.show_preview()
+
+    def edit_context_item(self) -> None:
+        """Edit only the row under the pointer, leaving multi-edit unsupported."""
         iid = getattr(self, "_context_iid", "")
         if not iid or not self.tree.exists(iid):
             return
         self.tree.selection_set(iid)
         self.tree.focus(iid)
-        self.show_preview()
-
-    def _run_context_action(self, action) -> None:
-        """Run a context-menu action against the row that was right-clicked."""
-        self.select_context_item()
-        action()
+        self.edit_selected()
 
     def _event_iid(self, event) -> str:
         """Get a Treeview item id from an event, with focus/row lookup as fallback."""
@@ -501,7 +689,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return str(item)
         try:
             focused = self.tree.focus()
-        except Exception:  # pragma: no cover - treeview tiruan
+        except tk.TclError:  # pragma: no cover - tree unavailable during teardown
             return ""
         return str(focused or "")
 
@@ -546,10 +734,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 continue
             preferred = order_map.get(_norm_path(node.path), [])
             rank = {name: index for index, name in enumerate(preferred)}
-            default_index = {child.path.name: index
-                             for index, child in enumerate(node.children)}
-            node.children.sort(key=lambda child: (
-                rank.get(child.path.name, len(rank) + default_index[child.path.name])))
+            default_index = {
+                child.path.name: index for index, child in enumerate(node.children)
+            }
+            node.children.sort(
+                key=lambda child: rank.get(
+                    child.path.name, len(rank) + default_index[child.path.name]
+                )
+            )
             self._apply_saved_order(node.children)
 
     def refresh_tree(self) -> None:
@@ -573,11 +765,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             total += root_node.count_texts()
         self._show_empty_state(not nodes)
         if query:
-            self.status_var.set(f"Search results for '{query}': {total} matching files.")
+            self.status_var.set(
+                f"Search results for '{query}': {total} matching files."
+            )
         else:
             self.status_var.set(
                 f"{total} .txt files in {len(roots)} folders "
-                f"({', '.join(str(r) for r in roots)})")
+                f"({', '.join(str(r) for r in roots)})"
+            )
         self._update_source_label()
 
     def _update_source_label(self) -> None:
@@ -598,46 +793,73 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             iid = f"{iid}#{node.source_root}"
         collapsed = getattr(self, "collapsed", set())
         is_open = node.is_dir and str(node.path) not in collapsed
-        self.tree.insert(parent, "end", iid=iid,
-                         text=f"{icon}{label if label is not None else node.name}",
-                         open=is_open,
-                         tags=("dir" if node.is_dir else "file"))
+        self.tree.insert(
+            parent,
+            "end",
+            iid=iid,
+            text=f"{icon}{label if label is not None else node.name}",
+            open=is_open,
+            tags=("dir" if node.is_dir else "file"),
+        )
         for child in node.children:
             self._insert_node(iid, child)
         return iid
 
-    def move_selected(self, direction: int) -> None:
-        """Move the selected text or folder among its siblings and save its order."""
-        path = self.selected_path()
-        if path is None:
-            return
+    def move_selected(
+        self, direction: int, *, item_ids: list[str] | None = None
+    ) -> None:
+        """Move selected siblings one position while preserving their relative order."""
         if self.search_var.get().strip():
             self.status_var.set("Clear the search before changing item order.")
             return
-        selection = self.tree.selection()
+        selection = list(item_ids if item_ids is not None else self.tree.selection())
+        selection = [iid for iid in selection if self.tree.exists(iid)]
         if not selection:
             return
-        iid = selection[0]
-        parent_iid = self.tree.parent(iid)
-        siblings = list(self.tree.get_children(parent_iid))
-        try:
-            index = siblings.index(iid)
-        except ValueError:
-            return
-        target = index + (-1 if direction < 0 else 1)
-        if target < 0 or target >= len(siblings):
-            self.status_var.set("Item is already at the edge of this folder.")
-            return
-        self.tree.move(iid, parent_iid, target)
-        siblings = list(self.tree.get_children(parent_iid))
+        groups: dict[str, list[str]] = {}
+        for iid in selection:
+            groups.setdefault(self.tree.parent(iid), []).append(iid)
+
+        step = -1 if direction < 0 else 1
+        changed = 0
         order = dict(self.settings.get("order") or {})
-        order[_norm_path(path.parent)] = [
-            Path(item.split("#", 1)[0]).name for item in siblings
-        ]
+        for parent_iid, group in groups.items():
+            siblings = list(self.tree.get_children(parent_iid))
+            selected = set(group)
+            reordered = siblings.copy()
+            indices = (
+                range(1, len(reordered))
+                if step < 0
+                else range(len(reordered) - 2, -1, -1)
+            )
+            for index in indices:
+                neighbor = index - 1 if step < 0 else index + 1
+                if reordered[index] in selected and reordered[neighbor] not in selected:
+                    reordered[index], reordered[neighbor] = (
+                        reordered[neighbor],
+                        reordered[index],
+                    )
+            if reordered == siblings:
+                continue
+            for index, iid in enumerate(reordered):
+                self.tree.move(iid, parent_iid, index)
+            parent_path = Path(group[0].split("#", 1)[0]).parent
+            order[_norm_path(parent_path)] = [
+                Path(iid.split("#", 1)[0]).name for iid in reordered
+            ]
+            changed += len(group)
+
+        if not changed:
+            label = "top" if step < 0 else "bottom"
+            self.status_var.set(
+                f"Selected items are already at the {label} of their folders."
+            )
+            return
         self.settings["order"] = order
         if not getattr(self, "transient_roots", False):
             save_settings(self.settings)
-        self.status_var.set(f"Moved '{path.name}' {'up' if direction < 0 else 'down'}.")
+        verb = "up" if step < 0 else "down"
+        self.status_var.set(f"Moved {changed} selected item(s) {verb}.")
 
     # ---------- Source folder and collapsed folders ----------
     def choose_source_dir(self) -> Path | None:
@@ -648,14 +870,15 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         """
         current = self.settings.get("source_dir") or str(Path.home())
         chosen = filedialog.askdirectory(
-            title="Choose Source Folder (.txt files)", initialdir=current,
-            mustexist=True)
+            title="Choose Source Folder (.txt files)",
+            initialdir=current,
+            mustexist=True,
+        )
         if not chosen:
             return None
         path = Path(chosen).expanduser()
         if not path.is_dir():
-            messagebox.showerror("Invalid folder",
-                                 f"Not a folder: {path}")
+            messagebox.showerror("Invalid folder", f"Not a folder: {path}")
             return None
         self.settings["source_dir"] = _norm_path(path)
         self.writable = path
@@ -693,12 +916,20 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.collapsed = collapsed
 
     def _prune_collapsed(self, path: Path) -> None:
-        """Remove the collapsed-state entry for ``path``, such as after deletion."""
-        key = _norm_path(path)
-        collapsed = {p for p in self._collapsed_paths()
-                     if p != key and not p.startswith(key + str(Path("/")))}
-        if collapsed != self._collapsed_paths():
-            self._save_collapsed(collapsed)
+        """Remove collapsed-state entries for ``path`` and its descendants."""
+        self._prune_collapsed_paths([path])
+
+    def _prune_collapsed_paths(self, paths: list[Path]) -> None:
+        """Prune several deleted trees and save the remaining state once."""
+        removed_roots = [Path(_norm_path(path)) for path in paths]
+        current = self._collapsed_paths()
+        remaining = {
+            value
+            for value in current
+            if not any(_is_within(value, root) for root in removed_roots)
+        }
+        if remaining != current:
+            self._save_collapsed(remaining)
 
     def selected_path(self) -> Path | None:
         sel = self.tree.selection()
@@ -714,8 +945,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.preview.delete("1.0", "end")
         if path is None or path.is_dir() or not path.exists():
             self.current_file = None
-            self.preview.insert("1.0", "Select a .txt file to preview its contents.\n\n"
-                                       "Click once or press Enter to paste into another app.")
+            self.preview.insert(
+                "1.0",
+                "Select a .txt file to preview its contents.\n\n"
+                "Click once or press Enter to paste into another app.",
+            )
             self.info_var.set("Select a .txt file on the left.")
             self.preview.configure(state="disabled")
             return
@@ -728,7 +962,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.preview.insert("1.0", text)
         self.preview.configure(state="disabled")
         self.info_var.set(
-            f"{path.name} — {len(text)} characters, {len(text.split())} words\n{path}")
+            f"{path.name} — {len(text)} characters, {len(text.split())} words\n{path}"
+        )
 
     # ---------- Copy and paste ----------
     def on_activate(self) -> None:
@@ -738,18 +973,19 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def do_paste(self) -> None:
         """Click once to paste text into another app.
 
-        The flow (also used by tools such as CopyQ and ClipClip):
+        The flow is:
 
-          1. Copy the text to the clipboard.
-          2. Withdraw the Pastex window; do not minimize or lower it. Withdrawing
-             returns focus to the previously active app.
-          3. Wait briefly for the compositor to restore focus.
-          4. Send Ctrl+V to the target app.
-          5. Restore the Pastex window.
+          1. Withdraw the Pastex window so the previously active app can receive focus.
+          2. Copy the text to the clipboard.
+          3. Send Ctrl+V to the currently focused app.
+          4. Wait briefly, then restore the Pastex window.
 
         `iconify()` is ignored by some compositors, and `lower()` does not return
         focus at all; Ctrl+V would then be sent back into Pastex itself.
         """
+        if self._pasting:
+            self.status_var.set("Paste in progress...")
+            return
         path = self.selected_path()
         if path is None or path.is_dir():
             self.status_var.set("Select a .txt file first.")
@@ -758,9 +994,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             text = read_text(path)
         except OSError as exc:
             messagebox.showerror("Read failed", str(exc))
-            return
-        if self._pasting:
-            self.status_var.set("Paste in progress...")
             return
         self._pasting = True
         self.status_var.set("Preparing to paste...")
@@ -776,30 +1009,39 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         started = time.monotonic()
         result = copy_text(text)
         elapsed_ms = (time.monotonic() - started) * 1000
-        log_error(f"[paste] salin: ok={result.ok} tool={result.tool} "
-                  f"verified={result.verified} ({elapsed_ms:.0f} ms)")
+        log_error(
+            f"[paste] salin: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
+        )
         self.after(0, self._after_copy, result)
 
     def _after_copy(self, result) -> None:
-        """After copying, wait for focus to return and send Ctrl+V."""
+        """Send Ctrl+V immediately after the clipboard tool accepts the text."""
         if not result.ok:
             self._paste_failed(result.message)
             return
-        delay_ms = int(float(self.settings.get("focus_delay", 0.6)) * 1000)
-        log_error(f"[paste] waiting for focus for {delay_ms} ms")
-        self.after(delay_ms, self._send_paste_after_release)
+        self._send_paste()
 
-    def _send_paste_after_release(self) -> None:
+    def _send_paste(self) -> None:
         _run_in_thread(self._paste_sender)
 
     def _paste_sender(self) -> None:
         log_error("[paste] sending Ctrl+V")
         result = simulate_paste()
-        log_error(f"[paste] hasil: ok={result.ok} tool={result.tool} "
-                  f"pesan={result.message}")
+        log_error(
+            f"[paste] hasil: ok={result.ok} tool={result.tool} pesan={result.message}"
+        )
         self.after(0, self._paste_done, result)
 
     def _paste_done(self, result) -> None:
+        """Wait after sending Ctrl+V, then restore the Pastex window."""
+        delay_ms = int(float(self.settings.get("restore_delay", 0.1)) * 1000)
+        if delay_ms > 0:
+            log_error(f"[paste] waiting {delay_ms} ms before restoring the window")
+            self.after(delay_ms, lambda: PastexApp._finish_paste(self, result))
+        else:
+            PastexApp._finish_paste(self, result)
+
+    def _finish_paste(self, result) -> None:
         self._pasting = False
         self.deiconify()
         if not result.ok:
@@ -816,7 +1058,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         log_error("[paste] sent; success is not yet confirmed")
         self.lift()
         self.status_var.set(
-            f"⚡ {result.message} If the text does not appear, press Ctrl+V.")
+            f"⚡ {result.message} If the text does not appear, press Ctrl+V."
+        )
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
@@ -836,14 +1079,21 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         and the command to run in a terminal.
         """
         st = uinput.status()
-        text = (f"{message}\n\nThe text is on the clipboard — "
-                "press Ctrl+V in the target app.")
+        text = (
+            f"{message}\n\nThe text is on the clipboard — "
+            "press Ctrl+V in the target app."
+        )
         if st.ready:
             messagebox.showinfo("Automatic paste is unavailable", text)
             return
-        text += ("\n\nDiagnosis:\n" + "\n".join(_status_lines(st))
-                 + "\n\n" + uinput.explain(st)
-                 + "\n\n" + uinput.CLI_HINT)
+        text += (
+            "\n\nDiagnosis:\n"
+            + "\n".join(_status_lines(st))
+            + "\n\n"
+            + uinput.explain(st)
+            + "\n\n"
+            + uinput.CLI_HINT
+        )
         messagebox.showinfo("Automatic paste is unavailable", text)
 
     # ---------- Create, edit, and delete ----------
@@ -875,7 +1125,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return path.parent
         return self.writable
 
-    def add_category(self) -> None:
+    def add_folder(self) -> None:
         name = simpledialog.askstring("New Folder", "Folder name:")
         if not name:
             return
@@ -887,7 +1137,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.refresh_tree()
 
     def add_text(self) -> None:
-        name = simpledialog.askstring("New text", "File name (the .txt extension is optional):")
+        name = simpledialog.askstring(
+            "New text", "File name (the .txt extension is optional):"
+        )
         if not name:
             return
         try:
@@ -921,8 +1173,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             mapped_parent = remap(parent)
             mapped_names = list(names)
             if str(Path(parent).resolve()) == old_parent:
-                mapped_names = [new.name if name == old.name else name
-                                for name in mapped_names]
+                mapped_names = [
+                    new.name if name == old.name else name for name in mapped_names
+                ]
             remapped_order[mapped_parent] = mapped_names
         self.settings["order"] = remapped_order
         save_settings(self.settings)
@@ -934,7 +1187,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         if path.is_dir():
             name = simpledialog.askstring(
-                "Rename Folder", "New folder name:", initialvalue=path.name)
+                "Rename Folder", "New folder name:", initialvalue=path.name
+            )
             if not name:
                 return
             try:
@@ -954,19 +1208,42 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         editor = EditorWindow(self, path)
         self.wait_window(editor)
 
-    def delete_selected(self) -> None:
-        path = self.selected_path()
-        if path is None:
+    def delete_selected(self, item_ids: list[str] | None = None) -> None:
+        """Delete selected files and folders together after one confirmation."""
+        selection = list(item_ids if item_ids is not None else self.tree.selection())
+        paths = list(
+            dict.fromkeys(
+                Path(iid.split("#", 1)[0]) for iid in selection if self.tree.exists(iid)
+            )
+        )
+        if not paths:
             return
-        if not messagebox.askyesno("Delete", f"Delete '{path.name}'?\n{path}"):
+        selected_folders = [path for path in paths if path.is_dir()]
+        paths = [
+            path
+            for path in paths
+            if not any(
+                path != folder and _is_within(path, folder)
+                for folder in selected_folders
+            )
+        ]
+        if len(paths) == 1:
+            path = paths[0]
+            prompt = f"Delete '{path.name}'?\n{path}"
+        else:
+            details = "\n".join(str(path) for path in paths)
+            prompt = f"Delete these {len(paths)} selected items?\n{details}"
+        if not messagebox.askyesno("Delete", prompt):
             return
+
         try:
-            delete_path(path)
+            for path in paths:
+                delete_path(path)
         except OSError as exc:
             messagebox.showerror("Could not delete", str(exc))
-            return
-        # Remove deleted paths from settings.json.
-        self._prune_collapsed(path)
+        else:
+            # Remove collapsed-state entries for deleted folders in one save.
+            self._prune_collapsed_paths(paths)
         self.refresh_tree()
 
     def open_source_folder(self) -> None:
@@ -990,10 +1267,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._save_current_settings()
 
 
-def _status_lines(st: "uinput.UinputStatus", *, prefix: str = "") -> list[str]:
+def _status_lines(st: uinput.UinputStatus, *, prefix: str = "") -> list[str]:
     """Return formatted permission-status lines for the GUI and --check."""
-    return [f"{mark} {label}: {detail}" for mark, label, detail
-            in st.summary(prefix=prefix)]
+    return [
+        f"{mark} {label}: {detail}" for mark, label, detail in st.summary(prefix=prefix)
+    ]
 
 
 class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
@@ -1016,8 +1294,9 @@ class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
         bar = ttk.Frame(self, padding=8)
         bar.pack(fill="x")
         ttk.Button(bar, text="💾 Save (Ctrl+S)", command=self.save).pack(side="left")
-        ttk.Button(bar, text="⚡ Save & Paste",
-                   command=self.save_and_paste).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="⚡ Save & Paste", command=self.save_and_paste).pack(
+            side="left", padx=(6, 0)
+        )
         ttk.Button(bar, text="Close", command=self.destroy).pack(side="right")
         self.bind("<Control-s>", lambda _e: self.save())
 
@@ -1044,28 +1323,58 @@ def run_cli(argv: list[str] | None = None) -> int:
     """Non-GUI CLI options for listing, copying, and pasting files."""
     parser = argparse.ArgumentParser(
         prog="pastex",
-        description="Paste text snippets from a .txt folder hierarchy (GUI + CLI).")
-    parser.add_argument("--dir", action="append", default=[],
-                        help="Additional snippet folder (may be repeated).")
-    parser.add_argument("--list", action="store_true", help="List all text files and exit.")
-    parser.add_argument("--copy", metavar="FILE", help="Copy FILE contents to the clipboard.")
-    parser.add_argument("--paste", metavar="FILE",
-                        help="Copy FILE and send Ctrl+V automatically.")
+        description="Paste text snippets from a .txt folder hierarchy (GUI + CLI).",
+    )
+    parser.add_argument(
+        "--dir",
+        action="append",
+        default=[],
+        help="Additional snippet folder (may be repeated).",
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="List all text files and exit."
+    )
+    parser.add_argument(
+        "--copy", metavar="FILE", help="Copy FILE contents to the clipboard."
+    )
+    parser.add_argument(
+        "--paste", metavar="FILE", help="Copy FILE and send Ctrl+V automatically."
+    )
     parser.add_argument("--version", action="store_true", help="Show the version.")
-    parser.add_argument("--test-paste", action="store_true",
-                        help="Send test text through ydotool (diagnostics).")
-    parser.add_argument("--ctrl-v", action="store_true",
-                        help="With --test-paste, send Ctrl+V instead of text.")
-    parser.add_argument("--check", action="store_true",
-                        help="Check the environment (tkinter, display, tools) and exit.")
+    parser.add_argument(
+        "--test-paste",
+        action="store_true",
+        help="Send test text through ydotool (diagnostics).",
+    )
+    parser.add_argument(
+        "--ctrl-v",
+        action="store_true",
+        help="With --test-paste, send Ctrl+V instead of text.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check the environment (tkinter, display, tools) and exit.",
+    )
     # /dev/uinput permissions are managed through the CLI (since 1.5.0).
-    parser.add_argument("--permissions", action="store_true",
-                        help="Show automatic-paste permissions (/dev/uinput).")
-    parser.add_argument("--enable-permissions", action="store_true",
-                        help="Request /dev/uinput access (the 'pastex' group via pkexec).")
-    parser.add_argument("--export-data", metavar="FOLDER", nargs="?",
-                        const="", default=None,
-                        help="Export sample snippets to FOLDER (default: the user data folder).")
+    parser.add_argument(
+        "--permissions",
+        action="store_true",
+        help="Show automatic-paste permissions (/dev/uinput).",
+    )
+    parser.add_argument(
+        "--enable-permissions",
+        action="store_true",
+        help="Request /dev/uinput access (the 'pastex' group via pkexec).",
+    )
+    parser.add_argument(
+        "--export-data",
+        metavar="FOLDER",
+        nargs="?",
+        const="",
+        default=None,
+        help="Export sample snippets to FOLDER (default: the user data folder).",
+    )
     args = parser.parse_args(argv)
 
     if args.version:
@@ -1089,8 +1398,11 @@ def run_cli(argv: list[str] | None = None) -> int:
             _print_tree(node, prefix="")
         if not flatten_texts(nodes):
             print("(no .txt files found)", file=sys.stderr)
-            print("Choose a source folder in the GUI, use --dir FOLDER, or "
-                  "run --export-data.", file=sys.stderr)
+            print(
+                "Choose a source folder in the GUI, use --dir FOLDER, or "
+                "run --export-data.",
+                file=sys.stderr,
+            )
         return 0
     if args.test_paste:
         return run_test_paste(ctrl_v=args.ctrl_v)
@@ -1111,19 +1423,21 @@ def run_cli(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 2
 
     if tk is None:
-        print("Error: tkinter is unavailable. Install python3-tk "
-              "(sudo apt install python3-tk).", file=sys.stderr)
+        print(
+            "Error: tkinter is unavailable. Install python3-tk "
+            "(sudo apt install python3-tk).",
+            file=sys.stderr,
+        )
         return 1
 
     try:
         # --dir applies only to this session; it does not change the saved source
         # folder.
         app = PastexApp(roots=roots, transient_roots=bool(args.dir))
-    except Exception:
+    except Exception:  # noqa: BLE001 - report unexpected failures during GUI startup
         tb = traceback.format_exc()
         log_error(f"Could not start GUI:\n{tb}")
-        print(f"Error: Pastex could not start. See {ERROR_LOG}",
-              file=sys.stderr)
+        print(f"Error: Pastex could not start. See {ERROR_LOG}", file=sys.stderr)
         print(tb, file=sys.stderr)
         return 1
     app.mainloop()
@@ -1163,19 +1477,26 @@ def run_test_paste(ctrl_v: bool = False) -> int:
         print(f"Check {ERROR_LOG} and run `pastex --check`.")
         return 2
     print(f"✅ {result.message}")
-    print("If the test text APPEARS in the target window, ydotool, permissions, and the daemon "
-          "are working correctly.")
-    print("If it does NOT appear, the compositor may be ignoring the uinput device "
-          "(check `lsinput` or the system log).")
-    print("Test the complete flow (clipboard + Ctrl+V): "
-          "pastex --test-paste --ctrl-v")
+    print(
+        "If the test text APPEARS in the target window, ydotool, permissions, and the daemon "
+        "are working correctly."
+    )
+    print(
+        "If it does NOT appear, the compositor may be ignoring the uinput device "
+        "(check `lsinput` or the system log)."
+    )
+    print("Test the complete flow (clipboard + Ctrl+V): pastex --test-paste --ctrl-v")
     return 0
 
 
 def _full_paste_test() -> int:
     """Test the actual paste flow: copy, verify, then send Ctrl+V."""
-    from .clipboard import (copy_text, ensure_ydotoold,
-                            read_text_from_clipboard, simulate_paste)
+    from .clipboard import (
+        copy_text,
+        ensure_ydotoold,
+        read_text_from_clipboard,
+        simulate_paste,
+    )
 
     probe = f"{TEST_PASTE_TEXT}{os.getpid()}"
     print(f"Copying test text {probe!r}...")
@@ -1188,8 +1509,10 @@ def _full_paste_test() -> int:
         print("✅ Clipboard contents verified")
     else:
         print(f"❌ Clipboard contents differ: {back.strip()[:60]!r}")
-        print("   The text was not copied correctly; Ctrl+V will paste "
-              "the previous contents.")
+        print(
+            "   The text was not copied correctly; Ctrl+V will paste "
+            "the previous contents."
+        )
         return 2
 
     print("Sending Ctrl+V in 1 second — click the target window NOW.")
@@ -1202,8 +1525,10 @@ def _full_paste_test() -> int:
         print(f"❌ {paste.message}")
         return 2
     print(f"✅ {paste.message}")
-    print(f"If {probe!r} appears in the target window, automatic paste is working "
-          "correctly.")
+    print(
+        f"If {probe!r} appears in the target window, automatic paste is working "
+        "correctly."
+    )
     return 0
 
 
@@ -1211,8 +1536,10 @@ def permission_report() -> str:
     """Build an automatic-paste permission report for --permissions and --check."""
     st = uinput.status()
     lines = "\n".join(_status_lines(st))
-    return (f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):\n"
-            f"{lines}\n\nNext steps:\n{uinput.explain(st)}")
+    return (
+        f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):\n"
+        f"{lines}\n\nNext steps:\n{uinput.explain(st)}"
+    )
 
 
 def run_permission_info() -> int:
@@ -1241,8 +1568,10 @@ def run_enable_permission() -> int:
             print(line)
     if code == 0:
         print("\n✅ Permissions enabled.")
-        print("Log out and back in (or reboot) to activate the new group; "
-              "automatic paste should then work.")
+        print(
+            "Log out and back in (or reboot) to activate the new group; "
+            "automatic paste should then work."
+        )
         return 0
     if code in (126, 127):
         print("\n❌ Password request cancelled.")
@@ -1260,13 +1589,22 @@ def clipboard_status() -> list[str]:
     a pipe hang causing the tool to be reported as failed) can make automatic
     paste send the previous clipboard contents even when Ctrl+V is delivered.
     """
-    from .clipboard import (available_tools, copy_text, detect_session,
-                            read_text_from_clipboard)
+    from .clipboard import (
+        available_tools,
+        copy_text,
+        detect_session,
+        read_text_from_clipboard,
+    )
 
     tools = available_tools()
-    lines = ["tool: " + ", ".join(
-        f"{k}={'available' if v else 'not available'}"
-        for k, v in tools.items() if k in ("wl-copy", "xclip", "xsel"))]
+    lines = [
+        "tool: "
+        + ", ".join(
+            f"{k}={'available' if v else 'not available'}"
+            for k, v in tools.items()
+            if k in ("wl-copy", "xclip", "xsel")
+        )
+    ]
     if detect_session() == "unknown":
         lines.append("No graphical session detected — clipboard test skipped")
         return lines
@@ -1294,24 +1632,36 @@ def run_check(roots: list[Path]) -> int:
 
     print(f"pastex {__version__}")
     print(f"Python: {sys.version.split()[0]} ({sys.executable})")
-    print(f"Graphical session: {detect_session()} "
-          f"(DISPLAY={os.environ.get('DISPLAY', '-')}, "
-          f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')})")
-    print(f"tkinter: {'available' if tk is not None else 'NOT available — install python3-tk'}")
+    print(
+        f"Graphical session: {detect_session()} "
+        f"(DISPLAY={os.environ.get('DISPLAY', '-')}, "
+        f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')})"
+    )
+    print(
+        f"tkinter: {'available' if tk is not None else 'NOT available — install python3-tk'}"
+    )
     tools = available_tools()
-    print("Clipboard/paste tools: "
-          + ", ".join(f"{k}={'available' if v else 'not available'}" for k, v in tools.items()))
+    print(
+        "Clipboard/paste tools: "
+        + ", ".join(
+            f"{k}={'available' if v else 'not available'}" for k, v in tools.items()
+        )
+    )
     print(f"Application icon: {ICON_NAME} (expected WM_CLASS '{WM_CLASS}')")
     found_icons = icon_files()
     if found_icons:
         for path in found_icons:
             print(f"  ✅ {path}")
     else:
-        print("  ❌ not found — the window will use the default icon; "
-              "reinstall the package or run scripts/make-icon-png.py")
+        print(
+            "  ❌ not found — the window will use the default icon; "
+            "reinstall the package or run scripts/make-icon-png.py"
+        )
     try:
         st = uinput.status()
-        print(f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):")
+        print(
+            f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):"
+        )
         for line in _status_lines(st):
             print(f"  {line}")
         print("\nNext steps:")
@@ -1320,7 +1670,7 @@ def run_check(roots: list[Path]) -> int:
         if not st.ready:
             # Keep permission information in --check even though the GUI button was removed.
             print(f"\n{uinput.CLI_HINT}")
-    except Exception as exc:  # pragma: no cover - jangan gagalkan --check
+    except Exception as exc:  # noqa: BLE001 - diagnostics should continue after optional checks fail
         print(f"Automatic-paste permissions: could not be checked ({exc})")
     clip = clipboard_status()
     print("Clipboard:")
@@ -1351,7 +1701,7 @@ def _print_tree(node: Node, prefix: str) -> None:
 def main() -> None:
     try:
         code = run_cli()
-    except Exception:
+    except Exception:  # noqa: BLE001 - log unexpected failures at the CLI boundary
         tb = traceback.format_exc()
         log_error(tb)
         print(f"Unexpected error. See {ERROR_LOG}.", file=sys.stderr)

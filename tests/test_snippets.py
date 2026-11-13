@@ -1,4 +1,5 @@
 """Uji logika hierarki snippets (tanpa GUI)."""
+
 import sys
 from pathlib import Path
 
@@ -6,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pastex.snippets import (
     create_category,
+    create_folder,
     create_snippet,
     delete_path,
     ensure_txt_suffix,
@@ -56,22 +58,27 @@ def test_search_by_name_and_content(tmp_path):
     assert search(nodes, "tidak-ada") == []
 
 
+def test_legacy_category_helper_remains_compatible(tmp_path):
+    assert create_category is create_folder
+    assert create_category(tmp_path, "Work").is_dir()
+
+
 def test_crud(tmp_path):
     root = _make_tree(tmp_path)
-    cat = create_category(root, "Kerja")
-    assert cat.is_dir()
-    snippet = create_snippet(cat, "Laporan", "isi laporan")
+    folder = create_folder(root, "Kerja")
+    assert folder.is_dir()
+    snippet = create_snippet(folder, "Laporan", "isi laporan")
     assert snippet.suffix == ".txt"
     assert read_text(snippet) == "isi laporan"
     try:
-        create_snippet(cat, "Laporan.txt", "duplikat")
+        create_snippet(folder, "Laporan.txt", "duplikat")
         raise AssertionError("seharusnya FileExistsError")
     except FileExistsError:
         pass
     delete_path(snippet)
     assert not snippet.exists()
-    delete_path(cat)
-    assert not cat.exists()
+    delete_path(folder)
+    assert not folder.exists()
 
 
 def test_ensure_suffix_and_read_fallback(tmp_path):
@@ -87,10 +94,18 @@ def test_new_names_cannot_escape_parent(tmp_path):
 
     root = tmp_path / "source"
     root.mkdir()
-    for name in ("../keluar", "../keluar.txt", "/tmp/keluar", "a/b", r"a\b",
-                 ".", "..", "x\0y"):
+    for name in (
+        "../keluar",
+        "../keluar.txt",
+        "/tmp/keluar",
+        "a/b",
+        r"a\b",
+        ".",
+        "..",
+        "x\0y",
+    ):
         with pytest.raises(ValueError):
-            create_category(root, name)
+            create_folder(root, name)
         with pytest.raises(ValueError):
             create_snippet(root, name, "isi")
     assert sorted(tmp_path.iterdir()) == [root]
@@ -123,13 +138,15 @@ def test_creation_never_follows_existing_symlink(tmp_path):
     (root / "link").symlink_to(outside, target_is_directory=True)
     (root / "broken.txt").symlink_to(outside / "new.txt")
     with pytest.raises(ValueError):
-        create_category(root, "link")
+        create_folder(root, "link")
     with pytest.raises(FileExistsError):
         create_snippet(root, "broken", "isi")
     assert not (outside / "new.txt").exists()
 
 
-def test_filter_tree_keeps_only_matching_branches_without_resolving(tmp_path, monkeypatch):
+def test_filter_tree_keeps_only_matching_branches_without_resolving(
+    tmp_path, monkeypatch
+):
     from pastex.app import filter_tree
 
     root = _make_tree(tmp_path)

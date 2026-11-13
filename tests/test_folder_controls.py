@@ -48,9 +48,7 @@ def test_right_click_folder_menu_selects_without_paste(gui, sample_root):
     assert result == "break"
     assert app.tree.selection() == ()
     assert app._context_iid == folder
-    assert "Select" in app.menu.labels
-    assert "Edit" in app.menu.labels
-    assert "Delete" in app.menu.labels
+    assert app.menu.labels[:3] == ["Select", "Edit", "Delete"]
     assert "↑ Up" in app.menu.labels
     assert "↓ Down" in app.menu.labels
     assert "⚡ Paste into Another App" not in app.menu.labels
@@ -59,6 +57,20 @@ def test_right_click_folder_menu_selects_without_paste(gui, sample_root):
     assert app.tree.focus() == folder
     assert app.menu.popup_calls == [(120, 240)]
     assert app.menu.releases == 1
+
+
+def test_select_context_item_adds_to_existing_selection(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app.tree.selection_set(folder)
+    app._context_iid = text
+    app.show_preview = lambda: None
+
+    app.select_context_item()
+
+    assert app.tree.selection() == (folder, text)
 
 
 def test_right_click_text_menu_has_no_paste_action(gui, sample_root):
@@ -87,10 +99,92 @@ def test_move_up_down_persists_mixed_folder_and_text_order(gui, tmp_path):
     app.move_selected(1)
 
     assert app.tree.get_children("") == (str(source / "Text.txt"), folder)
-    assert app.settings["order"][app_module._norm_path(source)] == ["Text.txt", "Folder"]
+    assert app.settings["order"][app_module._norm_path(source)] == [
+        "Text.txt",
+        "Folder",
+    ]
 
     app.refresh_tree()
     assert app.tree.get_children("") == (str(source / "Text.txt"), folder)
+
+
+def test_move_multiple_siblings_keeps_their_order_and_persists(gui, tmp_path):
+    source = tmp_path / "source"
+    for name in ("Alpha", "Beta"):
+        (source / name).mkdir(parents=True)
+    (source / "Delta.txt").write_text("delta", encoding="utf-8")
+    (source / "Gamma.txt").write_text("gamma", encoding="utf-8")
+    app = gui(roots=[source])
+    app.refresh_tree()
+
+    alpha = str(source / "Alpha")
+    delta = str(source / "Delta.txt")
+    app.tree.selection_set(alpha)
+    app.tree.selection_add(delta)
+    app.move_selected(1)
+
+    expected = (str(source / "Beta"), alpha, str(source / "Gamma.txt"), delta)
+    assert app.tree.get_children("") == expected
+    assert app.settings["order"][app_module._norm_path(source)] == [
+        "Beta",
+        "Alpha",
+        "Gamma.txt",
+        "Delta.txt",
+    ]
+
+
+def test_move_selection_from_different_folders_moves_each_group(gui, sample_root):
+    app = gui(roots=[sample_root])
+    extra = sample_root / "Email" / "Zulu.txt"
+    extra.write_text("extra", encoding="utf-8")
+    app.refresh_tree()
+    folder = str(sample_root / "Email")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app.tree.selection_set(folder)
+    app.tree.selection_add(text)
+
+    app.move_selected(1)
+
+    assert app.tree.get_children("") == (str(sample_root / "General"), folder)
+    assert app.tree.get_children(folder) == (str(extra), text)
+    assert app.settings["order"][app_module._norm_path(sample_root)] == [
+        "General",
+        "Email",
+    ]
+    assert app.settings["order"][app_module._norm_path(folder)] == [
+        "Zulu.txt",
+        "Balas.txt",
+    ]
+
+
+def test_delete_multiple_files_and_folders_once(gui, dialogs, tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    folder = source / "Folder"
+    folder.mkdir(parents=True)
+    nested = folder / "Nested.txt"
+    nested.write_text("nested", encoding="utf-8")
+    text = source / "Loose.txt"
+    text.write_text("loose", encoding="utf-8")
+    app = gui(roots=[source])
+    app.refresh_tree()
+    folder_iid, text_iid = str(folder), str(text)
+    app.tree.selection_set(folder_iid)
+    app.tree.selection_add(text_iid)
+    confirmations = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "askyesno",
+        lambda title, prompt: confirmations.append((title, prompt)) or True,
+    )
+
+    app.delete_selected()
+
+    assert not folder.exists()
+    assert not nested.exists()
+    assert not text.exists()
+    assert len(confirmations) == 1
+    assert "2 selected items" in confirmations[0][1]
+    assert app.tree.selection() == ()
 
 
 def test_move_is_disabled_while_searching(gui, tmp_path):
@@ -138,7 +232,10 @@ def test_edit_on_folder_renames_and_remaps_saved_paths(gui, dialogs, sample_root
     assert not old.exists()
     assert app_module._norm_path(renamed) in app.settings["collapsed"]
     assert app_module._norm_path(renamed / "Nested") in app.settings["collapsed"]
-    assert app.settings["order"][app_module._norm_path(sample_root)] == ["Email", "Work"]
+    assert app.settings["order"][app_module._norm_path(sample_root)] == [
+        "Email",
+        "Work",
+    ]
     assert app_module._norm_path(renamed) in app.settings["order"]
     assert app.tree.selection() == (str(renamed),)
 
@@ -159,7 +256,9 @@ def test_folder_rename_rejects_existing_sibling(tmp_path):
 
 def test_clickable_source_label_opens_chosen_source(gui, sample_root, monkeypatch):
     calls = []
-    monkeypatch.setattr(app_module.subprocess, "Popen", lambda command: calls.append(command))
+    monkeypatch.setattr(
+        app_module.subprocess, "Popen", lambda command: calls.append(command)
+    )
     app = gui(roots=[sample_root], settings={"source_dir": str(sample_root)})
 
     app.open_source_folder()
@@ -169,8 +268,12 @@ def test_clickable_source_label_opens_chosen_source(gui, sample_root, monkeypatc
 
 def test_old_toolbar_controls_are_not_rendered_and_ppa_is_manual():
     source = Path(app_module.__file__).read_text(encoding="utf-8")
-    workflow = (Path(app_module.__file__).resolve().parent.parent
-                / ".github" / "workflows" / "publish-ppa.yml").read_text(encoding="utf-8")
+    workflow = (
+        Path(app_module.__file__).resolve().parent.parent
+        / ".github"
+        / "workflows"
+        / "publish-ppa.yml"
+    ).read_text(encoding="utf-8")
     assert '"📂 Open Folder"' not in source
     assert '"✏️ Edit"' not in source
     assert '"🗑 Delete"' not in source

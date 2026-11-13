@@ -12,6 +12,7 @@ both the CLI and GUI. The folder structure defines the hierarchy:
 
 Folders organize .txt files, which are text snippets ready to paste.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,7 +28,7 @@ class Node:
     name: str
     path: Path
     is_dir: bool
-    children: list["Node"] = field(default_factory=list)
+    children: list[Node] = field(default_factory=list)
     source_root: Path | None = None  # Origin root (system vs. user)
 
     @property
@@ -39,20 +40,6 @@ class Node:
         if self.is_text:
             return 1
         return sum(c.count_texts() for c in self.children)
-
-    def find(self, target: Path) -> "Node | None":
-        """Find a node by its absolute path."""
-        try:
-            target = target.resolve()
-        except OSError:
-            pass
-        if self.path.resolve() == target:
-            return self
-        for child in self.children:
-            found = child.find(target)
-            if found is not None:
-                return found
-        return None
 
 
 def is_text_file(path: Path) -> bool:
@@ -69,8 +56,12 @@ def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
     files; sort both groups alphabetically without regard to case.
     """
     directory = Path(directory)
-    node = Node(name=directory.name or str(directory), path=directory,
-                is_dir=True, source_root=source_root or directory)
+    node = Node(
+        name=directory.name or str(directory),
+        path=directory,
+        is_dir=True,
+        source_root=source_root or directory,
+    )
     if not directory.is_dir():
         return node
 
@@ -87,8 +78,14 @@ def scan_dir(directory: Path, source_root: Path | None = None) -> Node:
         if entry.is_dir():
             dirs.append(scan_dir(entry, source_root=node.source_root))
         elif is_text_file(entry):
-            files.append(Node(name=entry.stem, path=entry, is_dir=False,
-                              source_root=node.source_root))
+            files.append(
+                Node(
+                    name=entry.stem,
+                    path=entry,
+                    is_dir=False,
+                    source_root=node.source_root,
+                )
+            )
     node.children = dirs + files
     return node
 
@@ -187,7 +184,7 @@ def create_folder(parent: Path, name: str) -> Path:
     return target
 
 
-# Backwards-compatible internal alias for older callers and existing data tools.
+# Keep the legacy helper name for callers that still use pre-folder terminology.
 create_category = create_folder
 
 
@@ -226,8 +223,7 @@ def delete_path(path: Path) -> None:
 
 def user_root() -> Path:
     """Return the user folder for personal snippets (always writable)."""
-    data_home = Path(os.environ.get("XDG_DATA_HOME",
-                                   Path.home() / ".local" / "share"))
+    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     new_root = data_home / "pastex" / "snippets"
     legacy_root = data_home / "paste-teks" / "snippets"
     if not new_root.exists() and legacy_root.is_dir():
@@ -262,29 +258,6 @@ def writable_root(roots: list[Path] | None = None) -> Path:
     return default_roots()[-1]
 
 
-def root_label(root: Path, index: int | None = None) -> str:
-    """Return a friendly GUI label for a root without exposing its full path.
-
-    The system, package, and user folders may all be named "snippets", so use
-    a label that describes each root's role. ``index`` is accepted for callers
-    that pass the root position.
-    """
-    root = Path(root)
-    system_roots = {
-        Path("/usr/share/pastex/snippets"),
-        Path(__file__).resolve().parent.parent / "snippets",
-    }
-    try:
-        resolved = root.resolve()
-    except OSError:  # pragma: no cover - path aneh
-        resolved = root
-    if resolved in {p.resolve() for p in system_roots}:
-        return "Built-in samples"
-    if resolved == user_root().resolve():
-        return "My Texts"
-    return root.name or str(root)
-
-
 # --- Built-in samples ----------------------------------------------------
 #
 # Since 1.5.0, the repository and Debian package no longer include sample data.
@@ -303,14 +276,16 @@ DEFAULT_SAMPLES: dict[str, dict[str, str]] = {
     "Email": {
         "Application Reply": (
             "Thank you for your application. We will contact you "
-            "when the selection process is complete.\n"),
+            "when the selection process is complete.\n"
+        ),
         "Follow Up": (
             "I am following up on my previous message. Is there any update "
-            "you can share?\n"),
+            "you can share?\n"
+        ),
     },
     "Work": {
         "Report Template": (
-            "Weekly Report\n\nSummary:\n- \n\nChallenges:\n- \n\n"
-            "Next steps:\n- \n"),
+            "Weekly Report\n\nSummary:\n- \n\nChallenges:\n- \n\nNext steps:\n- \n"
+        ),
     },
 }

@@ -1,4 +1,5 @@
 """Uji logika izin /dev/uinput (grup pastex) — tanpa menyentuh sistem."""
+
 import os
 import sys
 from pathlib import Path
@@ -14,20 +15,24 @@ class _FakeGrpEntry:
 
 
 def test_user_groups_reads_nss(monkeypatch):
-    monkeypatch.setattr(uinput.pwd, "getpwnam",
-                        lambda name: type("P", (), {"pw_gid": 1000})())
-    monkeypatch.setattr(uinput.os, "getgrouplist",
-                        lambda name, gid: [1000, 999])
-    import grp
     monkeypatch.setattr(
-        grp, "getgrgid",
-        lambda gid: _FakeGrpEntry({1000: "budi", 999: "pastex"}.get(gid, "x")))
+        uinput.pwd, "getpwnam", lambda name: type("P", (), {"pw_gid": 1000})()
+    )
+    monkeypatch.setattr(uinput.os, "getgrouplist", lambda name, gid: [1000, 999])
+    import grp
+
+    monkeypatch.setattr(
+        grp,
+        "getgrgid",
+        lambda gid: _FakeGrpEntry({1000: "budi", 999: "pastex"}.get(gid, "x")),
+    )
     assert uinput.user_groups("budi") == {"budi", "pastex"}
 
 
 def test_user_groups_unknown_user(monkeypatch):
-    monkeypatch.setattr(uinput.pwd, "getpwnam",
-                        lambda name: (_ for _ in ()).throw(KeyError(name)))
+    monkeypatch.setattr(
+        uinput.pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name))
+    )
     assert uinput.user_groups("hantu") == set()
 
 
@@ -45,9 +50,11 @@ def _helper_check(monkeypatch, path, mode, uid=0):
     def fake_stat(target, *a, **k):
         st = real_stat(target, *a, **k)
         if os.fspath(target) == os.fspath(path):
+
             class S:
                 st_uid = uid
                 st_mode = st.st_mode
+
             return S()
         return st
 
@@ -73,12 +80,20 @@ def test_helper_missing(tmp_path, monkeypatch):
 
 
 def _status(**kw):
-    base = dict(
-        user="budi", group_exists=True, in_group=False,
-        device_writable=False, helper=True, pkexec=True,
-        ydotoold_binary=False, socket=None, groups={"budi"},
-        session={"budi"}, daemon=False, rule=True,
-    )
+    base = {
+        "user": "budi",
+        "group_exists": True,
+        "in_group": False,
+        "device_writable": False,
+        "helper": True,
+        "pkexec": True,
+        "ydotoold_binary": False,
+        "socket": None,
+        "groups": {"budi"},
+        "session": {"budi"},
+        "daemon": False,
+        "rule": True,
+    }
     base.update(kw)
     return uinput.UinputStatus(**base)
 
@@ -100,19 +115,18 @@ def test_needs_relogin():
 def test_can_self_enable_requires_helper_and_pkexec(monkeypatch):
     monkeypatch.setattr(uinput, "status", lambda user=None: _status())
     assert uinput.can_self_enable() is True
-    monkeypatch.setattr(uinput, "status",
-                        lambda user=None: _status(helper=False))
+    monkeypatch.setattr(uinput, "status", lambda user=None: _status(helper=False))
     assert uinput.can_self_enable() is False
-    monkeypatch.setattr(uinput, "status",
-                        lambda user=None: _status(device_writable=True))
+    monkeypatch.setattr(
+        uinput, "status", lambda user=None: _status(device_writable=True)
+    )
     assert uinput.can_self_enable() is False
 
 
 def test_explain_mentions_group_and_relogin():
     assert "pastex" in uinput.explain(_status())
     assert "Log out and back in" in uinput.explain(_status(in_group=True))
-    assert "ydotoold" in uinput.explain(
-        _status(ydotoold_binary=True, socket=None))
+    assert "ydotoold" in uinput.explain(_status(ydotoold_binary=True, socket=None))
     assert "ready" in uinput.explain(_status(device_writable=True)).lower()
 
 
@@ -132,14 +146,13 @@ def test_summary_reports_stale_session_after_group_add():
     st = _status(in_group=True, session={"budi"})
     assert st.needs_relogin is True
     assert st.in_session is False
-    row = [r for r in st.summary() if "group" in r[1]][0]
+    row = next(r for r in st.summary() if "group" in r[1])
     assert "session has not loaded" in row[2]
     assert row[0] == "❌"
 
 
 def test_session_groups_active_when_loaded():
-    st = _status(in_group=True, session={"budi", "pastex"},
-                 device_writable=True)
+    st = _status(in_group=True, session={"budi", "pastex"}, device_writable=True)
     assert st.in_session is True
     assert st.needs_relogin is False
 
@@ -147,8 +160,9 @@ def test_session_groups_active_when_loaded():
 def test_ready_requires_daemon_when_ydotool_installed():
     # Izin perangkat ada tetapi ydotool butuh ydotoold → belum siap.
     assert _status(device_writable=True, ydotoold_binary=True).ready is False
-    assert _status(device_writable=True, ydotoold_binary=True,
-                   daemon=True).ready is True
+    assert (
+        _status(device_writable=True, ydotoold_binary=True, daemon=True).ready is True
+    )
     # Tanpa ydotool (mis. X11 + xdotool) izin perangkat sudah cukup.
     assert _status(device_writable=True).ready is True
 
@@ -160,16 +174,18 @@ def test_daemon_missing_flag():
 
 
 def test_explain_orders_relogin_before_daemon():
-    text = uinput.explain(_status(
-        in_group=True, session={"budi"}, ydotoold_binary=True))
+    text = uinput.explain(
+        _status(in_group=True, session={"budi"}, ydotoold_binary=True)
+    )
     assert "Log out and back in" in text
     assert "ydotoold" in text
     assert text.index("Log out and back in") < text.index("ydotoold")
 
 
 def test_explain_mentions_udev_when_rule_missing():
-    text = uinput.explain(_status(in_group=True, session={"budi", "pastex"},
-                                  rule=False))
+    text = uinput.explain(
+        _status(in_group=True, session={"budi", "pastex"}, rule=False)
+    )
     assert "reinstall" in text
 
 
@@ -181,6 +197,7 @@ def _proc_file(tmp_path, groups_line):
 
 def test_proc_groups_parsed(tmp_path):
     import grp as real_grp
+
     gid = real_grp.getgrnam("root").gr_gid
     path = _proc_file(tmp_path, f"{gid} 0")
     assert uinput._proc_groups(path=path) == {"root"}
@@ -205,7 +222,8 @@ def test_daemon_command_and_start(tmp_path):
 
 def test_start_daemon_handles_failure():
     code, _o, err = uinput.start_daemon(
-        runner=lambda cmd, **kw: _Proc(5, "", "Unit ydotoold.service not found"))
+        runner=lambda cmd, **kw: _Proc(5, "", "Unit ydotoold.service not found")
+    )
     assert code == 5 and "not found" in err
 
 
@@ -238,8 +256,9 @@ def test_enable_for_user_success():
 
 
 def test_enable_for_user_cancelled():
-    code, out, err = uinput.enable_for_user(
-        "budi", runner=lambda cmd, **kw: _Proc(126, "", "dismissed"))
+    code, out, _err = uinput.enable_for_user(
+        "budi", runner=lambda cmd, **kw: _Proc(126, "", "dismissed")
+    )
     assert code == 126 and out == ""
 
 
@@ -266,14 +285,20 @@ def test_socket_candidates_without_xdg(monkeypatch):
 
 def test_acl_granted_parses_getfacl(monkeypatch):
     import subprocess as sp
+
     uid = os.getuid()
 
     def fake_run(cmd, **kw):
-        return sp.CompletedProcess(cmd, 0, stdout=(
-            "# file: dev/uinput\n"
-            "user::rw-\n"
-            f"user:{uid}:rw-\t\t# effective: rw-\n"
-            "group::---\n"))
+        return sp.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                "# file: dev/uinput\n"
+                "user::rw-\n"
+                f"user:{uid}:rw-\t\t# effective: rw-\n"
+                "group::---\n"
+            ),
+        )
 
     monkeypatch.setattr(sp, "run", fake_run)
     assert uinput.acl_granted() is True
@@ -281,9 +306,15 @@ def test_acl_granted_parses_getfacl(monkeypatch):
 
 def test_acl_granted_read_only(monkeypatch):
     import subprocess as sp
+
     uid = os.getuid()
-    monkeypatch.setattr(sp, "run", lambda cmd, **kw: sp.CompletedProcess(
-        cmd, 0, stdout=f"user::rw-\nuser:{uid}:r--\n"))
+    monkeypatch.setattr(
+        sp,
+        "run",
+        lambda cmd, **kw: sp.CompletedProcess(
+            cmd, 0, stdout=f"user::rw-\nuser:{uid}:r--\n"
+        ),
+    )
     assert uinput.acl_granted() is False
 
 
@@ -292,16 +323,27 @@ def test_acl_granted_without_getfacl(monkeypatch):
         raise OSError("getfacl tidak ada")
 
     import subprocess as sp
+
     monkeypatch.setattr(sp, "run", boom)
     assert uinput.acl_granted() is False
 
 
 def test_summary_reports_acl_without_group():
     st = uinput.UinputStatus(
-        user="budi", group_exists=True, in_group=False,
-        device_writable=True, helper=True, pkexec=True,
-        ydotoold_binary=False, socket=None, groups={"budi"},
-        session={"budi"}, daemon=False, rule=True, acl=True)
+        user="budi",
+        group_exists=True,
+        in_group=False,
+        device_writable=True,
+        helper=True,
+        pkexec=True,
+        ydotoold_binary=False,
+        socket=None,
+        groups={"budi"},
+        session={"budi"},
+        daemon=False,
+        rule=True,
+        acl=True,
+    )
     assert st.acl_granted is True
     labels = " ".join(f"{m} {l} {d}" for m, l, d in st.summary())
     assert "ACL" in labels
