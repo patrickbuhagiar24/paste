@@ -77,6 +77,10 @@ class FakeTree:
     def selection_add(self, *iids):
         self._selection = tuple(dict.fromkeys((*self._selection, *iids)))
 
+    def selection_remove(self, *iids):
+        removed = set(iids)
+        self._selection = tuple(iid for iid in self._selection if iid not in removed)
+
     def focus(self, iid=None):
         if iid is not None:
             self._focus = iid
@@ -159,6 +163,8 @@ def make_app(roots=None, settings=None, *, transient_roots=False):
     base.update(settings or {})
     app.settings = base
     app.collapsed = set()
+    app._select_mode = False
+    app._search_after_id = None
     app.current_file = None
     app.writable = app_module.writable_root(app.roots)
     return app

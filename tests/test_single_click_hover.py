@@ -26,8 +26,18 @@ class FakeTree:
             return self.tags
         return {"tags": self.tags}
 
-    def selection_set(self, iid):
-        self.selected = (iid,)
+    def selection(self):
+        return self.selected
+
+    def selection_set(self, *iids):
+        self.selected = tuple(iids)
+
+    def selection_add(self, *iids):
+        self.selected = tuple(dict.fromkeys((*self.selected, *iids)))
+
+    def selection_remove(self, *iids):
+        removed = set(iids)
+        self.selected = tuple(iid for iid in self.selected if iid not in removed)
 
     def focus(self, iid):
         self.focused = iid
@@ -52,6 +62,7 @@ def test_single_click_selects_and_pastes_immediately(tmp_path):
     snippet.write_text("hello", encoding="utf-8")
     app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree(str(snippet))
+    app._select_mode = False
     calls = []
     app.do_paste = lambda: calls.append("paste")
 
@@ -62,19 +73,37 @@ def test_single_click_selects_and_pastes_immediately(tmp_path):
     assert calls == ["paste"]
 
 
-def test_modifier_click_preserves_multiselection_without_pasting(tmp_path):
+def test_select_mode_left_click_adds_and_unselects_without_pasting(tmp_path):
     snippet = tmp_path / "snippet.txt"
     snippet.write_text("hello", encoding="utf-8")
     app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree(str(snippet))
+    app._select_mode = True
+    app.status_var = SimpleNamespace(set=lambda _value: None)
+    app.show_preview = lambda: None
     calls = []
     app.do_paste = lambda: calls.append("paste")
 
-    app._on_single_click(SimpleNamespace(y=4, state=0x0004))
+    app._on_single_click(SimpleNamespace(y=4))
+    assert app.tree.selected == (str(snippet),)
+    app._on_single_click(SimpleNamespace(y=4))
 
     assert app.tree.selected == ()
     assert app.tree.focused == str(snippet)
     assert calls == []
+
+
+def test_click_on_blank_tree_area_exits_select_mode(tmp_path):
+    app = PastexApp.__new__(PastexApp)
+    app.tree = FakeTree("")
+    app._select_mode = True
+    statuses = []
+    app.status_var = SimpleNamespace(set=statuses.append)
+
+    app._on_single_click(SimpleNamespace(y=1000))
+
+    assert app._select_mode is False
+    assert statuses == ["Selection mode ended."]
 
 
 def test_rapid_repeat_while_pasting_is_ignored(tmp_path):
@@ -82,6 +111,7 @@ def test_rapid_repeat_while_pasting_is_ignored(tmp_path):
     snippet.write_text("hello", encoding="utf-8")
     app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree(str(snippet))
+    app._select_mode = False
     app._pasting = False
     calls = []
 
@@ -103,6 +133,7 @@ def test_single_click_on_folder_does_not_paste(tmp_path):
     folder.mkdir()
     app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree(str(folder))
+    app._select_mode = False
     calls = []
     app.do_paste = lambda: calls.append("paste")
 

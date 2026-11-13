@@ -349,6 +349,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.current_file: Path | None = None
         self._pasting = False
         self._search_after_id: str | None = None
+        self._select_mode = False
         self.collapsed: set[str] = set()
         self._build_ui()
         self.refresh_tree()
@@ -452,9 +453,21 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         toolbar.pack(fill="x")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._on_search_changed())
-        ttk.Label(toolbar, text="🔍").pack(side="left")
-        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=26)
-        self.search_entry.pack(side="left", padx=(2, 6))
+        search_box = ttk.Frame(toolbar)
+        search_box.pack(side="left", padx=(0, 6))
+        self.search_button = ttk.Button(
+            search_box, text="🔍", width=3, command=self.search_now
+        )
+        self.search_button.pack(side="left")
+        self.search_entry = ttk.Entry(
+            search_box, textvariable=self.search_var, width=26
+        )
+        self.search_entry.pack(side="left", padx=(2, 0))
+        self.clear_search_button = ttk.Button(
+            search_box, text="×", width=2, command=self.clear_search
+        )
+        self.clear_search_button.pack(side="left")
+        self.search_entry.bind("<Return>", lambda _event: self.search_now())
         buttons = (
             (self.refresh_tree, "↻ Refresh (F5)", (0, 0)),
             (self.add_folder, "＋ Folder", (4, 0)),
@@ -485,7 +498,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Keep one container and switch between the tree and the empty state.
         self.tree_area = ttk.Frame(left)
         self.tree_area.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="extended")
+        # Selection is managed explicitly so Select mode can toggle rows without
+        # the Treeview's default browse/extended click behavior.
+        self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="none")
         self.tree.tag_configure("hover", background="#86bfff", foreground="#102a43")
         self._hover_iid = ""
         self.scroll = ttk.Scrollbar(
@@ -550,6 +565,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Context menu is populated for each right-clicked text or folder.
         self.menu = tk.Menu(self, tearoff=0)
         self._context_iid = ""
+        self.bind("<Button-1>", self._exit_select_mode_outside_tree, add="+")
+        self.bind("<Button-3>", self._exit_select_mode_outside_tree, add="+")
+        self.bind("<Control-Button-1>", self._exit_select_mode_outside_tree, add="+")
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Button-2>", self._on_right_click)
         self.tree.bind("<Control-Button-1>", self._on_right_click)
@@ -583,6 +601,20 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if getattr(self, "search_entry", None) is not None:
             self.search_entry.focus_set()
 
+    def search_now(self) -> str:
+        """Run the current search immediately instead of waiting for debounce."""
+        if self._search_after_id is not None:
+            self.after_cancel(self._search_after_id)
+            self._search_after_id = None
+        self.refresh_tree()
+        return "break"
+
+    def clear_search(self) -> None:
+        """Clear the search query and return focus to the input."""
+        self.search_var.set("")
+        self.search_now()
+        self._focus_search()
+
     def _on_tree_motion(self, event) -> None:
         """Highlight the row currently under the pointer."""
         row = self.tree.identify_row(event.y)
@@ -608,48 +640,87 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._hover_iid = ""
 
     def _on_single_click(self, event) -> None:
-        """Select and paste a text item with one click; folders remain navigable."""
+        """Paste normally; in Select mode, left-click toggles each row."""
         row = self.tree.identify_row(event.y)
         if not row:
-            return
-        modifiers = getattr(event, "state", 0) & 0x0005  # Shift or Control
-        if modifiers:
-            self.tree.focus(row)
-            return
-        self.tree.selection_set(row)
+            if self._select_mode:
+                self._select_mode = False
+                self.status_var.set("Selection mode ended.")
+            return "break"
+
         self.tree.focus(row)
+        if self._select_mode:
+            if row in self.tree.selection():
+                self.tree.selection_remove(row)
+            else:
+                self.tree.selection_add(row)
+            self.show_preview()
+            self.status_var.set(f"Selected {len(self.tree.selection())} item(s).")
+            return "break"
+
+        self.tree.selection_set(row)
         path = Path(row.split("#", 1)[0])
         if path.is_file():
             # Start immediately. do_paste() guards against another activation
             # while the current copy-and-paste operation is still in progress.
             self.do_paste()
+        return "break"
+
+    def _exit_select_mode_outside_tree(self, event) -> None:
+        """Leave Select mode when a click lands outside a folder/text row."""
+        if self._select_mode and event.widget is not self.tree:
+            self._select_mode = False
+            self.status_var.set("Selection mode ended.")
 
     def _on_right_click(self, event):
-        """Show a native-feeling context menu without discarding a selection."""
+        """Post a context menu for a row, or dismiss selection mode on blank space."""
         row = self.tree.identify_row(event.y)
         if not row:
+            self._select_mode = False
             return "break"
         self._context_iid = row
         self.tree.focus(row)
         self.menu.delete(0, "end")
-        # Keep selection actions together; they act on the context row or selection.
-        self.menu.add_command(label="Select", command=self.select_context_item)
-        self.menu.add_command(label="Edit", command=self.edit_context_item)
-        self.menu.add_command(
-            label="Delete",
-            command=lambda: self.delete_selected(self._context_target_iids()),
-        )
-        self.menu.add_separator()
-        self.menu.add_command(
-            label="↑ Up",
-            command=lambda: self.move_selected(
-                -1, item_ids=self._context_target_iids()
-            ),
-        )
-        self.menu.add_command(
-            label="↓ Down",
-            command=lambda: self.move_selected(1, item_ids=self._context_target_iids()),
-        )
+
+        if self._select_mode:
+            self.menu.add_command(
+                label="Delete",
+                command=lambda: self.delete_selected(self._context_target_iids()),
+            )
+            self.menu.add_command(
+                label="↑ Up",
+                command=lambda: self.move_selected(
+                    -1, item_ids=self._context_target_iids()
+                ),
+            )
+            self.menu.add_command(
+                label="↓ Down",
+                command=lambda: self.move_selected(
+                    1, item_ids=self._context_target_iids()
+                ),
+            )
+        else:
+            self.menu.add_command(label="Select", command=self.select_context_item)
+            self.menu.add_command(label="Edit", command=self.edit_context_item)
+            self.menu.add_command(
+                label="Delete",
+                command=lambda: self.delete_selected(self._context_target_iids()),
+            )
+            self.menu.add_separator()
+            self.menu.add_command(
+                label="↑ Up",
+                command=lambda: self.move_selected(
+                    -1, item_ids=self._context_target_iids()
+                ),
+            )
+            self.menu.add_command(
+                label="↓ Down",
+                command=lambda: self.move_selected(
+                    1, item_ids=self._context_target_iids()
+                ),
+            )
+            self.menu.add_separator()
+            self.menu.add_command(label="Collapse All", command=self.collapse_all)
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -657,21 +728,27 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return "break"
 
     def _context_target_iids(self) -> list[str]:
-        """Use the whole selection when right-clicking within it; otherwise the row."""
+        """Resolve normal context rows or the active multi-selection."""
         selection = list(self.tree.selection())
         iid = getattr(self, "_context_iid", "")
+        if self._select_mode:
+            return selection
         if iid and self.tree.exists(iid):
             return selection if iid in selection else [iid]
         return selection
 
     def select_context_item(self) -> None:
-        """Add the context row to the current multi-selection."""
+        """Enter Select mode and include the row that opened the menu."""
         iid = getattr(self, "_context_iid", "")
         if not iid or not self.tree.exists(iid):
             return
+        self._select_mode = True
         self.tree.selection_add(iid)
         self.tree.focus(iid)
         self.show_preview()
+        self.status_var.set(
+            "Select mode: click rows to add or remove them; click outside the list to finish."
+        )
 
     def edit_context_item(self) -> None:
         """Edit only the row under the pointer, leaving multi-edit unsupported."""
@@ -915,6 +992,24 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._save_collapsed(collapsed)
         self.collapsed = collapsed
 
+    def collapse_all(self) -> None:
+        """Collapse every visible folder and persist its state."""
+        collapsed = set()
+
+        def visit(parent: str) -> None:
+            for iid in self.tree.get_children(parent):
+                path = Path(str(iid).split("#", 1)[0])
+                if not path.is_dir():
+                    continue
+                collapsed.add(_norm_path(path))
+                self.tree.item(iid, open=False)
+                visit(iid)
+
+        visit("")
+        self.collapsed = collapsed
+        self._save_collapsed(collapsed)
+        self.status_var.set("All folders collapsed.")
+
     def _prune_collapsed(self, path: Path) -> None:
         """Remove collapsed-state entries for ``path`` and its descendants."""
         self._prune_collapsed_paths([path])
@@ -1001,6 +1096,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # after copying completed; if copying was slow or failed, the window
         # retained focus and Ctrl+V was never sent.
         # (The log stopped at "[paste] started".)
+        # Unmapping the window also updates Ubuntu Dock's running indicator;
+        # _finish_paste maps it again after Ctrl+V and the restore delay.
         self.withdraw()
         log_error("[paste] window withdrawn; copying in the background")
         _run_in_thread(self._paste_worker, text)
