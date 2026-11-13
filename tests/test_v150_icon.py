@@ -5,6 +5,7 @@ memakai ikon generik bawaan Tk — berbeda dengan ikon di dash/menu GNOME.
 Ditambah WM_CLASS Tk ("Tk") tidak sama dengan StartupWMClass di
 pastex.desktop, jadi GNOME bahkan tidak memasangkan jendela ke entri menu.
 """
+
 from __future__ import annotations
 
 import struct
@@ -38,9 +39,9 @@ def _png_rgba(path: Path) -> tuple[int, int, bytearray]:
     assert data[24] == 8 and data[25] == 6, "harus 8-bit RGBA"
     pos, idat = 8, b""
     while pos < len(data):
-        length = struct.unpack(">I", data[pos:pos + 4])[0]
-        tag = data[pos + 4:pos + 8]
-        body = data[pos + 8:pos + 8 + length]
+        length = struct.unpack(">I", data[pos : pos + 4])[0]
+        tag = data[pos + 4 : pos + 8]
+        body = data[pos + 8 : pos + 8 + length]
         if tag == b"IDAT":
             idat += body
         pos += 12 + length
@@ -50,11 +51,12 @@ def _png_rgba(path: Path) -> tuple[int, int, bytearray]:
     for y in range(height):
         start = y * (stride + 1)
         assert raw[start] == 0, "filter PNG harus None"
-        pixels += raw[start + 1:start + 1 + stride]
+        pixels += raw[start + 1 : start + 1 + stride]
     return width, height, pixels
 
 
 # --- berkas ikon ---------------------------------------------------------
+
 
 def test_svg_exists_and_is_square():
     assert SVG.is_file()
@@ -84,14 +86,19 @@ def test_png_actually_drawn_not_blank(size):
 def test_png_matches_svg_colors():
     """Warna PNG harus berasal dari SVG yang sama (bukan digambar ulang)."""
     svg_text = SVG.read_text(encoding="utf-8").lower()
-    width, height, pixels = _png_rgba(
-        ICON_DIR / "64x64" / "apps" / "pastex.png")
-    seen = {(pixels[i], pixels[i + 1], pixels[i + 2])
-            for i in range(0, len(pixels), 4) if pixels[i + 3] > 250}
+    _, _, pixels = _png_rgba(ICON_DIR / "64x64" / "apps" / "pastex.png")
+    seen = {
+        (pixels[i], pixels[i + 1], pixels[i + 2])
+        for i in range(0, len(pixels), 4)
+        if pixels[i + 3] > 250
+    }
     # hijau tua (latar), putih (dokumen), oranye (panah paste)
-    for name, rgb in (("hijau", (46, 125, 50)), ("putih", (255, 255, 255)),
-                      ("oranye", (255, 152, 0))):
-        hexa = "#%02x%02x%02x" % rgb
+    for name, rgb in (
+        ("hijau", (46, 125, 50)),
+        ("putih", (255, 255, 255)),
+        ("oranye", (255, 152, 0)),
+    ):
+        hexa = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
         assert hexa in svg_text, f"warna {name} tidak ada di SVG"
         assert rgb in seen, f"warna {name} {hexa} tidak muncul di PNG"
 
@@ -102,22 +109,25 @@ def test_png_is_what_the_generator_produces():
     import sys
 
     spec = importlib.util.spec_from_file_location(
-        "make_icon_png", ROOT / "scripts" / "make-icon-png.py")
+        "make_icon_png", ROOT / "scripts" / "make-icon-png.py"
+    )
     module = importlib.util.module_from_spec(spec)
     # @dataclass butuh modul terdaftar di sys.modules saat dibuat.
     sys.modules["make_icon_png"] = module
-    spec.loader.exec_module(module)          # type: ignore[union-attr]
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
 
     view_w, _, shapes = module.parse_svg(SVG)
     for size in (64, 256):
         expected = module.render(size, view=view_w, shapes=shapes)
         width, height, actual = _png_rgba(
-            ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png")
+            ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
+        )
         assert (width, height) == (size, size)
         assert bytes(actual) == expected, f"PNG {size}px basi — jalankan ulang skrip"
 
 
 # --- identitas jendela ---------------------------------------------------
+
 
 def test_constants_agree_with_desktop_file():
     """Icon=/StartupWMClass= di .desktop harus sama dengan yang dipakai app."""
@@ -187,14 +197,23 @@ def test_constructor_actually_applies_window_icon():
     import ast
 
     tree = ast.parse(Path(app_module.__file__).read_text(encoding="utf-8"))
-    app_cls = next(n for n in ast.walk(tree)
-                   if isinstance(n, ast.ClassDef) and n.name == "PastexApp")
-    init = next(n for n in app_cls.body
-                if isinstance(n, ast.FunctionDef) and n.name == "__init__")
-    calls = [node for node in ast.walk(init)
-             if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Name)
-             and node.func.id == "apply_window_icon"]
+    app_cls = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ClassDef) and n.name == "PastexApp"
+    )
+    init = next(
+        n
+        for n in app_cls.body
+        if isinstance(n, ast.FunctionDef) and n.name == "__init__"
+    )
+    calls = [
+        node
+        for node in ast.walk(init)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "apply_window_icon"
+    ]
     assert calls, "apply_window_icon tidak dipanggil di __init__"
     assert calls[0].args and isinstance(calls[0].args[0], ast.Name)
     assert calls[0].args[0].id == "self"
@@ -239,8 +258,9 @@ def test_real_window_wm_class_matches_desktop(tmp_path):
     import sys
 
     required = os.environ.get("PASTE_REQUIRE_X11_TEST") == "1"
-    missing = [tool for tool in ("xvfb-run", "xauth", "xprop")
-               if not shutil.which(tool)]
+    missing = [
+        tool for tool in ("xvfb-run", "xauth", "xprop") if not shutil.which(tool)
+    ]
     if app_module.tk is None:
         missing.append("tkinter")
     if missing:
@@ -248,7 +268,7 @@ def test_real_window_wm_class_matches_desktop(tmp_path):
             pytest.fail("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
         pytest.skip("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
 
-    script = r'''
+    script = r"""
 import os, subprocess, sys, time
 launcher, folder, expected = sys.argv[1:]
 p = subprocess.Popen([launcher, "--dir", folder], stdout=subprocess.PIPE,
@@ -271,11 +291,25 @@ try:
 finally:
     p.terminate()
     p.wait(timeout=10)
-'''
+"""
     env = os.environ.copy()
     env["XDG_CONFIG_HOME"] = str(tmp_path / "config")
     result = subprocess.run(
-        ["xvfb-run", "-a", sys.executable, "-c", script,
-         str(ROOT / "bin" / "pastex"), str(tmp_path), app_module.WM_CLASS],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+        [
+            "xvfb-run",
+            "-a",
+            sys.executable,
+            "-c",
+            script,
+            str(ROOT / "bin" / "pastex"),
+            str(tmp_path),
+            app_module.WM_CLASS,
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
     assert result.returncode == 0, result.stdout + result.stderr

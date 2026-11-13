@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 
 def test_legacy_settings_are_copied_to_pastex_config(tmp_path, monkeypatch):
@@ -32,5 +31,7 @@ def test_legacy_user_snippets_are_migrated(tmp_path, monkeypatch):
     new_root = snippets.user_root()
 
     assert new_root == tmp_path / "pastex" / "snippets"
-    assert (new_root / "General" / "Greeting.txt").read_text(encoding="utf-8") == "hello"
+    assert (new_root / "General" / "Greeting.txt").read_text(
+        encoding="utf-8"
+    ) == "hello"
     assert old_file.exists()

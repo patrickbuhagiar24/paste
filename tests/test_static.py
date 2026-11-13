@@ -4,6 +4,7 @@ Regresi v1.0.3: `threading` dipakai di app.py tetapi tidak pernah diimpor,
 sehingga tombol Salin/Paste melempar NameError di mesin pengguna — padahal
 seluruh uji lolos karena jalur GUI tidak dijalankan tanpa display.
 """
+
 import ast
 import builtins
 from pathlib import Path
@@ -39,13 +40,21 @@ def _bound_names(tree: ast.AST) -> set[str]:
 
 
 def _used_names(tree: ast.AST) -> set[str]:
-    return {node.id for node in ast.walk(tree)
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
 
 
 def test_no_undefined_names_in_package():
     known_builtins = set(dir(builtins)) | {
-        "__file__", "__name__", "__doc__", "__package__", "self", "cls",
+        "__file__",
+        "__name__",
+        "__doc__",
+        "__package__",
+        "self",
+        "cls",
         "annotations",
     }
     problems = {}
@@ -60,6 +69,7 @@ def test_no_undefined_names_in_package():
 def test_app_module_imports_threading():
     """Tombol Salin/Paste memakai thread latar."""
     from pastex import app
+
     assert hasattr(app, "threading")
 
 
@@ -68,7 +78,9 @@ def test_modules_import_cleanly_without_display(monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     import importlib
+
     import pastex
+
     for name in ("app", "clipboard", "snippets", "uinput"):
         importlib.import_module(f"pastex.{name}")
     assert pastex.__version__
@@ -100,9 +112,12 @@ def test_reader_tools_declared_in_recommends():
     recommends = _control_recommends((ROOT / "debian" / "control").read_text())
     # nama perintah -> paket Debian
     package_of = {
-        "wl-paste": "wl-clipboard", "wl-copy": "wl-clipboard",
-        "xclip": "xclip", "xsel": "xsel",
-        "xdotool": "xdotool", "ydotool": "ydotool",
+        "wl-paste": "wl-clipboard",
+        "wl-copy": "wl-clipboard",
+        "xclip": "xclip",
+        "xsel": "xsel",
+        "xdotool": "xdotool",
+        "ydotool": "ydotool",
     }
     needed = {package_of[t] for t in READER_TOOLS if t in package_of}
     needed |= {"wl-clipboard", "ydotool"}  # salin Wayland + paste Wayland
@@ -114,13 +129,16 @@ def test_docs_do_not_promise_removed_tk_clipboard():
     """Fallback clipboard Tk dihapus di v1.4.0; dokumen tidak boleh menjanjikannya."""
     for name in ("README.md", "debian/control"):
         text = (ROOT / name).read_text().lower()
-        assert "fallback clipboard" not in text, f"{name} masih menjanjikan fallback clipboard"
+        assert "fallback clipboard" not in text, (
+            f"{name} masih menjanjikan fallback clipboard"
+        )
 
 
 def test_package_description_matches_between_sources():
     """build-deb.sh menulis deskripsi sendiri; klaimnya tidak boleh menyimpang
     dari debian/control (regresi v1.4.2: 'fallback clipboard internal' masih
     tertinggal di .deb meski sudah dihapus dari control)."""
+
     def description_lines(text: str) -> list[str]:
         lines, capture = [], False
         for line in text.splitlines():

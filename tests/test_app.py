@@ -1,6 +1,8 @@
 """Uji CLI Pastex (tanpa GUI/display)."""
+
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -65,6 +67,48 @@ def test_insert_node_uses_end_index(tmp_path):
     assert app.tree.calls[0][2] == str(tmp_path)
 
 
+def test_startup_setup_reports_missing_clipboard_tools():
+    from pastex.app import startup_setup_issues
+
+    issues, can_enable = startup_setup_issues(
+        "x11",
+        {"wl-copy": False, "xclip": False, "xsel": False, "xdotool": True},
+    )
+
+    assert len(issues) == 1
+    assert "sudo apt install wl-clipboard xclip xsel" in issues[0]
+    assert can_enable is False
+
+
+def test_startup_setup_reports_wayland_permission_and_daemon_gaps():
+    from types import SimpleNamespace
+
+    from pastex.app import startup_setup_issues
+
+    status = SimpleNamespace(
+        device_writable=False,
+        helper=True,
+        pkexec=True,
+        ydotoold_binary=True,
+        daemon_ready=False,
+    )
+    issues, can_enable = startup_setup_issues(
+        "wayland",
+        {
+            "wl-copy": True,
+            "xclip": False,
+            "xsel": False,
+            "ydotool": True,
+            "xdotool": False,
+        },
+        status,
+    )
+
+    assert any("/dev/uinput" in issue for issue in issues)
+    assert any("ydotoold" in issue for issue in issues)
+    assert can_enable is True
+
+
 def test_check_reports_clipboard(capsys):
     """--check harus memeriksa clipboard, bukan hanya tool yang ada."""
     assert run_cli(["--check"]) == 0
@@ -75,6 +119,7 @@ def test_check_reports_clipboard(capsys):
 
 def test_clipboard_status_without_session(monkeypatch):
     from pastex import app
+
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.setattr("pastex.clipboard.shutil.which", lambda n: None)
@@ -84,6 +129,7 @@ def test_clipboard_status_without_session(monkeypatch):
 
 def test_test_paste_flag_exists():
     from pastex import app
+
     status = {"called": False}
 
     def fake(**kw):
@@ -129,9 +175,11 @@ def test_paste_withdraws_before_copying():
             return False
 
     class FakeApp:
-        settings = {"focus_delay": 0.6}
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0.1}
         _pasting = False
-        status_var = type("V", (), {"set": staticmethod(lambda v: order.append("status"))})()
+        status_var = type(
+            "V", (), {"set": staticmethod(lambda v: order.append("status"))}
+        )()
 
         def selected_path(self):
             return FakePath()
@@ -157,25 +205,64 @@ def test_paste_withdraws_before_copying():
     assert order.index("withdraw") < order.index("copy")
 
 
-def test_after_copy_schedules_focus_delay():
+def test_do_paste_ignores_repeat_while_paste_is_in_progress():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        _pasting = True
+        status_var = type("V", (), {"set": staticmethod(calls.append)})()
+
+    PastexApp.do_paste(FakeApp())
+
+    assert calls == ["Paste in progress..."]
+
+
+def test_after_copy_sends_paste_without_focus_wait():
     from pastex.app import PastexApp
     from pastex.clipboard import ClipboardResult
 
     calls = []
 
     class FakeApp:
-        settings = {"focus_delay": 0.8}
-        status_var = type("V", (), {"set": staticmethod(lambda v: None)})()
+        def _send_paste(self):
+            calls.append("send")
 
-        def after(self, ms, fn=None):
-            calls.append(("after", ms))
+    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "Text copied."))
+    assert calls == ["send"]
 
-        def _send_paste_after_release(self):
-            calls.append(("send", None))
-            return 0
 
-    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "ok", True))
-    assert calls[0] == ("after", 800)
+def test_paste_done_waits_100ms_after_sending_before_restoring():
+    from pastex.app import DEFAULT_SETTINGS, PastexApp
+    from pastex.clipboard import PasteResult
+
+    calls = []
+
+    class FakeApp:
+        settings: ClassVar[dict] = dict(DEFAULT_SETTINGS)
+        _pasting = True
+        status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
+
+        def after(self, ms, callback, *args):
+            calls.append(("wait", ms))
+            self.finish = lambda: callback(*args)
+
+        def _finish_paste(self, result):
+            PastexApp._finish_paste(self, result)
+
+        def deiconify(self):
+            calls.append(("deiconify", None))
+
+        def lift(self):
+            calls.append(("lift", None))
+
+    app = FakeApp()
+    PastexApp._paste_done(app, PasteResult(True, "ydotool", "Pasted."))
+    assert calls == [("wait", 100)]
+    app.finish()
+    assert calls[-1] == ("deiconify", None)
+    assert app._pasting is False
 
 
 def test_copy_failure_restores_window():
@@ -186,8 +273,10 @@ def test_copy_failure_restores_window():
 
     class FakeApp:
         _pasting = True
-        status_var = type("V", (), {"set": staticmethod(lambda v: calls.append(("status", v)))})()
-        settings = {}
+        status_var = type(
+            "V", (), {"set": staticmethod(lambda v: calls.append(("status", v)))}
+        )()
+        settings: ClassVar[dict[str, float]] = {}
 
         def deiconify(self):
             calls.append(("deiconify", None))
@@ -211,8 +300,14 @@ def test_paste_done_restores_window():
     calls = []
 
     class FakeApp:
-        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type(
+            "V", (), {"set": lambda self, v: calls.append(("status", v))}
+        )()
         _pasting = True
+
+        def _finish_paste(self, result):
+            PastexApp._finish_paste(self, result)
 
         def deiconify(self):
             calls.append(("deiconify", None))
@@ -222,7 +317,7 @@ def test_paste_done_restores_window():
 
     app = FakeApp()
     PastexApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
-    assert ("deiconify", None) in calls        # jendela kembali
+    assert ("deiconify", None) in calls  # jendela kembali
     assert app._pasting is False
 
 
@@ -233,7 +328,10 @@ def test_paste_done_failure_raises_window(monkeypatch):
     calls = []
 
     class FakeApp:
-        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type(
+            "V", (), {"set": lambda self, v: calls.append(("status", v))}
+        )()
         _pasting = True
 
         def deiconify(self):
@@ -247,7 +345,7 @@ def test_paste_done_failure_raises_window(monkeypatch):
 
     app = FakeApp()
     PastexApp._paste_done(app, PasteResult(False, "", "gagal"))
-    assert ("lift", None) in calls             # kegagalan harus terlihat
+    assert ("lift", None) in calls  # kegagalan harus terlihat
     assert ("dialog", "gagal") in calls
 
 
@@ -270,12 +368,19 @@ def test_activate_always_pastes():
 def test_no_legacy_controls_in_source():
     """Tombol Salin / pintasan / hitung mundur sudah dihapus."""
     src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
-    for gone in ("do_copy", "auto_var", "delay_var", "_start_countdown",
-                 "install-shortcut", "paste-foreground"):
+    for gone in (
+        "do_copy",
+        "auto_var",
+        "delay_var",
+        "_start_countdown",
+        "install-shortcut",
+        "paste-foreground",
+    ):
         assert gone not in src, f"masih ada sisa: {gone}"
 
 
 # --- Debounce pencarian ---------------------------------------------------
+
 
 def test_search_debounces_instead_of_scanning_every_keystroke():
     """Regresi: _on_search_changed() didefinisikan tetapi TIDAK pernah
@@ -300,9 +405,9 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
             calls.append(("scan",))
 
     app = FakeApp()
-    PastexApp._on_search_changed(app)          # ketikan ke-1
-    PastexApp._on_search_changed(app)          # ketikan ke-2
-    PastexApp._on_search_changed(app)          # ketikan ke-3
+    PastexApp._on_search_changed(app)  # ketikan ke-1
+    PastexApp._on_search_changed(app)  # ketikan ke-2
+    PastexApp._on_search_changed(app)  # ketikan ke-3
     scans = [c for c in calls if c == ("scan",)]
     assert scans == [], "refresh_tree dipanggil langsung, bukan lewat debounce"
     timers = [c for c in calls if c[0] == "after"]
@@ -327,6 +432,7 @@ def test_search_after_id_initialised():
 
 # --- Hasil paste yang belum pasti ----------------------------------------
 
+
 def test_paste_done_does_not_claim_success_when_not_confident():
     """xdotool di Wayland bisa lolos dengan kode 0 tanpa menempelkan apa pun."""
     from pastex.app import PastexApp
@@ -335,7 +441,10 @@ def test_paste_done_does_not_claim_success_when_not_confident():
     calls = []
 
     class FakeApp:
-        status_var = type("V", (), {"set": lambda self, v: calls.append(("status", v))})()
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type(
+            "V", (), {"set": lambda self, v: calls.append(("status", v))}
+        )()
         _pasting = True
 
         def deiconify(self):
@@ -347,8 +456,9 @@ def test_paste_done_does_not_claim_success_when_not_confident():
         def _show_paste_failure(self, message):
             calls.append(("dialog", message))
 
-    result = PasteResult(True, "xdotool", "Paste otomatis terkirim via xdotool.",
-                         confident=False)
+    result = PasteResult(
+        True, "xdotool", "Paste otomatis terkirim via xdotool.", confident=False
+    )
     PastexApp._paste_done(FakeApp(), result)
     status = next(v for k, v in calls if k == "status")
     assert "Ctrl+V" in status, "pengguna harus diberi langkah lanjutan"
@@ -357,11 +467,13 @@ def test_paste_done_does_not_claim_success_when_not_confident():
 
 # --- Helper thread -------------------------------------------------------
 
+
 def test_thread_helper_runs_target_with_args():
     from pastex.app import _run_in_thread
 
     seen = []
     import threading
+
     done = threading.Event()
 
     def work(a, b):

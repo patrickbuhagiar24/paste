@@ -3,19 +3,20 @@
 Tool priority for Ubuntu 26.10 (GNOME, Wayland by default):
 
   Copy   : wl-copy (Wayland) -> xclip -> xsel
-  Verify : wl-paste (Wayland) -> xclip -o -> xsel -o (max 0.3 seconds)
   Paste  : ydotool (Wayland) -> xdotool (X11)
+  Check  : clipboard read-back is reserved for explicit diagnostics
 
 All subprocess calls use an injectable ``runner``, allowing tests to run
 without access to a real clipboard.
 """
+
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -25,12 +26,10 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 # until timeout and reports failure even though the clipboard is populated.
 _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 
-# Clipboard read timeout. Reader tools can wait for a selection
-# to appear; never let this block the GUI. This used to match
-# the default 5-second timeout, making five verification attempts take 25 seconds.
+# Clipboard read timeout for explicit diagnostics; never let a read hang the GUI.
 READ_TIMEOUT = 0.3
 
-# Clipboard reader tools used for verification and diagnostics.
+# Clipboard reader tools used for explicit diagnostics.
 READER_TOOLS = ("wl-paste", "xclip", "xsel")
 
 
@@ -67,12 +66,11 @@ def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
             code = 0  # The process still owns the selection; this is normal.
         return subprocess.CompletedProcess(cmd, code, "", "")
     kwargs.setdefault("capture_output", True)
-    if tool in READER_TOOLS:
+    if tool in READER_TOOLS and kwargs.get("timeout", 5) > READ_TIMEOUT:
         # Clipboard reads must not hang; a quick failure is better
         # than making the GUI appear frozen.
-        if kwargs.get("timeout", 5) > READ_TIMEOUT:
-            kwargs["timeout"] = READ_TIMEOUT
-    return subprocess.run(*args, **kwargs)
+        kwargs["timeout"] = READ_TIMEOUT
+    return subprocess.run(*args, check=False, **kwargs)
 
 
 @dataclass
@@ -80,7 +78,6 @@ class ClipboardResult:
     ok: bool
     tool: str = ""
     message: str = ""
-    verified: bool = False
 
 
 @dataclass
@@ -105,30 +102,10 @@ def detect_session() -> str:
 
 def available_tools() -> dict[str, bool]:
     """Check which clipboard and paste tools are available on PATH."""
-    return {name: shutil.which(name) is not None
-            for name in ("wl-copy", "xclip", "xsel", "ydotool", "xdotool")}
-
-
-def verify_clipboard(expected: str, runner: Runner = _default_runner,
-                     *, attempts: int = 2, delay: float = 0.05) -> bool:
-    """Verify that the clipboard actually contains ``expected``.
-
-    On Wayland, wl-copy forks, so clipboard contents may not be
-    available immediately when the command returns. Retry a few times.
-    Return False if clipboard reading is not supported.
-
-    Keep the whole check within about 0.5 seconds; verification is optional,
-    not the goal. Five attempts with a 5-second timeout once made a single
-    click appear to hang (measured at 7 seconds on a user machine).
-    """
-    target = expected.rstrip("\n")
-    for attempt in range(attempts):
-        current = read_text_from_clipboard(runner=runner)
-        if current is not None and current.rstrip("\n") == target:
-            return True
-        if attempt + 1 < attempts and _sleep is not None:
-            _sleep(delay)
-    return False
+    return {
+        name: shutil.which(name) is not None
+        for name in ("wl-copy", "xclip", "xsel", "ydotool", "xdotool")
+    }
 
 
 def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
@@ -148,39 +125,40 @@ def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
             ("wl-copy", ["wl-copy"]),
         ]
     errors: list[str] = []
-    unverified = None
     for name, cmd in candidates:
         if shutil.which(cmd[0]) is None:
             continue
         try:
             proc = runner(cmd, input=text)
-            if proc.returncode != 0:
-                detail = " ".join(filter(None, [
-                    (getattr(proc, "stderr", "") or "").strip(),
-                    (getattr(proc, "stdout", "") or "").strip()]))
-                errors.append(f"{name}: {detail or proc.returncode}")
-                continue
-            # Exit code 0 does not guarantee that the clipboard contains the text
-            # (for example, wl-copy without a valid Wayland session); read it back.
-            if verify_clipboard(text, runner=runner):
-                return ClipboardResult(ok=True, tool=name, verified=True,
-                                       message=f"Text copied with {name}.")
-            if unverified is None:
-                unverified = name
-            errors.append(f"{name}: copied, but clipboard contents do not match")
+            if proc.returncode == 0:
+                # Trust the clipboard tool's exit status; do not read back or
+                # replace the clipboard contents in the normal paste flow.
+                return ClipboardResult(
+                    ok=True,
+                    tool=name,
+                    message=f"Text copied with {name}.",
+                )
+            detail = " ".join(
+                filter(
+                    None,
+                    [
+                        (getattr(proc, "stderr", "") or "").strip(),
+                        (getattr(proc, "stdout", "") or "").strip(),
+                    ],
+                )
+            )
+            errors.append(f"{name}: {detail or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
-    if unverified is not None:
-        # The tool reports success even though verification was unavailable.
-        return ClipboardResult(
-            ok=True, tool=unverified, verified=False,
-            message=(f"Text copied with {unverified} (not verified — "
-                     "install wl-paste or xclip to verify)."))
     detail = "; ".join(errors) if errors else "no clipboard tools found"
     return ClipboardResult(
-        ok=False, tool="",
-        message=(f"Could not copy ({detail}). Install wl-clipboard or xclip, "
-                 "or use the app’s Copy button (internal fallback)."))
+        ok=False,
+        tool="",
+        message=(
+            f"Could not copy ({detail}). Install wl-clipboard or xclip, "
+            "or use the app’s Copy button (internal fallback)."
+        ),
+    )
 
 
 def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
@@ -207,8 +185,7 @@ def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
 def _ydotoold_socket_exists() -> bool:
     uid = getattr(os, "getuid", lambda: 0)()
     runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-    for path in (f"{runtime}/ydotool.sock", "/run/ydotoold.sock",
-                 "/tmp/ydotool.sock"):
+    for path in (f"{runtime}/ydotool.sock", "/run/ydotoold.sock", "/tmp/ydotool.sock"):
         if os.path.exists(path):
             return True
     return False
@@ -224,11 +201,15 @@ def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
     """Read clipboard contents for diagnostics, or return None if unsupported."""
     session = detect_session()
     if session == "wayland":
-        candidates = [["wl-paste", "--no-newline"],
-                      ["xclip", "-selection", "clipboard", "-o"]]
+        candidates = [
+            ["wl-paste", "--no-newline"],
+            ["xclip", "-selection", "clipboard", "-o"],
+        ]
     else:
-        candidates = [["xclip", "-selection", "clipboard", "-o"],
-                      ["wl-paste", "--no-newline"]]
+        candidates = [
+            ["xclip", "-selection", "clipboard", "-o"],
+            ["wl-paste", "--no-newline"],
+        ]
     for cmd in candidates:
         if shutil.which(cmd[0]) is None:
             continue
@@ -247,18 +228,29 @@ def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
     Unlike Ctrl+V, this does not depend on the clipboard.
     """
     if shutil.which("ydotool") is None:
-        return PasteResult(ok=False, tool="",
-                          message="ydotool is not installed.")
+        return PasteResult(ok=False, tool="", message="ydotool is not installed.")
     try:
         proc = runner(["ydotool", "type", text])
         if proc.returncode == 0:
-            return PasteResult(ok=True, tool="ydotool",
-                               message=f"Test text sent through ydotool: {text!r}")
-        detail = " ".join(filter(None, [
-            (getattr(proc, "stderr", "") or "").strip(),
-            (getattr(proc, "stdout", "") or "").strip()]))
-        return PasteResult(ok=False, tool="ydotool",
-                          message=f"ydotool type failed: {detail or proc.returncode}")
+            return PasteResult(
+                ok=True,
+                tool="ydotool",
+                message=f"Test text sent through ydotool: {text!r}",
+            )
+        detail = " ".join(
+            filter(
+                None,
+                [
+                    (getattr(proc, "stderr", "") or "").strip(),
+                    (getattr(proc, "stdout", "") or "").strip(),
+                ],
+            )
+        )
+        return PasteResult(
+            ok=False,
+            tool="ydotool",
+            message=f"ydotool type failed: {detail or proc.returncode}",
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return PasteResult(ok=False, tool="", message=str(exc))
 
@@ -301,25 +293,38 @@ def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
                     proc = runner(cmd)
             if proc.returncode == 0:
                 return PasteResult(
-                    ok=True, tool=name,
+                    ok=True,
+                    tool=name,
                     message=f"Automatic paste sent through {name}.",
-                    confident=(name != "xdotool"))
-            detail = " ".join(filter(None, [
-                (getattr(proc, "stderr", "") or "").strip(),
-                (getattr(proc, "stdout", "") or "").strip(),
-            ]))
+                    confident=(name != "xdotool"),
+                )
+            detail = " ".join(
+                filter(
+                    None,
+                    [
+                        (getattr(proc, "stderr", "") or "").strip(),
+                        (getattr(proc, "stdout", "") or "").strip(),
+                    ],
+                )
+            )
             errors.append(f"{name}: {detail or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
     if errors:
         detail = "; ".join(errors)
     elif session == "wayland":
-        detail = ("ydotool was not found; on GNOME Wayland, only ydotool "
-                  "can send Ctrl+V to native Wayland apps")
+        detail = (
+            "ydotool was not found; on GNOME Wayland, only ydotool "
+            "can send Ctrl+V to native Wayland apps"
+        )
     else:
         detail = "no automatic-paste tools were found"
     return PasteResult(
-        ok=False, tool="",
-        message=(f"Automatic paste is unavailable ({detail}). "
-                 "The text was copied; press Ctrl+V in the target app. "
-                 "Run `pastex --check` for diagnostics."))
+        ok=False,
+        tool="",
+        message=(
+            f"Automatic paste is unavailable ({detail}). "
+            "The text was copied; press Ctrl+V in the target app. "
+            "Run `pastex --check` for diagnostics."
+        ),
+    )

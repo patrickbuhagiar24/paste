@@ -4,6 +4,7 @@ Baris-baris GUI diuji dengan objek tiruan (bukan Tk sungguhan) karena CI
 tidak punya X/Wayland. Yang diuji adalah *logika* metode: argumen yang
 dikirim ke Treeview, isi settings.json, dan folder tujuan penulisan.
 """
+
 from __future__ import annotations
 
 import sys
@@ -13,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pastex import app as app_module  # noqa: E402
-from pastex.app import PastexApp  # noqa: E402
+from pastex import app as app_module
+from pastex.app import PastexApp
 
 
 class FakeTree:
@@ -33,6 +34,7 @@ class FakeTree:
         self.deleted += 1
         self.rows.clear()
         self._child_order.clear()
+        self._selection = ()
 
     def get_children(self, item=""):
         children = [r["iid"] for r in self.rows if r["parent"] == item]
@@ -55,15 +57,25 @@ class FakeTree:
     def insert(self, parent, index, iid=None, **kw):
         assert index == "end", f"index salah: {index!r}"
         assert iid is not None, "iid harus keyword"
-        self.rows.append({"parent": parent, "iid": iid, "text": kw.get("text"),
-                          "open": kw.get("open"), "tags": kw.get("tags")})
+        self.rows.append(
+            {
+                "parent": parent,
+                "iid": iid,
+                "text": kw.get("text"),
+                "open": kw.get("open"),
+                "tags": kw.get("tags"),
+            }
+        )
         return iid
 
     def selection(self):
         return self._selection
 
-    def selection_set(self, iid):
-        self._selection = (iid,)
+    def selection_set(self, *iids):
+        self._selection = tuple(iids)
+
+    def selection_add(self, *iids):
+        self._selection = tuple(dict.fromkeys((*self._selection, *iids)))
 
     def focus(self, iid=None):
         if iid is not None:
@@ -89,8 +101,9 @@ class FakeTree:
         for row in self.rows:
             if row["text"] and name_contains in row["text"]:
                 return row
-        raise AssertionError(f"baris {name_contains!r} tidak ada: "
-                             f"{[r['text'] for r in self.rows]}")
+        raise AssertionError(
+            f"baris {name_contains!r} tidak ada: {[r['text'] for r in self.rows]}"
+        )
 
     def by_iid(self, iid) -> dict:
         for row in self.rows:

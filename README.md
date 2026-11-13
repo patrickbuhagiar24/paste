@@ -64,6 +64,8 @@ Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the
 
 Pastex uses `wl-clipboard` on Wayland where available, and `xclip` or `xsel` on X11. Automatic paste on Wayland uses `ydotool` and `/dev/uinput`; X11 can use `xdotool`.
 
+On first launch, Pastex checks for clipboard and paste tools, the current display session, `/dev/uinput` access, and the `ydotoold` service before you select a snippet. The check does not write a test value to the clipboard. If permission setup is available, Pastex asks before requesting administrator authorization; missing packages are reported with install instructions.
+
 If paste does not work, inspect the environment:
 
 ```bash

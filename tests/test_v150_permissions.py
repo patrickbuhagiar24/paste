@@ -5,6 +5,7 @@ Tombol "Izin Paste Otomatis" dihapus dari GUI. Alurnya kini:
   * `--enable-permissions`   -> meminta akses /dev/uinput (pkexec + helper)
 Informasi tetap muncul di `--check` dan pada dialog kegagalan paste.
 """
+
 from __future__ import annotations
 
 import ast
@@ -22,8 +23,9 @@ APP_SRC = (ROOT / "pastex" / "app.py").read_text(encoding="utf-8")
 class FakeStatus:
     """UinputStatus tiruan."""
 
-    def __init__(self, *, writable=False, helper=True, pkexec=True,
-                 daemon=False, user="tester"):
+    def __init__(
+        self, *, writable=False, helper=True, pkexec=True, daemon=False, user="tester"
+    ):
         self.user = user
         self.device_writable = writable
         self.helper = helper
@@ -34,8 +36,13 @@ class FakeStatus:
 
     def summary(self, prefix: str = ""):
         state = "✅" if self.device_writable else "❌"
-        return [(state, f"{prefix}write access to {uinput.DEVICE}",
-                 "is writable" if self.device_writable else "is not writable")]
+        return [
+            (
+                state,
+                f"{prefix}write access to {uinput.DEVICE}",
+                "is writable" if self.device_writable else "is not writable",
+            )
+        ]
 
 
 class FakeBox:
@@ -59,16 +66,21 @@ class FakeBox:
 
 # --- GUI tidak lagi punya tombol ------------------------------------------
 
+
 def _code_without_comments(source: str) -> str:
     """Source app.py tanpa komentar/docstring (komentar boleh menyebut sejarah)."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)):
+        if isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
             body = getattr(node, "body", [])
-            if (body and isinstance(body[0], ast.Expr)
-                    and isinstance(body[0].value, ast.Constant)
-                    and isinstance(body[0].value.value, str)):
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
                 node.body = body[1:] or [ast.Pass()]
     return ast.unparse(tree)
 
@@ -82,12 +94,19 @@ def test_permission_button_removed_from_gui_source():
 
 def test_gui_has_no_permission_widgets():
     """Metode GUI pembuka izin sudah hilang, bukan hanya tombolnya."""
-    for gone in ("enable_auto_paste", "_enable_worker", "_enable_done",
-                 "start_ydotoold", "_daemon_worker", "_daemon_done"):
+    for gone in (
+        "enable_auto_paste",
+        "_enable_worker",
+        "_enable_done",
+        "start_ydotoold",
+        "_daemon_worker",
+        "_daemon_done",
+    ):
         assert not hasattr(app_module.PastexApp, gone), gone
 
 
 # --- CLI: --permissions -----------------------------------------------------------
+
 
 def test_izin_flag_reports_status(capsys, monkeypatch):
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
@@ -120,6 +139,7 @@ def test_check_still_reports_permission_and_cli_hint(capsys, monkeypatch):
 
 # --- CLI: --enable-permissions -------------------------------------------------
 
+
 def test_aktifkan_izin_calls_helper(monkeypatch, capsys):
     calls = []
 
@@ -127,8 +147,7 @@ def test_aktifkan_izin_calls_helper(monkeypatch, capsys):
         calls.append(user)
         return 0, "akun ditambahkan", ""
 
-    monkeypatch.setattr(uinput, "status",
-                        lambda *a, **k: FakeStatus(writable=False))
+    monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=False))
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: True)
     monkeypatch.setattr(uinput, "enable_for_user", fake_enable)
     assert app_module.run_cli(["--enable-permissions"]) == 0
@@ -140,18 +159,17 @@ def test_aktifkan_izin_calls_helper(monkeypatch, capsys):
 
 def test_aktifkan_izin_noop_when_already_writable(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(uinput, "status",
-                        lambda *a, **k: FakeStatus(writable=True))
-    monkeypatch.setattr(uinput, "enable_for_user",
-                        lambda *a, **k: calls.append(a) or (0, "", ""))
+    monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=True))
+    monkeypatch.setattr(
+        uinput, "enable_for_user", lambda *a, **k: calls.append(a) or (0, "", "")
+    )
     assert app_module.run_cli(["--enable-permissions"]) == 0
     assert calls == []
     assert "already enabled" in capsys.readouterr().out
 
 
 def test_aktifkan_izin_without_pkexec_prints_manual_command(monkeypatch, capsys):
-    monkeypatch.setattr(uinput, "status",
-                        lambda *a, **k: FakeStatus(writable=False))
+    monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=False))
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: False)
     assert app_module.run_cli(["--enable-permissions"]) == 2
     out = capsys.readouterr().out
@@ -159,16 +177,17 @@ def test_aktifkan_izin_without_pkexec_prints_manual_command(monkeypatch, capsys)
 
 
 def test_aktifkan_izin_cancelled_password(monkeypatch, capsys):
-    monkeypatch.setattr(uinput, "status",
-                        lambda *a, **k: FakeStatus(writable=False))
+    monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=False))
     monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: True)
-    monkeypatch.setattr(uinput, "enable_for_user",
-                        lambda *a, **k: (126, "", "dibatalkan"))
+    monkeypatch.setattr(
+        uinput, "enable_for_user", lambda *a, **k: (126, "", "dibatalkan")
+    )
     assert app_module.run_cli(["--enable-permissions"]) == 1
     assert "cancelled" in capsys.readouterr().out
 
 
 # --- Dialog kegagalan paste ----------------------------------------------
+
 
 def test_paste_failure_dialog_mentions_cli(monkeypatch):
     """Kegagalan paste tetap menjelaskan izin + menyebut perintah CLI."""
@@ -192,8 +211,7 @@ def test_paste_failure_dialog_ready_case_stays_simple(monkeypatch):
     from pastex.app import PastexApp
 
     shown = []
-    monkeypatch.setattr(uinput, "status",
-                        lambda *a, **k: FakeStatus(writable=True))
+    monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=True))
     monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
     PastexApp._show_paste_failure(type("F", (), {})(), "clipboard kosong")
     assert "clipboard kosong" in shown[-1][2]
@@ -207,10 +225,12 @@ def test_cli_hint_mentions_both_flags():
 def test_no_gui_dependency_left_in_permission_paths():
     """Fungsi CLI izin tidak boleh memakai tkinter (harus jalan tanpa display)."""
     tree = ast.parse(APP_SRC)
-    wanted = {"run_permission_info", "run_enable_permission",
-              "permission_report"}
-    found = {n.name: n for n in ast.walk(tree)
-             if isinstance(n, ast.FunctionDef) and n.name in wanted}
+    wanted = {"run_permission_info", "run_enable_permission", "permission_report"}
+    found = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name in wanted
+    }
     assert set(found) == wanted
     for name, node in found.items():
         body = ast.dump(node)

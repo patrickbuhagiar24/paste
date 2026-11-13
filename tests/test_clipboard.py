@@ -1,4 +1,5 @@
 """Uji clipboard/paste dengan runner palsu (tanpa clipboard asli)."""
+
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ def _fake_runner(captured, returncode=0):
     def run(cmd, input=None, **kwargs):
         captured.append((cmd, input))
         return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr="")
+
     return run
 
 
@@ -31,8 +33,11 @@ def test_copy_prefers_wl_copy_on_wayland(monkeypatch):
 def test_copy_falls_back_to_xclip(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr(clipboard.shutil, "which",
-                        lambda name: "/usr/bin/xclip" if name == "xclip" else None)
+    monkeypatch.setattr(
+        clipboard.shutil,
+        "which",
+        lambda name: "/usr/bin/xclip" if name == "xclip" else None,
+    )
     captured = []
     result = clipboard.copy_text("halo", runner=_fake_runner(captured))
     assert result.ok and result.tool == "xclip"
@@ -78,8 +83,12 @@ def test_ensure_ydotoold_starts_service(monkeypatch):
 
 
 def test_ensure_ydotoold_failure_returns_false():
-    assert clipboard.ensure_ydotoold(
-        runner=lambda cmd, **kw: _mk(count=4, stderr="no systemd")) is False
+    assert (
+        clipboard.ensure_ydotoold(
+            runner=lambda cmd, **kw: _mk(count=4, stderr="no systemd")
+        )
+        is False
+    )
 
 
 def test_ensure_ydotoold_handles_missing_systemctl():
@@ -144,7 +153,7 @@ def test_forking_tool_is_not_waited_on(monkeypatch):
     _FakePopen.hang = True
     monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
     proc = clipboard._default_runner(["wl-copy"], input="halo")
-    assert proc.returncode == 0          # menggantung = normal, bukan gagal
+    assert proc.returncode == 0  # menggantung = normal, bukan gagal
     kw = _FakePopen.last.kw
     assert kw["stdout"] == clipboard.subprocess.DEVNULL
     assert kw["stderr"] == clipboard.subprocess.DEVNULL
@@ -158,8 +167,7 @@ def test_forking_tool_is_not_waited_on(monkeypatch):
 def test_forking_tool_finishing_returns_exit_code(monkeypatch):
     _FakePopen.hang = False
     monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
-    proc = clipboard._default_runner(["xclip", "-selection", "clipboard"],
-                                     input="halo")
+    proc = clipboard._default_runner(["xclip", "-selection", "clipboard"], input="halo")
     assert proc.returncode == 0
 
 
@@ -201,21 +209,25 @@ def test_ydotool_name_syntax_used_as_fallback(monkeypatch):
     result = clipboard.simulate_paste(runner=runner)
     assert result.ok is True
     assert len(seq) == 2
-    assert seq[0][2] == "29:1"      # percobaan pertama: keycode
-    assert seq[1][2] == "ctrl+v"    # cadangan: nama kunci
+    assert seq[0][2] == "29:1"  # percobaan pertama: keycode
+    assert seq[1][2] == "ctrl+v"  # cadangan: nama kunci
 
 
 def test_type_text_uses_ydotool_type(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
     seen = []
-    result = clipboard.type_text("halo", runner=lambda cmd, **kw: seen.append(cmd) or _Proc(rc=0))
+    result = clipboard.type_text(
+        "halo", runner=lambda cmd, **kw: seen.append(cmd) or _Proc(rc=0)
+    )
     assert result.ok is True
     assert seen == [["ydotool", "type", "halo"]]
 
 
 def test_type_text_reports_failure(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    result = clipboard.type_text("x", runner=lambda cmd, **kw: _Proc(1, "", "no socket"))
+    result = clipboard.type_text(
+        "x", runner=lambda cmd, **kw: _Proc(1, "", "no socket")
+    )
     assert result.ok is False and "no socket" in result.message
 
 
@@ -242,84 +254,25 @@ def test_read_text_from_clipboard_unavailable(monkeypatch):
     assert clipboard.read_text_from_clipboard() is None
 
 
-def test_verify_clipboard_matches(monkeypatch):
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    assert clipboard.verify_clipboard(
-        "halo", runner=lambda cmd, **kw: _Proc(0, out="halo")) is True
-
-
-def test_verify_clipboard_trailing_newline(monkeypatch):
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    assert clipboard.verify_clipboard(
-        "halo", runner=lambda cmd, **kw: _Proc(0, out="halo\n")) is True
-
-
-def test_verify_clipboard_retries_then_succeeds(monkeypatch):
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    state = {"n": 0}
-
-    def runner(cmd, **kw):
-        state["n"] += 1
-        return _Proc(0, out="lama" if state["n"] < 2 else "baru")
-
-    assert clipboard.verify_clipboard("baru", runner=runner) is True
-    assert state["n"] == 2
-
-
-def test_verify_clipboard_mismatch(monkeypatch):
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    assert clipboard.verify_clipboard(
-        "baru", runner=lambda cmd, **kw: _Proc(0, out="lama")) is False
-
-
-def test_copy_text_marks_verified(monkeypatch):
+def test_copy_text_uses_successful_clipboard_tool_without_readback(monkeypatch):
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
     captured = []
 
     def runner(cmd, input=None, **kw):
-        captured.append(cmd)
-        if cmd[0] == "wl-paste":
-            return _Proc(0, out=input if input else "halo")
+        captured.append((cmd, input))
         return _Proc(rc=0)
 
     result = clipboard.copy_text("halo", runner=runner)
-    assert result.ok is True and result.verified is True and result.tool == "wl-copy"
 
-
-def test_copy_text_unverified_without_reader(monkeypatch):
-    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
-    monkeypatch.setattr(clipboard.shutil, "which",
-                        lambda n: "/usr/bin/" + n if n == "wl-copy" else None)
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    result = clipboard.copy_text("halo", runner=lambda cmd, **kw: _Proc(rc=0))
     assert result.ok is True
-    assert result.verified is False
-    assert "not verified" in result.message
-
-
-def test_copy_text_reports_mismatch(monkeypatch):
-    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
-    monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
-    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-
-    def runner(cmd, input=None, **kw):
-        if cmd[0] == "wl-paste":
-            return _Proc(0, out="isi lama")
-        return _Proc(rc=0)
-
-    result = clipboard.copy_text("halo", runner=runner)
-    # Tool "berhasil" tetapi isi clipboard tidak cocok -> ditandai tidak terverifikasi
-    assert result.verified is False
-    assert "do not match" in result.message or "not verified" in result.message
+    assert result.tool == "wl-copy"
+    assert result.message == "Text copied with wl-copy."
+    assert captured == [(["wl-copy"], "halo")]
 
 
 # --- Wayland: jangan percaya xdotool -------------------------------------
+
 
 def test_wayland_never_uses_xdotool(monkeypatch):
     """Di GNOME Wayland, xdotool memakai XTEST dan TIDAK menjangkau aplikasi
@@ -330,10 +283,15 @@ def test_wayland_never_uses_xdotool(monkeypatch):
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr(clipboard.shutil, "which",
-                        lambda name: f"/usr/bin/{name}" if name == "xdotool" else None)
+    monkeypatch.setattr(
+        clipboard.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "xdotool" else None,
+    )
     calls = []
-    result = clipboard.simulate_paste(runner=lambda cmd: calls.append(cmd) or _Proc(rc=0))
+    result = clipboard.simulate_paste(
+        runner=lambda cmd: calls.append(cmd) or _Proc(rc=0)
+    )
     assert calls == [], f"xdotool dipanggil di Wayland: {calls}"
     assert result.ok is False
     assert "ydotool" in result.message
@@ -359,8 +317,11 @@ def test_x11_paste_marks_result_not_confident(monkeypatch):
 
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setattr(clipboard.shutil, "which",
-                        lambda name: f"/usr/bin/{name}" if name == "xdotool" else None)
+    monkeypatch.setattr(
+        clipboard.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "xdotool" else None,
+    )
     result = clipboard.simulate_paste(runner=lambda cmd: _Proc(rc=0))
     assert result.ok is True
     assert result.tool == "xdotool"
@@ -372,8 +333,11 @@ def test_wayland_ydotool_success_is_confident(monkeypatch):
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr(clipboard.shutil, "which",
-                        lambda name: f"/usr/bin/{name}" if name == "ydotool" else None)
+    monkeypatch.setattr(
+        clipboard.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "ydotool" else None,
+    )
     monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda **kw: True)
     result = clipboard.simulate_paste(runner=lambda cmd: _Proc(rc=0))
     assert result.ok is True
