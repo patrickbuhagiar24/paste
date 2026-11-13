@@ -1,10 +1,9 @@
-pastex (1.6.3-1) unstable; urgency=medium
+pastex (1.6.4-1) unstable; urgency=medium
 
-  * Add click-to-toggle multi-selection and selection-aware context actions.
-  * Add Collapse All to the context menu and improve search controls.
-  * Reflect paste-window visibility in Ubuntu Dock's running indicator.
+  * Clear hover highlighting after clicks, including outside the list and on context menus.
+  * Bump the project version for the hover behavior refinement.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 06:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 07:00:00 +0000
 
 pastex (1.6.0-1) unstable; urgency=medium
 

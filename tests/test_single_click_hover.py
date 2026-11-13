@@ -57,11 +57,12 @@ def test_hover_adds_and_removes_highlight_tag(tmp_path):
     assert app._hover_iid == ""
 
 
-def test_single_click_selects_and_pastes_immediately(tmp_path):
+def test_single_click_selects_pastes_and_clears_hover(tmp_path):
     snippet = tmp_path / "snippet.txt"
     snippet.write_text("hello", encoding="utf-8")
     app = PastexApp.__new__(PastexApp)
-    app.tree = FakeTree(str(snippet))
+    app.tree = FakeTree(str(snippet), tags=("hover",))
+    app._hover_iid = str(snippet)
     app._select_mode = False
     calls = []
     app.do_paste = lambda: calls.append("paste")
@@ -70,7 +71,22 @@ def test_single_click_selects_and_pastes_immediately(tmp_path):
 
     assert app.tree.selected == (str(snippet),)
     assert app.tree.focused == str(snippet)
+    assert "hover" not in app.tree.tags
+    assert app._hover_iid == ""
     assert calls == ["paste"]
+
+
+def test_click_outside_tree_clears_hover(tmp_path):
+    row = str(tmp_path / "snippet.txt")
+    app = PastexApp.__new__(PastexApp)
+    app.tree = FakeTree(row, tags=("hover",))
+    app._hover_iid = row
+    app._select_mode = False
+
+    app._exit_select_mode_outside_tree(SimpleNamespace(widget=object()))
+
+    assert app.tree.tags == ()
+    assert app._hover_iid == ""
 
 
 def test_select_mode_left_click_adds_and_unselects_without_pasting(tmp_path):

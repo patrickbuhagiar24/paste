@@ -649,15 +649,17 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 self.tree.item(row, tags=(*tags, "hover"))
 
     def _clear_tree_hover(self, _event=None) -> None:
-        if self._hover_iid and self.tree.exists(self._hover_iid):
+        hover_iid = getattr(self, "_hover_iid", "")
+        if hover_iid and self.tree.exists(hover_iid):
             tags = tuple(
-                tag for tag in self.tree.item(self._hover_iid, "tags") if tag != "hover"
+                tag for tag in self.tree.item(hover_iid, "tags") if tag != "hover"
             )
-            self.tree.item(self._hover_iid, tags=tags)
+            self.tree.item(hover_iid, tags=tags)
         self._hover_iid = ""
 
     def _on_single_click(self, event) -> None:
         """Paste normally; in Select mode, left-click toggles each row."""
+        self._clear_tree_hover()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
@@ -684,8 +686,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return "break"
 
     def _exit_select_mode_outside_tree(self, event) -> None:
-        """Leave Select mode when a click lands outside a folder/text row."""
-        if not self._select_mode or event.widget is self.tree:
+        """Clear hover and leave Select mode after a click outside the list."""
+        if event.widget is self.tree:
+            return
+        self._clear_tree_hover()
+        if not self._select_mode:
             return
         menu_path = str(self.menu)
         widget_path = str(event.widget)
@@ -698,7 +703,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._context_menu_active = False
 
     def _dismiss_context_menu_outside(self, event):
-        """Dismiss the popup when a mouse press lands outside its screen bounds."""
+        """Clear hover on mouse press and dismiss popups clicked outside."""
+        self._clear_tree_hover()
         if not self._context_menu_active:
             return
         try:
@@ -725,6 +731,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _on_right_click(self, event):
         """Post a context menu for a row, or dismiss selection mode on blank space."""
+        self._clear_tree_hover()
         row = self.tree.identify_row(event.y)
         if not row:
             self._select_mode = False
