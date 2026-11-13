@@ -1,16 +1,16 @@
 Package: pastex
-Version: 1.6.2-1
+Version: 1.6.3-1
 Architecture: all
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
 Conflicts: paste-teks
 Replaces: paste-teks
-Filename: ./pastex_1.6.2-1_all.deb
-Size: 40398
-MD5sum: d15fb3b43081f5b64d11b75eba628cb0
-SHA1: 1a713b38847e4fe9e9c8ad33631563e359099463
-SHA256: 9b9b8314b6e28925f133cf9f43b89393b0ed5190706afda60e5f2399d932cdbb
+Filename: ./pastex_1.6.3-1_all.deb
+Size: 40400
+MD5sum: caf831393ee6009f047e298d23734287
+SHA1: d6b20432a3eebc8a3366ba1ceca4aa73ed9d1c35
+SHA256: 9a7074d7524c4c9c35eb5386e9dc37461eb0495c5b514e408e650f79d55e7eac
 Section: utils
 Priority: optional
 Homepage: https://github.com/patrickbuhagiar24/paste
