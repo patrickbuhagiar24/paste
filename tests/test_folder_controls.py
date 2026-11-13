@@ -51,10 +51,12 @@ def test_right_click_folder_menu_selects_without_paste(gui, sample_root):
     assert app.menu.labels[:3] == ["Select", "Edit", "Delete"]
     assert "↑ Up" in app.menu.labels
     assert "↓ Down" in app.menu.labels
+    assert "Collapse All" in app.menu.labels
     assert "⚡ Paste into Another App" not in app.menu.labels
     app.menu.command("Select")()
     assert app.tree.selection() == (folder,)
     assert app.tree.focus() == folder
+    assert app._select_mode is True
     assert app.menu.popup_calls == [(120, 240)]
     assert app.menu.releases == 1
 
@@ -71,6 +73,42 @@ def test_select_context_item_adds_to_existing_selection(gui, sample_root):
     app.select_context_item()
 
     assert app.tree.selection() == (folder, text)
+    assert app._select_mode is True
+
+
+def test_right_click_in_select_mode_shows_only_bulk_actions(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app._select_mode = True
+    app.tree.selection_set(folder, text)
+    app.tree.identify_row = lambda _y: folder
+    app.menu = FakeMenu()
+
+    app._on_right_click(SimpleNamespace(y=3, x_root=20, y_root=30))
+
+    assert app.menu.labels == ["Delete", "↑ Up", "↓ Down"]
+
+
+def test_click_outside_tree_exits_select_mode(gui):
+    app = gui()
+    app._select_mode = True
+    app._exit_select_mode_outside_tree(SimpleNamespace(widget=object()))
+
+    assert app._select_mode is False
+    assert app.status_var.get() == "Selection mode ended."
+
+
+def test_right_click_blank_dismisses_without_posting_menu(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app._select_mode = True
+    app.tree.identify_row = lambda _y: ""
+    app.menu = FakeMenu()
+
+    assert app._on_right_click(SimpleNamespace(y=300, x_root=20, y_root=30)) == "break"
+    assert app.menu.popup_calls == []
+    assert app._select_mode is False
 
 
 def test_right_click_text_menu_has_no_paste_action(gui, sample_root):
@@ -84,6 +122,56 @@ def test_right_click_text_menu_has_no_paste_action(gui, sample_root):
 
     assert "Select" in app.menu.labels
     assert "⚡ Paste into Another App" not in app.menu.labels
+
+
+def test_collapse_all_is_persisted_and_closes_every_folder(gui, sample_root):
+    nested = sample_root / "General" / "Nested"
+    nested.mkdir()
+    (nested / "Inside.txt").write_text("inside", encoding="utf-8")
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+
+    app.collapse_all()
+
+    assert app.tree.by_iid(str(sample_root / "General"))["open"] is False
+    assert app.tree.by_iid(str(nested))["open"] is False
+    assert set(app.settings["collapsed"]) == {
+        app_module._norm_path(sample_root / "General"),
+        app_module._norm_path(sample_root / "Email"),
+        app_module._norm_path(nested),
+    }
+
+
+def test_search_button_runs_query_immediately(gui):
+    app = gui()
+    app.search_var.set("greeting")
+    app._search_after_id = "pending-search"
+    canceled = []
+    searches = []
+    app.after_cancel = canceled.append
+    app.refresh_tree = lambda: searches.append(app.search_var.get())
+
+    assert app.search_now() == "break"
+
+    assert canceled == ["pending-search"]
+    assert searches == ["greeting"]
+    assert app._search_after_id is None
+
+
+def test_clear_search_button_clears_query_and_refocuses(gui):
+    app = gui()
+    app.search_var.set("greeting")
+    app._search_after_id = None
+    focused = []
+    searches = []
+    app.search_entry = SimpleNamespace(focus_set=lambda: focused.append(True))
+    app.refresh_tree = lambda: searches.append(app.search_var.get())
+
+    app.clear_search()
+
+    assert app.search_var.get() == ""
+    assert searches == [""]
+    assert focused == [True]
 
 
 def test_move_up_down_persists_mixed_folder_and_text_order(gui, tmp_path):
