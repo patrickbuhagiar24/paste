@@ -4,40 +4,40 @@ Hash: SHA512
 Architectures: all
 Codename: stable
 Components: main
-Date: Thu, 12 Nov 2026 22:55:10 +0000
+Date: Fri, 13 Nov 2026 01:34:45 +0000
 Description: Pastex APT repository for Ubuntu 26.10
 Label: Pastex
 Origin: Pastex
 Suite: stable
 MD5Sum:
- d820cc0deadbea2e74dac5a1c6e33b38             1160 Packages
- e80c991a3215eb0b1c4edf03385ee074              745 Packages.gz
- 37a82d359f751a4b37696472b0c3f402              186 Release
+ 7338782d0aef05dfff6444c566e0d898             1160 Packages
+ 0afad27dcc3facc41537c1a70ad8d177              744 Packages.gz
+ a80f3ae6ce87783024d1b0865fe83d36              186 Release
 SHA1:
- f5d8bed0c2d7e407213dcc030252ccff6dd2373c             1160 Packages
- 38e4e0d2a4027f827a5811e861f8b2e843da5d06              745 Packages.gz
- 5c51f4b11e666a85dae92b1b943d25a0840ce163              186 Release
+ be887906b5b7da8b6da9598869577fed1bb29dea             1160 Packages
+ 1c2062b035a0f882f1f2f5dceebca35f02d5a53c              744 Packages.gz
+ 4e3520199d7be8d76297c49bbe19b2807fb56fbd              186 Release
 SHA256:
- 389d7cfbfd2deb97f34df4ad50e0013f7c4fa2f5f0f20e381d425c84137fe127             1160 Packages
- d3a75f1b0c18dc7e314b73dd5e8c3f6f9f0c5faadd2c5a981073b4a84cd07715              745 Packages.gz
- 50696f3d7cb4aa988c5c5c62649d226f50f166bbde058d2da2afdf87041183fd              186 Release
+ 8203672907973dcc21b42baa38965c3238238864191d6287012f9750531ac9bc             1160 Packages
+ fcf0d2622ae5d9f50726a0132e13298664c77d8d3e022d19689ae71ddc64cf64              744 Packages.gz
+ f6666bafd2e9ec6eb193458afce390f43b216dbf107fdbf3ab0711be3bc6d3e6              186 Release
 SHA512:
- e40aff48318849fb43268c759d30577dbc403f4aca93be030f267cb39751f6cb955528a5b9439762833b3d2e13c4e5821988668a84da8249706e4c63ad27b4fd             1160 Packages
- 0988753506b4108ed680caaab0f0042a1811107f52f69fdb5f1f27d2f5df3c36139a3fac709ef16b848904f0ca87fbb2ddcdab10795353e7cb3ea9a06f95ab65              745 Packages.gz
- 85e73b1860cfa49fee30216ef2ebf410dc0538ab1c54fd21f10534c8361ae88a6cfe62a2b912327284f16f3ed165380de0398b548fa4568ce826e85105211b45              186 Release
+ e5a983079d49abaadc0e1eddbe793156ac61eb9738cabc3549972cbfef4a92ba87f306c8ac973712aee61b680ff2f29d6e3a017c0d8148b08de3eb12d7d4738d             1160 Packages
+ dbc74cd5e6a6d3d7c7bf66afec9d147e7bb08fa134af9a5ae75071735879b809a469ef41be6283f7115e3678b601fa2ab5f0417764ca3d6090fc45375d5b3f9a              744 Packages.gz
+ 2cd8e3d6b2d6bc8e91103be1d377a9b1e30740dab21b857be6a179c76c3b50918c58b231f6d754fddf57d121db9dd568bd818ecaacb5ee95f919cf053af2c30a              186 Release
 -----BEGIN PGP SIGNATURE-----
 
-iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr2Q9AACgkQ5gn+foNK
-lYgWvBAAkGU4JuiFzjZVN5PJMu66oMCmB0SvgOtxPIsAmp06LgrbmutJBXVZ8d21
-+vXFK9QtKOE06sV040RybF3p9GpeVHKgsUclk3QSgN1OidVQxY5vAWZVEFXg9XNf
-tls1T0QJTQAS7pMH2cdimSM8o5F/yaWiOgkGdj38bzYXckNIpvmmSKs9mdHpjWqL
-MJ/OllGTGIlDa1ucSpRgfO1JdyVIRlpNwaeKxA62zJPNNO+kedj70xBoSV2PnBW/
-ebyItBsgjWPKVYuVl4OM5gqbb31xzqxEQXO5VPM+G1VhdWERLISH7bcQ//Xtnphw
-F8QSgfOPBAKDnVIZr2loOSeyQt4S+t2bZIDiaRvx8ztOMAuRIBSxOtK1G3ba58S9
-YAovirrvbIeSNkUw57wkRh/n8MYpcNTifT5D/aXHB5QDgHyePB6nr5bHxQJgxHQz
-FFQ4Ir0Bp6HcJKzTekALOgyQh8Iy46uD36fqx/8Am07pVgh/wBwV7yorDmYG6mYP
-HSy7mgIKBX8W0sVEgJyZensGrTh9YA5FCPpamyhfVkVCVUHy7OXdPB3K+Jwz0CZK
-4TZfUXo3epFtcplwdeOK+bmfu7jO5mVJrW8zrXfb+fwLzFD1lfx8ITZjf+EBpgBV
-nIMumFQWJ0sKaHYy7Y6nPuJArXMjvhdAkJeDrgYfUP19CYYLKEg=
-=og/8
+iQIzBAEBCgAdFiEE7CPA/cJm06jHJaO45gn+foNKlYgFAmr2aTYACgkQ5gn+foNK
+lYguFg/8CPG9VwgpfLaETLZG8YmShQNGb0GRv7xFJ7wMK31sYc5LNeWvFJgcIlYy
+brSJUYDPUGeAX1xCdd8fxrAICRiFo1foPsHYTWX8HNuRXLT6C8ATFVdnvY0PzKiu
+Xl0XR69PfB13N/APtYwJOtNGVVdpdOlWVhuowrfHsw5ZLuJyWQOAENG8p0OmeCCj
+tVWaz+v4zXj+cyj64v6nZ8PZ4QrOR6Ly8MScoHsFyccibFWSv1tuyw0YEGMEjGOe
+APIChpbxVNOqHQrpEZt51SzlTaEzEf0o0NBR646WPyAUK8PN4iQeVm+MofteZfxO
+5Vb2m9+pMybKACvz38pXxns6KiuYoTKDJt8gOMCsVZyc50C2EjPQUfnOwLQqmQOW
+RBKOVF9/eH88s1umo0GdzvcUxQiQhz7n+VgAD4TL9pZqa9UTLRWmoef0OB+n2SfP
+l9QtnZi9MOX2exGt3oJhozw1B8+y0YGQ7+40cnFeBA/19Ot9tu5AkGxUztbeD728
+ee5ap8tkcIg1cAjjL19vPSLvcFjkjfnISfAX3OHisogBILvV/6F/VlKfscq+z849
+6jTWk7hoBpCjeOl/oiZA+oVqv90vPPppzrEV9wEYY2Fc4g+OIHxo6rrVkEEYJm4+
+//W4ePc1NabKxup9/ayASXv9/4Mk7LZVYRTkKx42Emz1XlmXtFw=
+=DILY
 -----END PGP SIGNATURE-----
