@@ -96,6 +96,21 @@ def test_select_context_item_adds_to_existing_selection(gui, sample_root):
     assert app._select_mode is True
 
 
+def test_opening_right_click_menu_clears_hover(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    row = str(sample_root / "General")
+    app.tree.item(row, tags=("hover",))
+    app._hover_iid = row
+    app.tree.identify_row = lambda _y: row
+    app.menu = FakeMenu()
+
+    app._on_right_click(SimpleNamespace(y=3, x_root=20, y_root=30))
+
+    assert "hover" not in app.tree.item(row, "tags")
+    assert app._hover_iid == ""
+
+
 def test_right_click_in_select_mode_shows_only_bulk_actions(gui, sample_root):
     app = gui(roots=[sample_root])
     app.refresh_tree()
@@ -140,8 +155,11 @@ def test_context_menu_dismisses_on_left_or_right_click_outside(gui):
     assert app._context_menu_active is False
 
 
-def test_click_inside_context_menu_keeps_it_posted(gui):
+def test_click_inside_context_menu_keeps_it_posted_and_clears_hover(gui):
     app = gui()
+    row = "/tmp/hover-row"
+    app.tree.insert("", "end", iid=row, text="Hover", tags=("hover",))
+    app._hover_iid = row
     app.menu = FakeMenu()
     app._context_menu_active = True
 
@@ -151,6 +169,8 @@ def test_click_inside_context_menu_keeps_it_posted(gui):
 
     assert app.menu.unposts == 0
     assert app._context_menu_active is True
+    assert "hover" not in app.tree.item(row, "tags")
+    assert app._hover_iid == ""
 
 
 def test_search_has_no_separate_search_button(gui):
