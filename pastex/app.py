@@ -455,14 +455,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.search_var.trace_add("write", lambda *_: self._on_search_changed())
         search_box = ttk.Frame(toolbar)
         search_box.pack(side="left", padx=(0, 6))
-        self.search_button = ttk.Button(
-            search_box, text="🔍", width=3, command=self.search_now
-        )
-        self.search_button.pack(side="left")
         self.search_entry = ttk.Entry(
             search_box, textvariable=self.search_var, width=26
         )
-        self.search_entry.pack(side="left", padx=(2, 0))
+        self.search_entry.pack(side="left")
         self.clear_search_button = ttk.Button(
             search_box, text="×", width=2, command=self.clear_search
         )
@@ -565,6 +561,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Context menu is populated for each right-clicked text or folder.
         self.menu = tk.Menu(self, tearoff=0)
         self._context_iid = ""
+        self._context_menu_active = False
+        self.menu.bind("<Unmap>", self._context_menu_unmapped, add="+")
+        self.bind_all("<Button-1>", self._dismiss_context_menu_outside, add="+")
+        self.bind_all("<Button-3>", self._dismiss_context_menu_outside, add="+")
         self.bind("<Button-1>", self._exit_select_mode_outside_tree, add="+")
         self.bind("<Button-3>", self._exit_select_mode_outside_tree, add="+")
         self.bind("<Control-Button-1>", self._exit_select_mode_outside_tree, add="+")
@@ -668,15 +668,45 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _exit_select_mode_outside_tree(self, event) -> None:
         """Leave Select mode when a click lands outside a folder/text row."""
-        if self._select_mode and event.widget is not self.tree:
-            self._select_mode = False
-            self.status_var.set("Selection mode ended.")
+        if not self._select_mode or event.widget is self.tree:
+            return
+        menu_path = str(self.menu)
+        widget_path = str(event.widget)
+        if widget_path == menu_path or widget_path.startswith(menu_path + "."):
+            return
+        self._select_mode = False
+        self.status_var.set("Selection mode ended.")
+
+    def _context_menu_unmapped(self, _event=None) -> None:
+        self._context_menu_active = False
+
+    def _dismiss_context_menu_outside(self, event) -> None:
+        """Dismiss the popup on either mouse button outside its own menu area."""
+        if not self._context_menu_active:
+            return
+        target = self.winfo_containing(
+            getattr(event, "x_root", 0), getattr(event, "y_root", 0)
+        )
+        menu_path = str(self.menu)
+        target_path = str(target or "")
+        if target_path == menu_path or target_path.startswith(menu_path + "."):
+            return
+        self._context_menu_active = False
+        try:
+            self.menu.unpost()
+        except tk.TclError:
+            pass
+        try:
+            self.menu.grab_release()
+        except tk.TclError:
+            pass
 
     def _on_right_click(self, event):
         """Post a context menu for a row, or dismiss selection mode on blank space."""
         row = self.tree.identify_row(event.y)
         if not row:
             self._select_mode = False
+            self._context_menu_active = False
             return "break"
         self._context_iid = row
         self.tree.focus(row)
@@ -722,6 +752,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.menu.add_separator()
             self.menu.add_command(label="Collapse All", command=self.collapse_all)
         try:
+            self._context_menu_active = True
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
@@ -1070,13 +1101,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
         The flow is:
 
-          1. Withdraw the Pastex window so the previously active app can receive focus.
+          1. Minimize the Pastex window so the previously active app can receive focus.
           2. Copy the text to the clipboard.
           3. Send Ctrl+V to the currently focused app.
           4. Wait briefly, then restore the Pastex window.
 
-        `iconify()` is ignored by some compositors, and `lower()` does not return
-        focus at all; Ctrl+V would then be sent back into Pastex itself.
+        Keep the window minimized rather than withdrawn so the window manager can
+        keep its normal running-app entry in the dock/task switcher.
         """
         if self._pasting:
             self.status_var.set("Paste in progress...")
@@ -1092,14 +1123,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         self._pasting = True
         self.status_var.set("Preparing to paste...")
-        # Withdraw the window before copying. Previously, it was withdrawn only
-        # after copying completed; if copying was slow or failed, the window
-        # retained focus and Ctrl+V was never sent.
-        # (The log stopped at "[paste] started".)
-        # Unmapping the window also updates Ubuntu Dock's running indicator;
-        # _finish_paste maps it again after Ctrl+V and the restore delay.
-        self.withdraw()
-        log_error("[paste] window withdrawn; copying in the background")
+        # Minimize before copying so the target app can receive focus while the
+        # Pastex window remains registered as a running application in the dock.
+        self.iconify()
+        log_error("[paste] window minimized; copying in the background")
         _run_in_thread(self._paste_worker, text)
 
     def _paste_worker(self, text: str) -> None:
@@ -1160,7 +1187,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
-        # The window has been withdrawn; always restore it, regardless of outcome.
+        # The window has been minimized; always restore it, regardless of outcome.
         self.deiconify()
         self.lift()
         self.status_var.set(f"Could not copy to the clipboard: {message}")
