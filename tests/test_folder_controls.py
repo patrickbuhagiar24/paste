@@ -12,6 +12,22 @@ class FakeMenu:
         self.popup_calls = []
         self.releases = 0
         self.unposts = 0
+        self.root_x = 100
+        self.root_y = 200
+        self.width = 150
+        self.height = 80
+
+    def winfo_rootx(self):
+        return self.root_x
+
+    def winfo_rooty(self):
+        return self.root_y
+
+    def winfo_width(self):
+        return self.width
+
+    def winfo_height(self):
+        return self.height
 
     def delete(self, *_args):
         self.items.clear()
@@ -109,7 +125,6 @@ def test_context_menu_dismisses_on_left_or_right_click_outside(gui):
     app = gui()
     app.menu = FakeMenu()
     app._context_menu_active = True
-    app.winfo_containing = lambda _x, _y: "outside"
 
     app._dismiss_context_menu_outside(
         SimpleNamespace(x_root=400, y_root=300, widget=None, num=1)
@@ -129,10 +144,9 @@ def test_click_inside_context_menu_keeps_it_posted(gui):
     app = gui()
     app.menu = FakeMenu()
     app._context_menu_active = True
-    app.winfo_containing = lambda _x, _y: app.menu
 
     app._dismiss_context_menu_outside(
-        SimpleNamespace(x_root=10, y_root=10, widget=app.menu)
+        SimpleNamespace(x_root=110, y_root=210, widget=app.menu)
     )
 
     assert app.menu.unposts == 0

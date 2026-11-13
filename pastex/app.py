@@ -563,8 +563,25 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._context_iid = ""
         self._context_menu_active = False
         self.menu.bind("<Unmap>", self._context_menu_unmapped, add="+")
-        self.bind_all("<Button-1>", self._dismiss_context_menu_outside, add="+")
-        self.bind_all("<Button-3>", self._dismiss_context_menu_outside, add="+")
+        # Run dismissal before widget/class bindings: Treeview and Menu class
+        # handlers can consume outside clicks before a bind_all callback sees them.
+        self._context_dismiss_bindtag = f"PastexContextDismiss{id(self)}"
+        for sequence in ("<ButtonPress-1>", "<ButtonPress-2>", "<ButtonPress-3>"):
+            self.bind_class(
+                self._context_dismiss_bindtag,
+                sequence,
+                self._dismiss_context_menu_outside,
+                add="+",
+            )
+
+        def install_dismiss_bindtag(widget) -> None:
+            tags = widget.bindtags()
+            if self._context_dismiss_bindtag not in tags:
+                widget.bindtags((self._context_dismiss_bindtag, *tags))
+            for child in widget.winfo_children():
+                install_dismiss_bindtag(child)
+
+        install_dismiss_bindtag(self)
         self.bind("<Button-1>", self._exit_select_mode_outside_tree, add="+")
         self.bind("<Button-3>", self._exit_select_mode_outside_tree, add="+")
         self.bind("<Control-Button-1>", self._exit_select_mode_outside_tree, add="+")
@@ -680,17 +697,21 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _context_menu_unmapped(self, _event=None) -> None:
         self._context_menu_active = False
 
-    def _dismiss_context_menu_outside(self, event) -> None:
-        """Dismiss the popup on either mouse button outside its own menu area."""
+    def _dismiss_context_menu_outside(self, event):
+        """Dismiss the popup when a mouse press lands outside its screen bounds."""
         if not self._context_menu_active:
             return
-        target = self.winfo_containing(
-            getattr(event, "x_root", 0), getattr(event, "y_root", 0)
-        )
-        menu_path = str(self.menu)
-        target_path = str(target or "")
-        if target_path == menu_path or target_path.startswith(menu_path + "."):
+        try:
+            x, y = event.x_root, event.y_root
+            left, top = self.menu.winfo_rootx(), self.menu.winfo_rooty()
+            right = left + self.menu.winfo_width()
+            bottom = top + self.menu.winfo_height()
+        except (AttributeError, tk.TclError):
+            # If the popup geometry cannot be queried, fail closed and dismiss it.
+            x = y = left = top = right = bottom = 0
+        if left <= x < right and top <= y < bottom:
             return
+
         self._context_menu_active = False
         try:
             self.menu.unpost()
@@ -700,6 +721,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.menu.grab_release()
         except tk.TclError:
             pass
+        return "break"
 
     def _on_right_click(self, event):
         """Post a context menu for a row, or dismiss selection mode on blank space."""
@@ -1101,13 +1123,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
         The flow is:
 
-          1. Minimize the Pastex window so the previously active app can receive focus.
-          2. Copy the text to the clipboard.
-          3. Send Ctrl+V to the currently focused app.
-          4. Wait briefly, then restore the Pastex window.
-
-        Keep the window minimized rather than withdrawn so the window manager can
-        keep its normal running-app entry in the dock/task switcher.
+          1. Copy the text while Pastex remains visible.
+          2. Withdraw the window after copying so the target app receives focus.
+          3. Send Ctrl+V to the focused app.
+          4. Wait briefly, then restore Pastex with deiconify().
         """
         if self._pasting:
             self.status_var.set("Paste in progress...")
@@ -1123,10 +1142,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         self._pasting = True
         self.status_var.set("Preparing to paste...")
-        # Minimize before copying so the target app can receive focus while the
-        # Pastex window remains registered as a running application in the dock.
-        self.iconify()
-        log_error("[paste] window minimized; copying in the background")
+        # Leave Pastex visible while setting the clipboard. Once copying succeeds,
+        # _after_copy() withdraws it immediately before sending Ctrl+V.
         _run_in_thread(self._paste_worker, text)
 
     def _paste_worker(self, text: str) -> None:
@@ -1143,6 +1160,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if not result.ok:
             self._paste_failed(result.message)
             return
+        self.withdraw()
+        log_error("[paste] clipboard ready; window withdrawn before Ctrl+V")
         self._send_paste()
 
     def _send_paste(self) -> None:
@@ -1187,7 +1206,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
-        # The window has been minimized; always restore it, regardless of outcome.
+        # Keep the app visible so the clipboard failure message can be read.
         self.deiconify()
         self.lift()
         self.status_var.set(f"Could not copy to the clipboard: {message}")
