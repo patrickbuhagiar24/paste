@@ -1,8 +1,9 @@
-pastex (1.6.1-1) unstable; urgency=medium
+pastex (1.6.2-1) unstable; urgency=medium
 
-  * Increase contrast of the hovered snippet row.
-  * Add a control to collapse all categories and persist the collapsed state.
-  * Improve context-menu activation and row selection on right-click.
+  * Add first-launch checks and guidance for clipboard and automatic-paste setup.
+  * Support multi-selection for context-menu deletion and sibling reordering.
+  * Send Ctrl+V immediately after copying; restore the window after 100 ms.
+  * Remove clipboard read-back from the normal paste path.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
 
