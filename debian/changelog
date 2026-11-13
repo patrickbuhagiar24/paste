@@ -1,11 +1,10 @@
-pastex (1.6.2-1) unstable; urgency=medium
+pastex (1.6.3-1) unstable; urgency=medium
 
-  * Add first-launch checks and guidance for clipboard and automatic-paste setup.
-  * Support multi-selection for context-menu deletion and sibling reordering.
-  * Send Ctrl+V immediately after copying; restore the window after 100 ms.
-  * Remove clipboard read-back from the normal paste path.
+  * Add click-to-toggle multi-selection and selection-aware context actions.
+  * Add Collapse All to the context menu and improve search controls.
+  * Reflect paste-window visibility in Ubuntu Dock's running indicator.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 06:00:00 +0000
 
 pastex (1.6.0-1) unstable; urgency=medium
 
