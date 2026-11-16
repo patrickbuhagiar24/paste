@@ -157,3 +157,103 @@ def test_single_click_on_folder_does_not_paste(tmp_path):
 
     assert app.tree.selected == (str(folder),)
     assert calls == []
+
+
+def test_show_preview_displays_text_without_missing_helper(tmp_path):
+    snippet = tmp_path / "snippet.txt"
+    snippet.write_text("hello world", encoding="utf-8")
+
+    class FakePreview:
+        def __init__(self):
+            self.text = ""
+            self.state = "disabled"
+
+        def configure(self, **kw):
+            if "state" in kw:
+                self.state = kw["state"]
+
+        def delete(self, *_args):
+            self.text = ""
+
+        def insert(self, _pos, text):
+            self.text = text
+
+    app = PastexApp.__new__(PastexApp)
+    app.tree = FakeTree(str(snippet))
+    app.tree.selection_set(str(snippet))
+    app.preview = FakePreview()
+    app.info_var = SimpleNamespace(set=lambda value: setattr(app, "_info", value))
+    app.current_file = None
+
+    app.show_preview()
+
+    assert app.current_file == snippet
+    assert app.preview.text == "hello world"
+    assert app.preview.state == "disabled"
+    assert "snippet.txt" in app._info
+
+
+def test_indicator_click_does_not_toggle_selection_or_paste(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    app = PastexApp.__new__(PastexApp)
+    app.tree = FakeTree(str(folder))
+    app.tree.identify_element = lambda _x, _y: "Treeitem.indicator"
+    app._select_mode = True
+    calls = []
+    app.do_paste = lambda: calls.append("paste")
+
+    result = app._on_single_click(SimpleNamespace(x=8, y=4))
+
+    assert result == "break"
+    assert app.tree.selected == ()
+    assert calls == []
+
+
+def test_dismissing_context_menu_with_left_click_does_not_paste_on_release(tmp_path):
+    snippet = tmp_path / "snippet.txt"
+    snippet.write_text("hello", encoding="utf-8")
+
+    class FakeMenu:
+        def winfo_rootx(self):
+            return 100
+
+        def winfo_rooty(self):
+            return 100
+
+        def winfo_width(self):
+            return 50
+
+        def winfo_height(self):
+            return 50
+
+        def unpost(self):
+            pass
+
+        def grab_release(self):
+            pass
+
+    app = PastexApp.__new__(PastexApp)
+    app.tree = FakeTree(str(snippet))
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app._suppress_next_release = False
+    app._select_mode = False
+    calls = []
+    app.do_paste = lambda: calls.append("paste")
+
+    press_result = app._dismiss_context_menu_outside(
+        SimpleNamespace(x_root=10, y_root=10, num=1, widget=app.tree)
+    )
+    release_result = app._consume_suppressed_release(SimpleNamespace(widget=app.tree))
+    # Simulate _on_single_click if release reached the widget directly:
+    assert press_result == "break"
+    assert release_result == "break"
+    assert app._suppress_next_release is False
+
+    # Also ensure _on_single_click itself guards against _suppress_next_release.
+    app._suppress_next_release = True
+    assert app._on_single_click(SimpleNamespace(y=4)) == "break"
+    assert app._suppress_next_release is False
+    assert calls == []
+

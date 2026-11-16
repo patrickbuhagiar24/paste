@@ -446,5 +446,94 @@ def test_old_toolbar_controls_are_not_rendered_and_ppa_is_manual():
     assert '"✏️ Edit"' not in source
     assert '"🗑 Delete"' not in source
     assert '"⊟ Collapse All"' not in source
+    assert '"Always on top"' not in source
+    assert "self.top_var" not in source
     assert "workflow_dispatch:" in workflow
     assert "push:" not in workflow
+
+
+def test_add_text_selects_new_file_and_opens_editor(gui, dialogs, sample_root, monkeypatch):
+    app = gui(roots=[sample_root], settings={"source_dir": app_module._norm_path(sample_root)})
+    app.refresh_tree()
+    dialogs.answers["string"] = "NewNote"
+    opened = []
+    monkeypatch.setattr(app_module, "EditorWindow", lambda *a, **k: opened.append(a))
+
+    app.add_text()
+
+    expected = sample_root / "NewNote.txt"
+    assert expected.exists()
+    assert app.tree.selection() == (str(expected),)
+    assert len(opened) == 1
+    assert opened[0][1] == expected
+
+
+def test_delete_in_select_mode_exits_select_mode(gui, dialogs, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    snippet = source / "One.txt"
+    snippet.write_text("one", encoding="utf-8")
+    app = gui(roots=[source])
+    app.refresh_tree()
+    app._select_mode = True
+    app.tree.selection_set(str(snippet))
+    dialogs.answers["yes"] = True
+
+    app.delete_selected()
+
+    assert not snippet.exists()
+    assert app._select_mode is False
+
+
+def test_search_with_no_matches_keeps_tree_visible(gui, sample_root):
+    app = gui(roots=[sample_root], settings={"source_dir": app_module._norm_path(sample_root)})
+    app.search_var.set("no-such-text-anywhere")
+
+    app.refresh_tree()
+
+    assert app.empty_frame.packed == "forgotten"
+    assert app.tree.packed is not None
+    assert "0 matching files" in app.status_var.get()
+
+
+def test_right_click_blank_in_select_mode_clears_selection_and_updates_status(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    text = str(sample_root / "General" / "Greeting.txt")
+    app._select_mode = True
+    app.tree.selection_set(text)
+    app.tree.identify_row = lambda _y: ""
+    app.menu = FakeMenu()
+
+    result = app._on_right_click(SimpleNamespace(y=300, x_root=20, y_root=30))
+
+    assert result == "break"
+    assert app._select_mode is False
+    assert app.tree.selection() == ()
+    assert app.status_var.get() == "Selection mode ended."
+
+
+def test_select_mode_context_falls_back_to_right_clicked_row_when_selection_empty(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    text = str(sample_root / "General" / "Greeting.txt")
+    app._select_mode = True
+    app._context_iid = text
+    app.tree.selection_set()
+
+    assert app._context_target_iids() == [text]
+
+
+def test_github_pages_uses_github_actions_workflow():
+    root = Path(app_module.__file__).resolve().parent.parent
+    workflow = (root / ".github" / "workflows" / "build-deb.yml").read_text(encoding="utf-8")
+    apt_readme = (root / "apt-repo" / "README.md").read_text(encoding="utf-8")
+
+    assert "pages: write" in workflow
+    assert "id-token: write" in workflow
+    assert "actions/configure-pages@v5" in workflow
+    assert "actions/upload-pages-artifact@v3" in workflow
+    assert "actions/deploy-pages@v4" in workflow
+    assert "git push origin gh-pages" not in workflow
+    assert "GitHub Actions" in apt_readme
+    assert "Deploy from a branch" not in apt_readme
