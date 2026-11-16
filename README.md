@@ -57,7 +57,7 @@ Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the
 - Create folders and text files; edit snippets or rename folders.
 - Select and reorder text files and folders from the context menu.
 - Choose one source folder; new and edited snippets are saved there.
-- Optional always-on-top setting and persistent folder expansion state.
+- Persistent folder expansion state and custom item order.
 - Clipboard tools: `wl-copy`, `xclip`, or `xsel`; paste simulation: `ydotool` or `xdotool`.
 
 ## Clipboard and permissions

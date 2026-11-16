@@ -155,7 +155,6 @@ def apply_window_icon(window) -> list[Path]:
 DEFAULT_SETTINGS = {
     # Keep Pastex hidden briefly after Ctrl+V is sent before restoring its window.
     "restore_delay": 0.1,
-    "always_on_top": False,
     # User-selected source folder. If set, only this folder is displayed
     # and used for writes. The --dir argument does not change this value.
     "source_dir": None,
@@ -353,7 +352,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.collapsed: set[str] = set()
         self._build_ui()
         self.refresh_tree()
-        self._apply_settings()
         # Ensure the window is visible and focused (important when launched from a menu).
         self.deiconify()
         self.lift()
@@ -487,7 +485,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
         # Main panel: tree on the left, preview on the right.
         paned = ttk.PanedWindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=6)
+        paned.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
         left = ttk.Frame(paned)
         ttk.Label(left, text="Folders → .txt Files").pack(anchor="w")
@@ -538,16 +536,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             actions, text="⚡ Paste into Another App", command=self.do_paste
         ).pack(side="left")
 
-        # Settings row
-        opts = ttk.Frame(self, padding=(6, 0, 6, 4))
-        opts.pack(fill="x")
-        self.top_var = tk.BooleanVar(value=bool(self.settings["always_on_top"]))
-        ttk.Checkbutton(
-            opts,
-            text="Always on top",
-            variable=self.top_var,
-            command=self._apply_settings,
-        ).pack(side="left")
         # Note: the automatic-paste permission button was removed in 1.5.0.
         # Configure /dev/uinput through the CLI (`pastex --permissions`, `--enable-permissions`).
         # Status information remains available in `--check` and on paste failures.
@@ -562,6 +550,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.menu = tk.Menu(self, tearoff=0)
         self._context_iid = ""
         self._context_menu_active = False
+        self._suppress_next_release = False
         self.menu.bind("<Unmap>", self._context_menu_unmapped, add="+")
         # Run dismissal before widget/class bindings: Treeview and Menu class
         # handlers can consume outside clicks before a bind_all callback sees them.
@@ -573,6 +562,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 self._dismiss_context_menu_outside,
                 add="+",
             )
+        self.bind_class(
+            self._context_dismiss_bindtag,
+            "<ButtonRelease-1>",
+            self._consume_suppressed_release,
+            add="+",
+        )
 
         def install_dismiss_bindtag(widget) -> None:
             tags = widget.bindtags()
@@ -604,6 +599,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<F2>", lambda _e: self.edit_selected())
         self.bind("<F5>", lambda _e: self.refresh_tree())
+        self.bind("<Escape>", lambda _e: self._exit_select_mode())
         self.bind(
             "<Control-f>", lambda _e: self.search_var.set("") or self._focus_search()
         )
@@ -659,15 +655,33 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.tree.item(hover_iid, tags=tags)
         self._hover_iid = ""
 
+    def _exit_select_mode(self) -> None:
+        """Exit Select mode and update the status bar if it was active."""
+        if not self._select_mode:
+            return
+        self._select_mode = False
+        self.status_var.set("Selection mode ended.")
+
     def _on_single_click(self, event) -> None:
         """Paste normally; in Select mode, left-click toggles each row."""
+        if self.__dict__.get("_suppress_next_release", False):
+            self._suppress_next_release = False
+            return "break"
         self._clear_tree_hover()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
-                self._select_mode = False
-                self.status_var.set("Selection mode ended.")
+                self.tree.selection_set()
+                self._exit_select_mode()
+                if "preview" in self.__dict__:
+                    self.show_preview()
             return "break"
+
+        identify_element = getattr(self.tree, "identify_element", None)
+        if callable(identify_element) and hasattr(event, "x"):
+            element = str(identify_element(event.x, event.y) or "")
+            if "indicator" in element.lower():
+                return "break"
 
         self.tree.focus(row)
         if self._select_mode:
@@ -698,11 +712,17 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         widget_path = str(event.widget)
         if widget_path == menu_path or widget_path.startswith(menu_path + "."):
             return
-        self._select_mode = False
-        self.status_var.set("Selection mode ended.")
+        self._exit_select_mode()
 
     def _context_menu_unmapped(self, _event=None) -> None:
         self._context_menu_active = False
+
+    def _consume_suppressed_release(self, _event=None):
+        """Swallow the left-button release of a click that dismissed the popup menu."""
+        if not self.__dict__.get("_suppress_next_release", False):
+            return None
+        self._suppress_next_release = False
+        return "break"
 
     def _dismiss_context_menu_outside(self, event):
         """Clear hover on mouse press and dismiss popups clicked outside."""
@@ -721,6 +741,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
 
         self._context_menu_active = False
+        if getattr(event, "num", 1) == 1:
+            self._suppress_next_release = True
         try:
             self.menu.unpost()
         except tk.TclError:
@@ -736,7 +758,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._clear_tree_hover()
         row = self.tree.identify_row(event.y)
         if not row:
-            self._select_mode = False
+            if self._select_mode:
+                self.tree.selection_set()
+                self._exit_select_mode()
+                if "preview" in self.__dict__:
+                    self.show_preview()
+            else:
+                self._select_mode = False
             self._context_menu_active = False
             return "break"
         self._context_iid = row
@@ -794,7 +822,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         selection = list(self.tree.selection())
         iid = getattr(self, "_context_iid", "")
         if self._select_mode:
-            return selection
+            if selection:
+                return selection
+            return [iid] if iid and self.tree.exists(iid) else []
         if iid and self.tree.exists(iid):
             return selection if iid in selection else [iid]
         return selection
@@ -889,6 +919,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         roots = self.active_roots()
         nodes = scan_roots(roots)
         self._apply_saved_order(nodes)
+        has_roots = bool(nodes)
         query = self.search_var.get().strip()
         if query:
             nodes = filter_tree(nodes, search_nodes(nodes, query))
@@ -903,6 +934,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 self._insert_node("", child)
             total += root_node.count_texts()
         self._show_empty_state(not nodes)
+        if query and has_roots:
+            self._show_empty_state(False)
         if query:
             self.status_var.set(
                 f"Search results for '{query}': {total} matching files."
@@ -913,6 +946,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 f"({', '.join(str(r) for r in roots)})"
             )
         self._update_source_label()
+        if "preview" in self.__dict__:
+            self.show_preview()
 
     def _update_source_label(self) -> None:
         var = getattr(self, "source_var", None)
@@ -1007,7 +1042,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         The choice is saved in settings.json and restored in the next session.
         Return the chosen path, or None if canceled, for easier testing.
         """
-        current = self.settings.get("source_dir") or str(Path.home())
+        current = self.settings.get("source_dir")
+        if not current or not Path(current).is_dir():
+            current = str(Path.home())
         chosen = filedialog.askdirectory(
             title="Choose Source Folder (.txt files)",
             initialdir=current,
@@ -1111,7 +1148,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.preview.configure(state="disabled")
             return
         self.current_file = path
-        self._remember_selection(path)
         try:
             text = read_text(path)
         except OSError as exc:
@@ -1277,16 +1313,32 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return path.parent
         return self.writable
 
+    def _expand_parent_if_collapsed(self, parent: Path) -> None:
+        """Ensure a newly created item's parent folder is expanded."""
+        collapsed = self._collapsed_paths()
+        key = _norm_path(parent)
+        if key in collapsed:
+            collapsed.discard(key)
+            if getattr(self, "transient_roots", False):
+                self.settings["collapsed"] = sorted(collapsed)
+            else:
+                self._save_collapsed(collapsed)
+
     def add_folder(self) -> None:
         name = simpledialog.askstring("New Folder", "Folder name:")
         if not name:
             return
         try:
-            create_folder(self._target_dir(), name)
+            created = create_folder(self._target_dir(), name)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Could not create folder", str(exc))
             return
+        self._expand_parent_if_collapsed(created.parent)
         self.refresh_tree()
+        iid = str(created)
+        if self.tree.exists(iid):
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
 
     def add_text(self) -> None:
         name = simpledialog.askstring(
@@ -1295,12 +1347,23 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if not name:
             return
         try:
-            create_snippet(self._target_dir(), name, "")
+            created = create_snippet(self._target_dir(), name, "")
         except (OSError, ValueError) as exc:
             messagebox.showerror("Could not create text", str(exc))
             return
+        self._expand_parent_if_collapsed(created.parent)
         self.refresh_tree()
-        self.edit_selected()
+        iid = str(created)
+        if self.tree.exists(iid):
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            if "preview" in self.__dict__:
+                self.show_preview()
+            self.edit_selected()
+        else:
+            editor = EditorWindow(self, created)
+            if "tk" in self.__dict__:
+                self.wait_window(editor)
 
     def _remap_folder_settings(self, old_path: Path, new_path: Path) -> None:
         """Keep collapsed and ordering preferences attached after a folder rename."""
@@ -1358,7 +1421,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.status_var.set(f"Renamed folder to '{renamed.name}'.")
             return
         editor = EditorWindow(self, path)
-        self.wait_window(editor)
+        if "tk" in self.__dict__:
+            self.wait_window(editor)
 
     def delete_selected(self, item_ids: list[str] | None = None) -> None:
         """Delete selected files and folders together after one confirmation."""
@@ -1396,6 +1460,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         else:
             # Remove collapsed-state entries for deleted folders in one save.
             self._prune_collapsed_paths(paths)
+            self._select_mode = False
         self.refresh_tree()
 
     def open_source_folder(self) -> None:
@@ -1408,15 +1473,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             subprocess.Popen(["xdg-open", str(Path(source))])
         except OSError as exc:
             messagebox.showerror("Could not open source folder", str(exc))
-
-    # ---------- Settings ----------
-    def _save_current_settings(self) -> None:
-        self.settings["always_on_top"] = bool(self.top_var.get())
-        save_settings(self.settings)
-
-    def _apply_settings(self) -> None:
-        self.attributes("-topmost", bool(self.top_var.get()))
-        self._save_current_settings()
 
 
 def _status_lines(st: uinput.UinputStatus, *, prefix: str = "") -> list[str]:
@@ -1452,23 +1508,29 @@ class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
         ttk.Button(bar, text="Close", command=self.destroy).pack(side="right")
         self.bind("<Control-s>", lambda _e: self.save())
 
-    def save(self) -> None:
+    def save(self) -> bool:
         try:
             write_text(self.path, self.text.get("1.0", "end-1c"))
         except OSError as exc:
             messagebox.showerror("Could not save", str(exc))
-            return
+            return False
         if isinstance(self.master, PastexApp):
             self.master.refresh_tree()
             self.master.status_var.set(f"💾 Saved: {self.path}")
+        return True
 
     def save_and_paste(self) -> None:
-        self.save()
+        if not self.save():
+            return
         if isinstance(self.master, PastexApp):
-            self.master.tree.selection_set(str(self.path))
-            self.master.show_preview()
+            iid = str(self.path)
+            if self.master.tree.exists(iid):
+                self.master.tree.selection_set(iid)
+                self.master.tree.focus(iid)
+                self.master.show_preview()
             self.destroy()
-            self.master.do_paste()
+            if self.master.tree.exists(iid):
+                self.master.do_paste()
 
 
 def run_cli(argv: list[str] | None = None) -> int:
