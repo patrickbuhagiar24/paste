@@ -537,3 +537,71 @@ def test_github_pages_uses_github_actions_workflow():
     assert "git push origin gh-pages" not in workflow
     assert "GitHub Actions" in apt_readme
     assert "Deploy from a branch" not in apt_readme
+
+
+def test_click_outside_tree_clears_remaining_select_mode_selection(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app._select_mode = True
+    app.tree.selection_set(folder, text)
+    app.menu = FakeMenu()
+
+    app._exit_select_mode_outside_tree(SimpleNamespace(widget=object()))
+
+    assert app._select_mode is False
+    assert app.tree.selection() == ()
+    assert app.status_var.get() == "Selection mode ended."
+
+
+def test_cancel_select_mode_clears_remaining_selection(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    text = str(sample_root / "General" / "Greeting.txt")
+    app._select_mode = True
+    app.tree.selection_set(text)
+
+    app._exit_select_mode()
+
+    assert app._select_mode is False
+    assert app.tree.selection() == ()
+    assert app.status_var.get() == "Selection mode ended."
+
+
+def test_right_click_normal_mode_applies_darker_context_tag_and_clears_on_close(
+    gui, sample_root
+):
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+    assert 'tag_configure("context", background="#102a43", foreground="#ffffff")' in source
+
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    row = str(sample_root / "General")
+    app.tree.identify_row = lambda _y: row
+    app.menu = FakeMenu()
+
+    app._on_right_click(SimpleNamespace(y=3, x_root=20, y_root=30))
+
+    assert "context" in app._item_tags(row)
+    assert app._context_highlight_iid == row
+
+    app._context_menu_unmapped()
+    assert "context" not in app._item_tags(row)
+    assert app._context_highlight_iid == ""
+
+
+def test_right_click_in_select_mode_does_not_apply_context_tag(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    row = str(sample_root / "General")
+    app._select_mode = True
+    app.tree.selection_set(row)
+    app.tree.identify_row = lambda _y: row
+    app.menu = FakeMenu()
+
+    app._on_right_click(SimpleNamespace(y=3, x_root=20, y_root=30))
+
+    assert "context" not in app._item_tags(row)
+    assert app._context_highlight_iid == ""
+
