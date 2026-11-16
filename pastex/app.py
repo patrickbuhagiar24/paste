@@ -496,7 +496,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # the Treeview's default browse/extended click behavior.
         self.tree = ttk.Treeview(self.tree_area, show="tree", selectmode="none")
         self.tree.tag_configure("hover", background="#86bfff", foreground="#102a43")
+        self.tree.tag_configure("context", background="#102a43", foreground="#ffffff")
         self._hover_iid = ""
+        self._context_highlight_iid = ""
         self.scroll = ttk.Scrollbar(
             self.tree_area, orient="vertical", command=self.tree.yview
         )
@@ -628,19 +630,24 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.search_now()
         self._focus_search()
 
+    def _item_tags(self, iid: str) -> tuple[str, ...]:
+        """Return item tags normalized as a tuple across Tk and test doubles."""
+        raw = self.tree.item(iid, "tags")
+        if isinstance(raw, str):
+            return (raw,) if raw else ()
+        return tuple(raw or ())
+
     def _on_tree_motion(self, event) -> None:
         """Highlight the row currently under the pointer."""
         row = self.tree.identify_row(event.y)
         if row == self._hover_iid:
             return
         if self._hover_iid and self.tree.exists(self._hover_iid):
-            tags = tuple(
-                tag for tag in self.tree.item(self._hover_iid, "tags") if tag != "hover"
-            )
+            tags = tuple(tag for tag in self._item_tags(self._hover_iid) if tag != "hover")
             self.tree.item(self._hover_iid, tags=tags)
         self._hover_iid = row
         if row:
-            tags = tuple(self.tree.item(row, "tags"))
+            tags = self._item_tags(row)
             if "hover" not in tags:
                 self.tree.item(row, tags=(*tags, "hover"))
 
@@ -649,17 +656,26 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # test suite often constructs PastexApp with __new__ and no Tcl interpreter).
         hover_iid = self.__dict__.get("_hover_iid", "")
         if hover_iid and self.tree.exists(hover_iid):
-            tags = tuple(
-                tag for tag in self.tree.item(hover_iid, "tags") if tag != "hover"
-            )
+            tags = tuple(tag for tag in self._item_tags(hover_iid) if tag != "hover")
             self.tree.item(hover_iid, tags=tags)
         self._hover_iid = ""
 
+    def _clear_context_highlight(self) -> None:
+        """Remove the darker right-click highlight tag from the previous row."""
+        iid = self.__dict__.get("_context_highlight_iid", "")
+        if iid and self.tree.exists(iid):
+            tags = tuple(tag for tag in self._item_tags(iid) if tag != "context")
+            self.tree.item(iid, tags=tags)
+        self._context_highlight_iid = ""
+
     def _exit_select_mode(self) -> None:
-        """Exit Select mode and update the status bar if it was active."""
+        """Exit Select mode, clear remaining selections, and update the status bar."""
         if not self._select_mode:
             return
         self._select_mode = False
+        self.tree.selection_set()
+        if "preview" in self.__dict__:
+            self.show_preview()
         self.status_var.set("Selection mode ended.")
 
     def _on_single_click(self, event) -> None:
@@ -668,13 +684,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._suppress_next_release = False
             return "break"
         self._clear_tree_hover()
+        self._clear_context_highlight()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
-                self.tree.selection_set()
                 self._exit_select_mode()
-                if "preview" in self.__dict__:
-                    self.show_preview()
             return "break"
 
         identify_element = getattr(self.tree, "identify_element", None)
@@ -716,6 +730,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _context_menu_unmapped(self, _event=None) -> None:
         self._context_menu_active = False
+        self._clear_context_highlight()
 
     def _consume_suppressed_release(self, _event=None):
         """Swallow the left-button release of a click that dismissed the popup menu."""
@@ -741,6 +756,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
 
         self._context_menu_active = False
+        self._clear_context_highlight()
         if getattr(event, "num", 1) == 1:
             self._suppress_next_release = True
         try:
@@ -756,19 +772,22 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _on_right_click(self, event):
         """Post a context menu for a row, or dismiss selection mode on blank space."""
         self._clear_tree_hover()
+        self._clear_context_highlight()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
-                self.tree.selection_set()
                 self._exit_select_mode()
-                if "preview" in self.__dict__:
-                    self.show_preview()
             else:
                 self._select_mode = False
             self._context_menu_active = False
             return "break"
         self._context_iid = row
         self.tree.focus(row)
+        if not self._select_mode and self.tree.exists(row):
+            tags = self._item_tags(row)
+            if "context" not in tags:
+                self.tree.item(row, tags=(*tags, "context"))
+            self._context_highlight_iid = row
         self.menu.delete(0, "end")
 
         if self._select_mode:
@@ -915,6 +934,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def refresh_tree(self) -> None:
         self._hover_iid = ""
+        self._context_highlight_iid = ""
         self.tree.delete(*self.tree.get_children())
         roots = self.active_roots()
         nodes = scan_roots(roots)
