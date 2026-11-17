@@ -2908,3 +2908,77 @@ def test_a_click_resets_the_typing_decision():
 
     assert app._paste_by_typing is False
     assert app._paste_body == "body"
+
+
+def test_the_clipboard_is_not_checked_again_once_it_proved_unusable(monkeypatch):
+    """A failing check costs a GUI round trip plus two reads; do it once."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    claims = []
+    checks = []
+    app = PastexApp.__new__(PastexApp)
+    app._clipboard_unreliable = True
+    monkeypatch.setattr(
+        PastexApp, "_claim_the_clipboard", lambda self, text: claims.append(1) or True
+    )
+    monkeypatch.setattr(
+        app_module, "verify_clipboard", lambda text: checks.append(1) or True
+    )
+    result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
+
+    assert PastexApp._clipboard_holds(app, "body", result) is False
+    assert claims == []
+    assert checks == []
+
+
+def test_every_paste_log_carries_the_time_since_the_click():
+    from pastex.app import PastexApp
+
+    app = PastexApp.__new__(PastexApp)
+    assert PastexApp._since_click(app) == "+? ms"  # no click yet
+
+    app._paste_clicked_at = 0.0  # long ago
+    offset = PastexApp._since_click(app)
+    assert offset.startswith("+") and offset.endswith(" ms")
+    # The number must be the real distance from the click, not a fixed zero.
+    assert float(offset[1:-3]) > 100
+
+
+def test_typing_is_not_cut_short_by_the_paste_deadline(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    cancelled = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_by_typing = True
+    app._paste_body = "body"
+    app.after = lambda *args: None
+    monkeypatch.setattr(
+        PastexApp, "_cancel_paste_watchdog", lambda self: cancelled.append(1)
+    )
+    monkeypatch.setattr(
+        app_module, "type_text_x11", lambda text: PasteResultLike()
+    )
+
+    PastexApp._paste_sender(app)
+
+    assert cancelled == [1]
+
+
+def test_a_slow_tree_refresh_is_logged(monkeypatch):
+    """A slow repaint blocks the click behind it; make that visible in the log."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    logged = []
+    monkeypatch.setattr(app_module, "log_error", logged.append)
+    stamps = iter([0.0, 0.8])
+    monkeypatch.setattr(app_module.time, "monotonic", lambda: next(stamps, 1.0))
+    monkeypatch.setattr(PastexApp, "_refresh_tree_now", lambda self, force=True: None)
+
+    app = PastexApp.__new__(PastexApp)
+    PastexApp.refresh_tree(app, force=True)
+
+    assert logged and "the refresh took" in logged[0]
+    assert "800 ms" in logged[0]

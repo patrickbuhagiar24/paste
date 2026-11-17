@@ -1164,6 +1164,48 @@ MUTATIONS = [
         '            ["xdotool", "windowraise", str(window_id)],',
         ["tests/test_clipboard.py::test_activate_window_asks_the_window_manager"],
     ),
+    (
+        "the clipboard is re-checked on every click after it failed once",
+        "pastex/app.py",
+        '        if self.__dict__.get("_clipboard_unreliable", False):',
+        "        if False:",
+        ["tests/test_app.py::test_the_clipboard_is_not_checked_again_once_it_proved_unusable"],
+    ),
+    (
+        "the paste log loses the time since the click",
+        "pastex/app.py",
+        '        if started is None:\n            return "+? ms"\n        return f"+{(time.monotonic() - started) * 1000:.0f} ms"',
+        '        return "+0 ms"',
+        ["tests/test_app.py::test_every_paste_log_carries_the_time_since_the_click"],
+    ),
+    (
+        "typing is cut short by the paste deadline",
+        "pastex/app.py",
+        "            # own timeout, so the paste deadline must not fire mid-sentence.\n            PastexApp._cancel_paste_watchdog(self)",
+        "            # own timeout, so the paste deadline must not fire mid-sentence.\n            pass",
+        ["tests/test_app.py::test_typing_is_not_cut_short_by_the_paste_deadline"],
+    ),
+    (
+        "a slow tree refresh is not reported",
+        "pastex/app.py",
+        "            if elapsed_ms >= 300:",
+        "            if False:",
+        ["tests/test_app.py::test_a_slow_tree_refresh_is_logged"],
+    ),
+    (
+        "the typing timeout does not grow with the text",
+        "pastex/clipboard.py",
+        "            max(3.0, min(60.0, len(text) * 0.006 + 2)),",
+        "            2.0,",
+        ["tests/test_clipboard.py::test_the_typing_timeout_grows_with_the_text"],
+    ),
+    (
+        "the deploy job tries to publish from a branch",
+        ".github/workflows/build-deb.yml",
+        "    if: github.ref == 'refs/heads/main'\n",
+        "",
+        ["tests/test_static.py::test_the_deploy_job_only_runs_on_main"],
+    ),
 ]
 
 

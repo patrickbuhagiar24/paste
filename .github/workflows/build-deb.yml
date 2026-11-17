@@ -121,6 +121,9 @@ jobs:
 
   deploy:
     needs: build
+    # The github-pages environment only accepts deployments from main, so a
+    # workflow_dispatch on a branch builds and stops there instead of failing.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

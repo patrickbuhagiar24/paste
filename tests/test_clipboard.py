@@ -1036,3 +1036,16 @@ def test_activate_window_asks_the_window_manager(monkeypatch):
 def test_activate_window_reports_failure_without_xdotool(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
     assert clipboard.activate_window("0x1", runner=_x11_runner([])) is False
+
+
+def test_the_typing_timeout_grows_with_the_text(monkeypatch):
+    """Typing a long snippet must not be killed by a fixed timeout."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    timeouts = []
+
+    def runner(cmd, timeout=None, **kwargs):
+        timeouts.append(timeout)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert clipboard.type_text_x11("x" * 5000, runner=runner).ok is True
+    assert timeouts and timeouts[0] > 10
