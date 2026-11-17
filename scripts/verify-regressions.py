@@ -835,6 +835,20 @@ MUTATIONS = [
             "tests/test_static.py::test_x11_tools_are_recommended_and_wayland_tools_only_suggested"
         ],
     ),
+    (
+        "build-deb lets the shell expand the control description",
+        "scripts/build-deb.sh",
+        'cat > "$STAGE/DEBIAN/control" <<\'EOF\'',
+        'cat > "$STAGE/DEBIAN/control" <<EOF',
+        ["tests/test_static.py::test_build_deb_control_heredoc_is_quoted"],
+    ),
+    (
+        "the description quotes the command with backticks again",
+        "scripts/build-deb.sh",
+        " templates under /usr/lib/pastex, and only pastex --enable-permissions",
+        " templates under /usr/lib/pastex, and only `pastex --enable-permissions`",
+        ["tests/test_static.py::test_rendered_control_keeps_the_description_text"],
+    ),
 ]
 
 
