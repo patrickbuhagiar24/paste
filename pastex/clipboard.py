@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -627,6 +628,36 @@ def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
         except (OSError, subprocess.SubprocessError):
             continue
     return None
+
+
+def _same_text(back: str, text: str) -> bool:
+    """Compare clipboard contents, tolerating a trailing newline a tool adds."""
+    if back == text:
+        return True
+    return back.rstrip("\n") == text.rstrip("\n")
+
+
+def verify_copy(text: str, runner: Runner = _default_runner) -> bool | None:
+    """Check that the clipboard really holds ``text``.
+
+    ``xclip``, ``xsel`` and ``wl-copy`` fork a process that keeps the
+    selection, so their exit status says nothing about the contents: a copy
+    whose stdin closed early still exits 0 and then serves an empty clipboard,
+    and the following Ctrl+V pastes nothing at all. True = the clipboard holds
+    the text, False = it holds something else (or nothing), None = the contents
+    cannot be read back here.
+    """
+    back = read_text_from_clipboard(runner=runner)
+    if back is None:
+        return None
+    if _same_text(back, text):
+        return True
+    # The owner may take a moment to answer with the contents it just took over.
+    time.sleep(0.15)
+    back = read_text_from_clipboard(runner=runner)
+    if back is None:
+        return None
+    return _same_text(back, text)
 
 
 def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:

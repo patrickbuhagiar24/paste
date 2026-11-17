@@ -2593,3 +2593,131 @@ def test_a_second_focus_verdict_is_not_repeated(monkeypatch):
 
     assert calls == []  # no more xdotool calls once the window is known hidden
     assert scheduled == []
+
+
+def _clipboard_app(monkeypatch, *, verdicts, claim=True):
+    """Test double for the copy worker: records Tk clipboard ownership."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    claimed = []
+    answers = list(verdicts)
+    calls = []
+
+    class FakeApp:
+        def __init__(self):
+            self.statuses = []
+
+        def after(self, delay, callback=None, *args):
+            calls.append((delay, args))
+            if callback is not None:
+                callback(*args)
+            return "id"
+
+        def clipboard_clear(self):
+            claimed.append("clear")
+
+        def clipboard_append(self, text):
+            if not claim:
+                raise RuntimeError("no display")
+            claimed.append(text)
+
+        def update_idletasks(self):
+            claimed.append("idle")
+
+    app = FakeApp()
+    app.status_var = type("V", (), {"set": staticmethod(app.statuses.append)})()
+    monkeypatch.setattr(
+        app_module,
+        "verify_clipboard",
+        lambda text: answers.pop(0) if answers else None,
+    )
+    return app, claimed, calls
+
+
+def test_a_verified_clipboard_needs_no_owner(monkeypatch):
+    from pastex.app import PastexApp
+
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[True])
+    result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
+
+    assert PastexApp._clipboard_holds(app, "body", result) is True
+    assert claimed == []  # the tool's copy was real; leave it alone
+
+
+def test_an_empty_clipboard_is_claimed_by_tk(monkeypatch):
+    """xclip can exit 0 and serve nothing; Tk owning the selection fixes it."""
+    from pastex.app import PastexApp
+
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False, True])
+    result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
+
+    assert PastexApp._clipboard_holds(app, "body", result) is True
+    assert claimed == ["clear", "body", "idle"]
+
+
+def test_an_unreadable_clipboard_keeps_the_tool_result(monkeypatch):
+    from pastex.app import PastexApp
+
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[None])
+    result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
+
+    assert PastexApp._clipboard_holds(app, "body", result) is True
+    assert claimed == []
+
+
+def test_a_clipboard_that_stays_empty_blocks_the_paste(monkeypatch):
+    from pastex.app import PastexApp
+
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False, False], claim=False)
+    result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
+
+    assert PastexApp._clipboard_holds(app, "body", result) is False
+    assert claimed == ["clear"]
+
+
+def test_the_worker_marks_an_empty_clipboard(monkeypatch):
+    """A tool that "succeeds" while the clipboard stays empty must not paste."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    app = PastexApp.__new__(PastexApp)
+    app.after = lambda delay, cb=None, *args: scheduled.append((cb, args))
+    monkeypatch.setattr(
+        app_module,
+        "copy_text",
+        lambda text, plan=None: ClipboardResultLike(True),
+    )
+    monkeypatch.setattr(app_module, "verify_clipboard", lambda text: False)
+    monkeypatch.setattr(PastexApp, "_claim_the_clipboard", lambda self, text: False)
+
+    PastexApp._paste_worker(app, "body")
+
+    callback, args = scheduled[-1]
+    assert getattr(callback, "__func__", callback) is PastexApp._after_copy
+    assert args[1] is True  # the clipboard was empty
+    assert "does not hold the text" in args[0].message
+
+
+def test_an_empty_clipboard_does_not_send_ctrl_v(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    shown = []
+    restored = []
+    app = PastexApp.__new__(PastexApp)
+    app.status_var = type("V", (), {"set": staticmethod(shown.append)})()
+    monkeypatch.setattr(PastexApp, "_restore_window", lambda self, **k: restored.append(1))
+    monkeypatch.setattr(
+        app_module, "messagebox", type("M", (), {"showerror": staticmethod(lambda *a: shown.append(a))})
+    )
+
+    PastexApp._after_copy(
+        app, ClipboardResultLike(False), True
+    )
+
+    assert app._paste_clipboard_ready is False
+    assert app._paste_finished is True
+    assert restored == [1]  # the window comes back instead of staying hidden
+    assert "Could not copy to the clipboard" in shown[0]

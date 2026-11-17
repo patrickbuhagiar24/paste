@@ -1,3 +1,22 @@
+pastex (1.10.5-1) unstable; urgency=medium
+
+  * Verify the copy before pasting. xclip, xsel and wl-copy exit 0 once they
+    have handed the text to the process they fork, so a copy whose input was
+    lost still reports success and then serves an empty clipboard: the log of
+    the Cinnamon session showed "copy: ok=True tool=xclip (9 ms)" while
+    pastex --check read the clipboard back as empty. Ctrl+V would then paste
+    nothing at all. The clipboard is now read back (a second time, because a
+    fresh owner can answer late) before Ctrl+V is sent.
+  * Claim the selection with Tk when the tool lost it. If the clipboard does
+    not hold the text, Pastex sets it through Tk itself -- no subprocess can
+    lose that -- verifies again, and only then sends Ctrl+V.
+  * Say so instead of pasting nothing. When no clipboard holds the text the
+    paste is cancelled, the window is restored and the status reports that
+    nothing was pasted, instead of the "the text is on the clipboard" hint.
+  * pastex --check explains an empty read-back the same way.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Tue, 18 Nov 2026 11:05:00 +0700
+
 pastex (1.10.4-1) unstable; urgency=medium
 
   * Decide the paste from the input focus instead of the window state.
