@@ -25,9 +25,9 @@ install -m 755 bin/pastex "$STAGE/usr/bin/pastex"
 cp -r pastex "$STAGE/usr/share/pastex/"
 find "$STAGE/usr/share/pastex" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE/usr/share/pastex" -name "*.pyc" -delete 2>/dev/null || true
-# Since 1.5.0, the package no longer includes sample data (data/snippets/ was
-# removed from the repository). Existing samples on user machines are kept;
-# new installations can request samples with `--export-data`.
+# The package ships no sample snippets: the user picks a source folder in the
+# GUI. Samples that older installs already have in /usr/share/pastex/snippets
+# stay where they are and are never removed.
 install -m 644 usr/share/applications/pastex.desktop "$STAGE/usr/share/applications/"
 install -m 644 usr/share/icons/hicolor/scalable/apps/pastex.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/"
 # PNG: window icon (Tk iconphoto cannot load SVG). Rendered from the same SVG
@@ -67,8 +67,7 @@ Description: One-click desktop text snippet manager for Ubuntu 26.10
  Supports Ubuntu 26.10 (GNOME Wayland and X11), using wl-copy/xclip/xsel
  for clipboard access and ydotool/xdotool for automatic paste.
  .
- Choose a source folder in the GUI, or create example snippets with
- pastex --export-data. User snippets are stored under
+ Choose a source folder in the GUI. User snippets are stored under
  ~/.local/share/pastex/snippets and can be managed in the GUI.
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF

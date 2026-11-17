@@ -94,8 +94,10 @@ purpose, because they use different folders.
 The snippet folders are watched with inotify, so files added, edited, renamed or
 deleted by another program appear without pressing `F5`. The tree and file
 contents are cached in memory: searches filter that cache instead of re-walking
-the folders or re-reading every file on each keystroke. If inotify is
-unavailable, `F5` still works as before.
+the folders or re-reading every file on each keystroke. Repainting the tree
+patches the rows that actually changed instead of clearing and rebuilding it, so
+the scroll position, the expanded folders and the selection survive every
+refresh. If inotify is unavailable, `F5` still works as before.
 
 ## Features
 
@@ -108,7 +110,8 @@ unavailable, `F5` still works as before.
 - Persistent folder expansion state and custom item order.
 - Clipboard tools: `wl-copy`, `xclip`, or `xsel`; paste simulation: `ydotool` or `xdotool`.
 - Frameless snippet picker (`--pick`) that pastes without touching the main window.
-- One running instance with instant re-launch, and inotify-driven live refresh.
+- One running instance with instant re-launch, inotify-driven live refresh,
+  and repaints that update rows in place.
 - Rootless Ctrl+V fallback through the desktop portal when `ydotool` is unavailable.
 
 ## Clipboard and permissions
@@ -142,7 +145,7 @@ systemctl --user enable --now ydotoold
 ```text
 pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE] [--pick]
        [--check] [--permissions] [--enable-permissions]
-       [--export-data [FOLDER]] [--test-paste] [--ctrl-v] [--version]
+       [--test-paste] [--ctrl-v] [--version]
 ```
 
 - `--dir FOLDER`: use a folder for this session; can be repeated.
@@ -152,7 +155,6 @@ pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE] [--pick]
 - `--check`: print environment and installation diagnostics.
 - `--permissions`: report `/dev/uinput` permission status.
 - `--enable-permissions`: request permission setup through `pkexec`.
-- `--export-data [FOLDER]`: create sample snippets; defaults to the user snippets folder.
 - `--test-paste [--ctrl-v]`: run a paste diagnostic.
 - `--pick`: show the snippet picker (reuses a running Pastex).
 

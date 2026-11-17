@@ -1,9 +1,9 @@
-"""Uji v1.5.0 #1: contoh bawaan tidak lagi disertakan repo / .deb.
+"""Contoh bawaan tidak disertakan repo / .deb dan tidak bisa diminta.
 
-Regresi yang dijaga: `data/snippets/` muncul kembali di repo, atau
-`build-deb.sh` / `debian/rules` kembali menyalinnya ke dalam paket. Dua hal
-itu bertentangan dengan keputusan 1.5.0 — "biarkan contoh yang sudah
-terpasang, jangan bawa contoh baru".
+Regresi yang dijaga: `data/snippets/` muncul kembali di repo,
+`build-deb.sh` / `debian/rules` menyalinnya ke dalam paket, atau opsi
+`--export-data` (dihapus di 1.7.2) muncul lagi. Keputusannya tetap sama
+sejak 1.5.0: biarkan contoh yang sudah terpasang, jangan bawa contoh baru.
 """
 
 from __future__ import annotations
@@ -57,35 +57,38 @@ def test_samples_never_deleted_from_installed_location():
         assert offending == [], f"{name} menghapus contoh: {offending}"
 
 
-def test_export_data_creates_samples_once(tmp_path, capsys):
-    """Pengganti contoh bawaan: `--export-data` membuat contoh sekali saja."""
+def test_samples_are_gone_from_the_codebase():
+    """`--export-data` dihapus di 1.7.2: tidak ada lagi contoh di kode."""
+    import pastex.app as app
+    import pastex.snippets as snippets
+
+    assert not hasattr(snippets, "DEFAULT_SAMPLES")
+    assert not hasattr(app, "export_data")
+
+
+def test_export_data_option_is_rejected():
+    """Argparse harus menolak opsi yang sudah dihapus, bukan diam-diam jalan."""
+    import pytest
+
     from pastex.app import run_cli
 
-    assert run_cli(["--export-data", str(tmp_path)]) == 0
-    created = sorted(p.name for p in tmp_path.rglob("*.txt"))
-    assert created, "no samples were created"
-    first = {p: p.read_text(encoding="utf-8") for p in tmp_path.rglob("*.txt")}
-    # Pengguna mengedit satu contoh, lalu menjalankan ulang: tidak ditimpa.
-    edited = tmp_path / "General" / "Greeting.txt"
-    edited.write_text("editanku", encoding="utf-8")
-    assert run_cli(["--export-data", str(tmp_path)]) == 0
-    assert edited.read_text(encoding="utf-8") == "editanku"
-    for path, content in first.items():
-        if path != edited:
-            assert path.read_text(encoding="utf-8") == content
-    assert "0 files created" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as excinfo:
+        run_cli(["--export-data"])
+    assert excinfo.value.code == 2
 
 
-def test_export_data_keeps_folders_and_never_overwrites(tmp_path):
-    """--export-data menambah yang belum ada saja, tidak menghapus/menimpa."""
-    from pastex.app import export_data
+def test_list_hint_never_points_at_the_removed_option(tmp_path, capsys):
+    from pastex.app import run_cli
 
-    manual = tmp_path / "Catatan Saya"
-    manual.mkdir()
-    (manual / "Penting.txt").write_text("do not remove", encoding="utf-8")
+    empty = tmp_path / "kosong"
+    empty.mkdir()
+    assert run_cli(["--dir", str(empty), "--list"]) == 0
+    err = capsys.readouterr().err
+    assert "--dir" in err
+    assert "--export-data" not in err
 
-    created = export_data(tmp_path)
-    assert created, "no samples were created"
-    assert (tmp_path / "General" / "Greeting.txt").read_text(encoding="utf-8")
-    assert (manual / "Penting.txt").read_text(encoding="utf-8") == "do not remove"
-    assert export_data(tmp_path) == [], "dijalankan kedua kali tetap membuat berkas"
+
+def test_docs_and_packaging_do_not_promise_the_removed_option():
+    for name in ("README.md", "debian/control", "scripts/build-deb.sh"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "--export-data" not in text, f"{name} masih menyebut --export-data"
