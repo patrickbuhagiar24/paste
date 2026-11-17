@@ -324,6 +324,29 @@ MUTATIONS = [
         ["tests/test_app.py::test_window_unmap_is_bound_to_the_paste_sender"],
     ),
     (
+        "workflow forgets to export the signing fingerprint",
+        ".github/workflows/build-deb.yml",
+        '          export APT_SIGNING_KEY_ID="$fingerprint"',
+        '          : "$fingerprint"',
+        [
+            "tests/test_apt_repository.py::test_workflow_exports_the_fingerprint_before_signing"
+        ],
+    ),
+    (
+        "signer always asks gpg for a passphrase",
+        "scripts/sign-apt-repository.sh",
+        'if [[ -n "$passphrase" ]]; then',
+        'if [[ -n "${passphrase:-}" || true ]]; then',
+        ["tests/test_apt_repository.py::test_signer_creates_inrelease_keyrings_and_source"],
+    ),
+    (
+        "signer stops verifying the InRelease signature",
+        "scripts/sign-apt-repository.sh",
+        'gpgv --keyring "$verification_keyring" "$distribution/InRelease"',
+        "true",
+        ["tests/test_apt_repository.py::test_signer_creates_inrelease_keyrings_and_source"],
+    ),
+    (
         "APT archive no longer uses the stonking suite",
         "scripts/build-apt-repository.sh",
         "suite=${3:-stonking}",

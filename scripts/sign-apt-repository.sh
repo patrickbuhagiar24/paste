@@ -23,20 +23,43 @@ fi
 [[ -f "$distribution/Release" ]] || { echo 'Build the APT repository before signing it.' >&2; exit 1; }
 command -v gpg >/dev/null || { echo 'Install gnupg first.' >&2; exit 1; }
 command -v gpgv >/dev/null || { echo 'Install gpgv first.' >&2; exit 1; }
-gpg --batch --list-secret-keys "$key_id" >/dev/null 2>&1 || {
-  echo 'The signing secret key is not present in this GPG keyring.' >&2
-  exit 1
-}
 
-# The passphrase is passed on a file descriptor, never in process arguments.
+if ! gpg --batch --list-secret-keys "$key_id" >/dev/null 2>&1; then
+  echo "The signing secret key $key_id is not present in this GPG keyring." >&2
+  echo 'Import it first (GPG_PRIVATE_KEY in CI) and check GNUPGHOME.' >&2
+  exit 1
+fi
+
+# Public key metadata only: no secret material is ever printed.
+gpg --batch --with-colons --list-secret-keys "$key_id" |
+  awk -F: '
+    $1 == "sec" { printf "Signing key: algorithm %s, %s bits, capabilities %s\n", $4, $3, $12 }
+    $1 == "fpr" { printf "Fingerprint: %s\n", $10 }
+  ' || true
+
+# The passphrase travels on a file descriptor, never in process arguments.
 passphrase=${GPG_PASSPHRASE-${APT_SIGNING_PASSPHRASE-}}
-gpg --batch --yes --local-user "$key_id" --digest-algo SHA512 \
-  --pinentry-mode loopback --passphrase-fd 3 \
-  --clearsign --output "$distribution/InRelease" "$distribution/Release" 3<<<"$passphrase"
-gpg --batch --yes --local-user "$key_id" --digest-algo SHA512 \
-  --pinentry-mode loopback --passphrase-fd 3 \
-  --armor --detach-sign --output "$distribution/Release.gpg" "$distribution/Release" 3<<<"$passphrase"
-unset passphrase
+sign_arguments=(--batch --yes --local-user "$key_id")
+if [[ -n "$passphrase" ]]; then
+  sign_arguments+=(--pinentry-mode loopback --passphrase-fd 3)
+fi
+
+sign_failed=0
+gpg "${sign_arguments[@]}" --clearsign \
+  --output "$distribution/InRelease" "$distribution/Release" 3<<<"$passphrase" || sign_failed=1
+if [[ $sign_failed -eq 0 ]]; then
+  gpg "${sign_arguments[@]}" --armor --detach-sign \
+    --output "$distribution/Release.gpg" "$distribution/Release" 3<<<"$passphrase" || sign_failed=1
+fi
+if [[ $sign_failed -ne 0 ]]; then
+  if [[ -z "$passphrase" ]]; then
+    echo 'gpg could not sign the Release file. If the key is passphrase-protected, configure GPG_PASSPHRASE.' >&2
+  else
+    echo 'gpg could not sign the Release file. Check GPG_PASSPHRASE and the key capabilities.' >&2
+  fi
+  exit 1
+fi
+unset passphrase sign_arguments
 
 verification_keyring=$(mktemp "${TMPDIR:-/tmp}/pastex-public.XXXXXX")
 trap 'rm -f "$verification_keyring"' EXIT

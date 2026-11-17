@@ -68,7 +68,16 @@ jobs:
           gpg --batch --with-colons --list-secret-keys "$fingerprint" \
             | awk -F: '($1 == "sec" || $1 == "ssb") && tolower($12) ~ /s/ { found = 1 } END { exit !found }' \
             || { echo 'The imported GPG key has no secret signing capability.'; exit 1; }
-          ./scripts/sign-apt-repository.sh site "$APT_SUITE"
+          # sign-apt-repository.sh reads the fingerprint from the environment.
+          export APT_SIGNING_KEY_ID="$fingerprint"
+          signing_log=$(mktemp)
+          if ! ./scripts/sign-apt-repository.sh site "$APT_SUITE" >"$signing_log" 2>&1; then
+            cat "$signing_log"
+            detail=$(grep -v '^[[:space:]]*$' "$signing_log" | tail -n 6 | tr '\n' '|' | cut -c1-900)
+            printf '::error::APT signing failed: %s\n' "$detail"
+            exit 1
+          fi
+          cat "$signing_log"
 
       - name: Remove the temporary GPG keyring
         if: always()

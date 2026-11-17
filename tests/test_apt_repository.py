@@ -193,3 +193,171 @@ def test_documentation_uses_the_signed_deb822_source() -> None:
         assert "/paste/apt/" not in document.split("Migrating")[0]
 
     assert "Hit:6 https://patrickbuhagiar24.github.io/paste stonking InRelease" in apt_readme
+
+
+FAKE_KEY_ID = "A" * 40
+
+
+def _fake_gpg_tools(tmp_path: Path) -> tuple[Path, Path]:
+    """Create gpg/gpgv stand-ins so the signer can be tested without GnuPG."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    call_log = tmp_path / "gpg-calls.log"
+
+    (bin_dir / "gpg").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_GPG_LOG"
+args="$*"
+if [[ "$args" == *--list-secret-keys* ]]; then
+  if [[ "$args" == *--with-colons* ]]; then
+    echo 'sec:u:255:22:ABCDEF0123456789:1700000000:::Pastex <t@example.com>:::scESCA:::'
+    echo "fpr:::::::::$FAKE_GPG_FINGERPRINT:"
+  fi
+  exit 0
+fi
+if [[ "$args" == *--clearsign* || "$args" == *--detach-sign* ]]; then
+  if [[ "${FAKE_GPG_FAIL:-0}" == "1" ]]; then
+    echo 'gpg: signing failed: Bad passphrase' >&2
+    exit 2
+  fi
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--output" ]]; then
+      printf 'FAKE SIGNATURE\\n' > "$2"
+      shift 2
+      continue
+    fi
+    shift
+  done
+  exit 0
+fi
+if [[ "$args" == *--export* ]]; then
+  if [[ "$args" == *--armor* ]]; then
+    echo '-----BEGIN PGP PUBLIC KEY BLOCK-----'
+    echo 'FAKEKEY'
+    echo '-----END PGP PUBLIC KEY BLOCK-----'
+  else
+    echo 'FAKE-BINARY-KEYRING'
+  fi
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    (bin_dir / "gpgv").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'gpgv %s\\n' "$*" >> "$FAKE_GPG_LOG"
+exit "${FAKE_GPGV_STATUS:-0}"
+""",
+        encoding="utf-8",
+    )
+    for tool in ("gpg", "gpgv"):
+        (bin_dir / tool).chmod(0o755)
+    call_log.write_text("", encoding="utf-8")
+    return bin_dir, call_log
+
+
+def _prepare_archive(tmp_path: Path) -> Path:
+    repository = tmp_path / "site"
+    index = repository / "dists" / "stonking" / "main" / "binary-all"
+    index.mkdir(parents=True)
+    (index / "Packages").write_text("Package: pastex\n", encoding="utf-8")
+    (repository / "dists" / "stonking" / "Release").write_text(
+        "Suite: stonking\n", encoding="utf-8"
+    )
+    return repository
+
+
+def _run_signer(tmp_path: Path, repository: Path, **overrides: str):
+    bin_dir, call_log = _fake_gpg_tools(tmp_path)
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "FAKE_GPG_LOG": str(call_log),
+        "FAKE_GPG_FINGERPRINT": FAKE_KEY_ID,
+        "APT_SIGNING_KEY_ID": FAKE_KEY_ID,
+    }
+    env.update(overrides)
+    result = subprocess.run(
+        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "stonking"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    return result, call_log.read_text(encoding="utf-8")
+
+
+def test_signer_creates_inrelease_keyrings_and_source(tmp_path: Path) -> None:
+    repository = _prepare_archive(tmp_path)
+
+    result, calls = _run_signer(tmp_path, repository)
+
+    assert result.returncode == 0, result.stderr
+    assert "successfully" in result.stdout
+    distribution = repository / "dists" / "stonking"
+    assert (distribution / "InRelease").read_text(encoding="utf-8").startswith("FAKE SIGNATURE")
+    assert (distribution / "Release.gpg").is_file()
+    assert "FAKE-BINARY-KEYRING" in (repository / "archive-keyring.gpg").read_text(
+        encoding="utf-8"
+    )
+    assert "BEGIN PGP PUBLIC KEY BLOCK" in (repository / "archive-keyring.asc").read_text(
+        encoding="utf-8"
+    )
+    assert (repository / "archive-keyring.fingerprint.txt").read_text(
+        encoding="utf-8"
+    ).strip() == FAKE_KEY_ID
+    assert "Signed-By: /etc/apt/keyrings/pastex.gpg" in (
+        repository / "pastex.sources"
+    ).read_text(encoding="utf-8")
+    # Without a passphrase, gpg is never asked for one.
+    assert "--passphrase-fd" not in calls
+    assert "--pinentry-mode" not in calls
+    # Both signatures are verified with the exported keyring.
+    assert calls.count("gpgv") == 2
+
+
+def test_signer_passes_the_passphrase_when_one_is_configured(tmp_path: Path) -> None:
+    repository = _prepare_archive(tmp_path)
+
+    result, calls = _run_signer(tmp_path, repository, GPG_PASSPHRASE="secret")
+
+    assert result.returncode == 0, result.stderr
+    assert "--pinentry-mode loopback --passphrase-fd 3" in calls
+
+
+def test_signer_reports_a_missing_fingerprint(tmp_path: Path) -> None:
+    repository = _prepare_archive(tmp_path)
+    bin_dir, call_log = _fake_gpg_tools(tmp_path)
+
+    result = subprocess.run(
+        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "stonking"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_GPG_LOG": str(call_log)},
+    )
+
+    assert result.returncode == 1
+    assert "APT_SIGNING_KEY_ID" in result.stderr
+
+
+def test_signer_hints_at_the_passphrase_when_signing_fails(tmp_path: Path) -> None:
+    repository = _prepare_archive(tmp_path)
+
+    result, _calls = _run_signer(tmp_path, repository, FAKE_GPG_FAIL="1")
+
+    assert result.returncode == 1
+    assert "GPG_PASSPHRASE" in result.stderr
+    assert not (repository / "dists" / "stonking" / "InRelease").exists()
+
+
+def test_workflow_exports_the_fingerprint_before_signing() -> None:
+    """The signer reads APT_SIGNING_KEY_ID; the workflow must export it."""
+    workflow = _text(WORKFLOW)
+    signer_call = workflow.index('./scripts/sign-apt-repository.sh site "$APT_SUITE"')
+
+    assert 'export APT_SIGNING_KEY_ID="$fingerprint"' in workflow
+    assert workflow.index('export APT_SIGNING_KEY_ID="$fingerprint"') < signer_call
+    # Failures must surface as a readable annotation instead of a silent gap.
+    assert "::error::APT signing failed" in workflow
