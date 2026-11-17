@@ -120,6 +120,7 @@ class DirectoryWatcher:
         coalesce: float = 0.25,
         poll_timeout: float = 0.5,
     ) -> None:
+        """``coalesce`` is the minimum gap between callbacks, in seconds."""
         self.roots = [Path(root) for root in roots]
         self.on_change = on_change
         self.coalesce = max(0.0, float(coalesce))
@@ -127,7 +128,7 @@ class DirectoryWatcher:
         self._fd = -1
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._last = 0.0
+        self._last: float | None = None
         self._paths: dict[int, Path] = {}
         self.changes = 0
 
@@ -232,7 +233,10 @@ class DirectoryWatcher:
 
     def _trigger(self) -> None:
         now = time.monotonic()
-        if now - self._last < self.coalesce:
+        # `_last` is None until the first event. Comparing against 0.0 instead
+        # would swallow that first event whenever the monotonic clock (uptime)
+        # is younger than `coalesce` seconds -- e.g. on a freshly booted VM.
+        if self._last is not None and now - self._last < self.coalesce:
             return
         self._last = now
         self.changes += 1

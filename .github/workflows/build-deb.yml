@@ -33,7 +33,22 @@ jobs:
         env:
           PASTE_REQUIRE_X11_TEST: "1"
         run: |
-          python3 -m pytest tests/ -q
+          set -o pipefail
+          if ! python3 -m pytest tests/ -q 2>&1 | tee pytest.log; then
+            # Surface the failing tests as an annotation so the reason is
+            # visible from `gh run view`, not only in the raw log.
+            failures=$(grep -E '^(FAILED|ERROR)' pytest.log | head -n 5 | tr '\n' '|' | cut -c1-900)
+            printf '::error::pytest failed: %s\n' "${failures:-see the Run tests log}"
+            exit 1
+          fi
+
+      - name: Upload the pytest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: pytest.log
+          if-no-files-found: ignore
 
       - name: Build the Debian package
         run: ./scripts/build-deb.sh
