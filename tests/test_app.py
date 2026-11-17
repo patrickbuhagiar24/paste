@@ -572,6 +572,8 @@ def test_send_paste_waits_for_focus_to_settle(monkeypatch):
 
     calls = []
     app = PastexApp.__new__(PastexApp)
+    # A real interpreter marker makes the app schedule the settle timer.
+    app.tk = object()
     app.after = lambda ms, callback: calls.append(("wait", ms, callback))
     monkeypatch.setattr(
         app_module, "_run_in_thread", lambda target: calls.append(("run", target.__name__))

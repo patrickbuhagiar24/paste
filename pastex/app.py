@@ -51,7 +51,11 @@ _TkBase = tk.Tk if tk is not None else object  # type: ignore[union-attr]
 _ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-attr]
 # Errors raised by Tk calls. Without tkinter, AttributeError is what the same
 # calls raise on a test double, so both cases are handled by the same handlers.
-TK_ERRORS = (tk.TclError, AttributeError) if tk is not None else (AttributeError,)
+TK_ERRORS = (
+    (tk.TclError, AttributeError, RecursionError)
+    if tk is not None
+    else (AttributeError, RecursionError)
+)
 
 
 SETTINGS_DIR = (
@@ -843,14 +847,31 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         except TK_ERRORS:
             pass
 
+    def _tk_ready(self) -> bool:
+        """True only for instances that really own a Tcl interpreter.
+
+        Test doubles are built with ``PastexApp.__new__``: they have no ``tk``
+        attribute, so any tkinter method such as ``after()`` recurses through
+        ``Misc.__getattr__`` instead of raising a catchable error.
+        """
+        return self.__dict__.get("tk") is not None
+
+    def _display_focus(self):
+        """Return the widget that owns the display focus, or None if unknown."""
+        if not self._tk_ready() and "focus_displayof" not in self.__dict__:
+            return None
+        try:
+            return self.focus_displayof()
+        except TK_ERRORS:  # pragma: no cover - display/interpreter gone
+            return None
+
     def _on_window_focus_out(self, _event=None) -> None:
         """Dismiss the popup when another application takes focus."""
         if not self.__dict__.get("_context_menu_active", False):
             return
-        after_idle = getattr(self, "after_idle", None)
-        if callable(after_idle):
+        if self._tk_ready():
             try:
-                after_idle(self._dismiss_menu_when_unfocused)
+                self.after_idle(self._dismiss_menu_when_unfocused)
                 return
             except TK_ERRORS:  # pragma: no cover - interpreter already gone
                 pass
@@ -860,10 +881,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         """Unpost the menu once Tk reports that no Pastex widget has focus."""
         if not self.__dict__.get("_context_menu_active", False):
             return
-        try:
-            focused = self.focus_displayof()
-        except TK_ERRORS:  # pragma: no cover - no display/interpreter
-            focused = None
+        focused = self._display_focus()
         if focused is not None:
             return
         self._unpost_context_menu()
@@ -871,7 +889,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _cancel_menu_focus_watch(self) -> None:
         after_id = self.__dict__.get("_menu_focus_watch_id")
         self._menu_focus_watch_id = None
-        if after_id is None:
+        if after_id is None or not self._tk_ready():
             return
         try:
             self.after_cancel(after_id)
@@ -888,23 +906,18 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._menu_focus_watch_id = None
         if not self.__dict__.get("_context_menu_active", False):
             return
-        try:
-            focused = self.focus_displayof()
-        except TK_ERRORS:
-            focused = None
-        if focused is None:
+        if self._display_focus() is None:
             self._unpost_context_menu()
+            return
+        self._start_menu_focus_watch()
+
+    def _start_menu_focus_watch(self) -> None:
+        self._cancel_menu_focus_watch()
+        if not self._tk_ready():
             return
         try:
             self._menu_focus_watch_id = self.after(250, self._watch_menu_focus)
         except TK_ERRORS:  # pragma: no cover - interpreter already gone
-            self._menu_focus_watch_id = None
-
-    def _start_menu_focus_watch(self) -> None:
-        self._cancel_menu_focus_watch()
-        try:
-            self._menu_focus_watch_id = self.after(250, self._watch_menu_focus)
-        except TK_ERRORS:  # pragma: no cover - test doubles without Tk
             self._menu_focus_watch_id = None
 
     def _consume_suppressed_release(self, _event=None):
@@ -1441,13 +1454,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _send_paste(self) -> None:
         """Wait for the window manager to hand focus over, then send Ctrl+V."""
-        after = getattr(self, "after", None)
-        if FOCUS_SETTLE_MS <= 0 or not callable(after):
+        if FOCUS_SETTLE_MS <= 0 or not self._tk_ready():
             _run_in_thread(self._paste_sender)
             return
         try:
-            after(FOCUS_SETTLE_MS, lambda: _run_in_thread(self._paste_sender))
-        except TK_ERRORS:  # pragma: no cover - test doubles without Tk
+            self.after(
+                FOCUS_SETTLE_MS, lambda: _run_in_thread(self._paste_sender)
+            )
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
             _run_in_thread(self._paste_sender)
 
     def _paste_sender(self) -> None:

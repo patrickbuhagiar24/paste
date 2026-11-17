@@ -815,3 +815,49 @@ def test_arrow_keys_keep_select_mode_toggles_intact(gui, sample_root):
     assert app.tree.selection() == (rows[0], rows[2])
     assert app.tree.focus() == rows[1]
     assert app._context_highlight_iid == rows[1]
+
+
+# --- Tk timers must never run on test doubles -------------------------------
+
+
+def test_mock_app_is_not_tcl_ready(gui):
+    app = gui()
+
+    assert "tk" not in app.__dict__
+    assert app._tk_ready() is False
+
+
+def test_menu_focus_watch_does_not_schedule_without_tcl_interpreter(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+
+    app._start_menu_focus_watch()
+
+    assert app._menu_focus_watch_id is None
+
+
+def test_menu_focus_watch_unposts_when_focus_is_lost(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.focus_displayof = lambda: None
+
+    app._watch_menu_focus()
+
+    assert app._context_menu_active is False
+    assert app.menu.unposts == 1
+    assert app._menu_focus_watch_id is None
+
+
+def test_menu_focus_watch_keeps_menu_when_pastex_has_focus(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.focus_displayof = lambda: app.tree
+
+    app._watch_menu_focus()
+
+    assert app._context_menu_active is True
+    assert app.menu.unposts == 0
+    assert app._menu_focus_watch_id is None
