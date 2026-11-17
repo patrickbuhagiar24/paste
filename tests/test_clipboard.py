@@ -1,5 +1,6 @@
 """Clipboard/paste tests with a fake runner (no real clipboard)."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -946,3 +947,79 @@ def test_verify_copy_accepts_a_second_read(monkeypatch):
 def test_verify_copy_reports_when_it_cannot_read(monkeypatch):
     monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: None)
     assert clipboard.verify_copy("body") is None
+
+
+def test_read_text_from_clipboard_believes_only_a_non_empty_answer(monkeypatch):
+    """One broken reader must not make a full clipboard look empty."""
+    monkeypatch.setattr(
+        clipboard.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+
+    def runner(cmd, **kwargs):
+        if cmd[0] == "xclip":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="body\n", stderr="")
+
+    assert clipboard.read_text_from_clipboard(runner=runner) == "body\n"
+
+
+def test_read_text_from_clipboard_reports_empty_when_every_reader_agrees(monkeypatch):
+    monkeypatch.setattr(
+        clipboard.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+    assert (
+        clipboard.read_text_from_clipboard(
+            runner=lambda cmd, **k: SimpleNamespace(returncode=0, stdout="", stderr="")
+        )
+        == ""
+    )
+
+
+def test_type_text_x11_types_through_a_file(monkeypatch):
+    """A snippet that starts with '-' must not be read as an xdotool option."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen = {}
+
+    def runner(cmd, **kwargs):
+        path = cmd[cmd.index("--file") + 1]
+        with open(path, encoding="utf-8") as fh:
+            seen["text"] = fh.read()
+        seen["cmd"] = list(cmd)
+        seen["path"] = path
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = clipboard.type_text_x11("-body\nsecond line", runner=runner)
+
+    assert result.ok is True
+    assert seen["text"] == "-body\nsecond line"
+    assert seen["cmd"][:4] == ["xdotool", "type", "--clearmodifiers", "--delay"]
+    assert "--file" in seen["cmd"]
+    assert not os.path.exists(seen["path"])  # the temporary file is removed
+
+
+def test_type_text_x11_reports_a_failing_xdotool(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    result = clipboard.type_text_x11(
+        "body",
+        runner=lambda cmd, **k: SimpleNamespace(
+            returncode=1, stdout="", stderr="no window"
+        ),
+    )
+    assert result.ok is False
+    assert "no window" in result.message
+
+
+def test_type_text_x11_needs_xdotool(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    result = clipboard.type_text_x11("body")
+    assert result.ok is False
+    assert "not installed" in result.message
+
+
+def test_can_type_text_limits(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/xdotool")
+    assert clipboard.can_type_text("body") is True
+    assert clipboard.can_type_text("") is False
+    assert clipboard.can_type_text("x" * (clipboard.TYPE_TEXT_LIMIT + 1)) is False
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    assert clipboard.can_type_text("body") is False

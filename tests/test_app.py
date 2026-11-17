@@ -2721,3 +2721,134 @@ def test_an_empty_clipboard_does_not_send_ctrl_v(monkeypatch):
     assert app._paste_finished is True
     assert restored == [1]  # the window comes back instead of staying hidden
     assert "Could not copy to the clipboard" in shown[0]
+
+
+def test_the_text_is_typed_when_the_clipboard_stays_empty(monkeypatch):
+    """A clipboard that cannot hold the text no longer cancels the paste."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    app = PastexApp.__new__(PastexApp)
+    app.after = lambda delay, cb=None, *args: scheduled.append((cb, args))
+    monkeypatch.setattr(
+        app_module, "copy_text", lambda text, plan=None: ClipboardResultLike(True)
+    )
+    monkeypatch.setattr(app_module, "verify_clipboard", lambda text: False)
+    monkeypatch.setattr(PastexApp, "_claim_the_clipboard", lambda self, text: False)
+    monkeypatch.setattr(app_module, "can_type_text", lambda text: True)
+
+    PastexApp._paste_worker(app, "body")
+
+    callback, args = scheduled[-1]
+    assert getattr(callback, "__func__", callback) is PastexApp._after_copy
+    assert args[0].ok is True  # the paste goes ahead, by typing
+    assert args[1] is False
+    assert app._paste_by_typing is True
+
+
+def test_nothing_is_pasted_when_the_text_cannot_be_typed_either(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    app = PastexApp.__new__(PastexApp)
+    app.after = lambda delay, cb=None, *args: scheduled.append((cb, args))
+    monkeypatch.setattr(
+        app_module, "copy_text", lambda text, plan=None: ClipboardResultLike(True)
+    )
+    monkeypatch.setattr(app_module, "verify_clipboard", lambda text: False)
+    monkeypatch.setattr(PastexApp, "_claim_the_clipboard", lambda self, text: False)
+    monkeypatch.setattr(app_module, "can_type_text", lambda text: False)
+
+    PastexApp._paste_worker(app, "body")
+
+    _callback, args = scheduled[-1]
+    assert args[0].ok is False
+    assert args[1] is True  # reported as an empty clipboard
+    assert "cannot be typed" in args[0].message
+
+
+def test_the_sender_types_instead_of_pressing_ctrl_v(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    scheduled = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_by_typing = True
+    app._paste_body = "body"
+    app.after = lambda delay, cb=None, *args: scheduled.append((cb, args))
+    monkeypatch.setattr(app_module, "type_text_x11", lambda text: calls.append(("type", text)) or PasteResultLike())
+    monkeypatch.setattr(
+        app_module,
+        "simulate_paste",
+        lambda plan=None, should_stop=None: calls.append(("ctrl+v", None)),
+    )
+
+    PastexApp._paste_sender(app)
+
+    assert calls == [("type", "body")]
+    assert scheduled
+
+
+def test_the_sender_uses_ctrl_v_when_the_clipboard_was_verified(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_body = "body"
+    app.after = lambda *args: None
+    monkeypatch.setattr(app_module, "type_text_x11", lambda text: calls.append("type"))
+    monkeypatch.setattr(
+        app_module,
+        "simulate_paste",
+        lambda plan=None, should_stop=None: calls.append("ctrl+v") or PasteResultLike(),
+    )
+
+    PastexApp._paste_sender(app)
+
+    assert calls == ["ctrl+v"]
+
+
+def test_a_click_resets_the_typing_decision():
+    """A previous failing click must not make the next one type."""
+
+    class FakeApp:
+        def __init__(self):
+            self._paste_by_typing = True
+            self._pasting = False
+            self.status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+
+        def state(self):
+            return "iconic"
+
+        def iconify(self):
+            return None
+
+        def update_idletasks(self):
+            return None
+
+        def after(self, delay, callback=None, *args):
+            return "id"
+
+        def after_cancel(self, _id):
+            return None
+
+        def _hide_for_paste(self):
+            return False
+
+        def _paste_worker(self, text):
+            return None
+
+        def _send_paste(self):
+            return None
+
+    from pastex.app import PastexApp
+
+    app = FakeApp()
+    PastexApp._paste_text(app, "body")
+
+    assert app._paste_by_typing is False
+    assert app._paste_body == "body"

@@ -30,6 +30,8 @@ from .clipboard import (
     read_text_from_clipboard,
     set_clipboard_owner,
     simulate_paste,
+    can_type_text,
+    type_text_x11,
     verify_copy as verify_clipboard,
     window_manager,
     x11_focus_moved,
@@ -1773,6 +1775,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # panel icon matters more than pasting, and Ctrl+V would land in Pastex.
         self._paste_clipboard_ready = False
         self._paste_hide_widget = hide
+        # The text of this attempt, and how it will be delivered: Ctrl+V from
+        # the clipboard, or typed with xdotool when the clipboard cannot hold it.
+        self._paste_body = text
+        self._paste_by_typing = False
         # Only restore the window that was actually hidden.
         self._paste_restore_window = hide is None
         # Reset the hide diagnostics of the previous attempt.
@@ -1892,13 +1898,26 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             # forks, so a successful exit does not prove the clipboard holds
             # anything: verify it before Ctrl+V pastes an empty clipboard.
             empty = not PastexApp._clipboard_holds(self, text, result)
-            if empty:
+            if empty and can_type_text(text):
+                # The clipboard is unusable here, but the text still has to
+                # reach the application: type it instead of pressing Ctrl+V on
+                # an empty clipboard.
+                self._paste_by_typing = True
+                log_error(
+                    "[paste] typing the text with xdotool instead of Ctrl+V "
+                    "(the clipboard does not hold it)"
+                )
+                result = ClipboardResult(
+                    ok=True, tool=result.tool, message="Typed with xdotool."
+                )
+                empty = False
+            elif empty:
                 result = ClipboardResult(
                     ok=False,
                     tool=result.tool,
                     message=(
                         f"{result.tool} reported success, but the clipboard does "
-                        "not hold the text"
+                        "not hold the text, and it cannot be typed either"
                     ),
                 )
         if not result.ok:
@@ -1937,8 +1956,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 log_error("[paste] the clipboard now holds the text (Tk owner)")
                 return True
         log_error(
-            "[paste] the clipboard still does not hold the text; Ctrl+V would "
-            "paste nothing"
+            "[paste] the clipboard still does not hold the text; "
+            + (
+                "it will be typed instead"
+                if can_type_text(text)
+                else "Ctrl+V would paste nothing"
+            )
         )
         return False
 
@@ -2298,12 +2321,22 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             pass
 
     def _paste_sender(self) -> None:
-        log_error("[paste] sending Ctrl+V")
+        typing = bool(self.__dict__.get("_paste_by_typing", False))
+        log_error(
+            "[paste] typing the text with xdotool"
+            if typing
+            else "[paste] sending Ctrl+V"
+        )
         try:
-            result = simulate_paste(
-                plan=self.__dict__.get("_paste_plan"),
-                should_stop=lambda: bool(self.__dict__.get("_paste_aborted", False)),
-            )
+            if typing:
+                result = type_text_x11(self.__dict__.get("_paste_body", ""))
+            else:
+                result = simulate_paste(
+                    plan=self.__dict__.get("_paste_plan"),
+                    should_stop=lambda: bool(
+                        self.__dict__.get("_paste_aborted", False)
+                    ),
+                )
         except Exception as exc:  # noqa: BLE001 - always report back to the GUI
             log_error(f"[paste] sender failed: {exc}")
             result = PasteResult(ok=False, tool="", message=f"paste error: {exc}")
@@ -3071,9 +3104,10 @@ def clipboard_status() -> list[str]:
         lines.append("✅ read-back matches")
     elif not back.strip():
         lines.append(
-            "⚠️ read-back is empty — the tool accepted the text but serves "
-            "nothing. Pastex now claims the clipboard itself before Ctrl+V, so "
-            "a click still pastes; please report this log"
+            "⚠️ read-back is empty — the tool accepted the text but no reader "
+            "sees it. A click still delivers the snippet: Pastex claims the "
+            "clipboard in Tk and, if that fails too, types the text with "
+            "xdotool; please report this log"
         )
     else:
         lines.append(f"⚠️ read-back differs: {back.strip()[:40]!r}")
