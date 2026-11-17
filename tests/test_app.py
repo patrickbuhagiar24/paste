@@ -564,8 +564,8 @@ def test_hide_for_paste_minimizes_instead_of_unmapping():
     assert calls == ["iconify", "update"]
 
 
-def test_hide_for_paste_keeps_the_window_when_minimize_is_refused():
-    """A refusing window manager leaves the window visible; no unmapping."""
+def test_hide_for_paste_arms_the_paste_before_the_compositor_answers():
+    """GNOME menjawab minimize secara asinkron: state=normal belum berarti gagal."""
     from pastex.app import PastexApp
 
     calls = []
@@ -580,8 +580,115 @@ def test_hide_for_paste_keeps_the_window_when_minimize_is_refused():
         def state(self):
             return "normal"
 
-    assert PastexApp._hide_for_paste(FakeApp()) is False
+    assert PastexApp._hide_for_paste(FakeApp()) is True
     assert calls == ["iconify", "update"]
+
+
+def _polling_app(states, *, tk_ready=True):
+    """App tiruan yang menjawab state() berurutan dan mencatat penjadwalan."""
+    from pastex.app import PastexApp
+
+    scheduled = []
+    sends = []
+    calls = []
+
+    class FakeApp:
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+
+        def __init__(self):
+            if tk_ready:
+                self.tk = object()
+            self._paste_pending = True
+            self._paste_clipboard_ready = True
+
+        def state(self):
+            return states.pop(0) if states else "normal"
+
+        def after(self, delay, callback=None):
+            scheduled.append((delay, callback))
+            return f"id-{len(scheduled)}"
+
+        def after_cancel(self, _id):
+            return None
+
+        def iconify(self):
+            calls.append("iconify")
+
+        def _paste_sender(self):
+            return None
+
+    app = FakeApp()
+    app.scheduled = scheduled
+    app.sends = sends
+    app.iconify_calls = calls
+    return app
+
+
+def test_the_hide_check_is_polled_until_the_compositor_answers(monkeypatch):
+    """Jendela yang baru benar-benar minimize beberapa ms kemudian tetap dipaste."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = _polling_app(["normal", "normal", "iconic"])
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: app.sends.append(target.__name__),
+    )
+
+    PastexApp._send_paste_now(app)  # normal -> tunggu
+    assert app.sends == []
+
+    delay, callback = app.scheduled.pop(0)
+    assert delay == app_module.MINIMIZE_RETRY_MS
+    callback()  # masih normal -> tunggu lagi
+    assert app.sends == []
+
+    delay, callback = app.scheduled.pop(0)
+    callback()  # iconic -> kirim
+    assert app.sends == ["_paste_sender"]
+
+
+def test_a_window_that_never_hides_keeps_ctrl_v_unsent(monkeypatch):
+    """Kalau WM benar-benar menolak minimize: teks disalin, Ctrl+V tidak dikirim."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = _polling_app(["normal"], tk_ready=False)
+    shown = []
+    app.status_var = type("V", (), {"set": staticmethod(shown.append)})()
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda *a, **k: app.sends.append("sender")
+    )
+
+    PastexApp._send_paste_now(app)
+
+    assert app.sends == []
+    assert shown == [app_module.PASTE_MANUAL_HINT]
+    assert app._paste_pending is False
+    assert app._paste_finished is True
+
+
+def test_the_minimize_request_is_repeated_when_the_first_one_is_ignored(monkeypatch):
+    """Sebagian compositor mengabaikan permintaan pertama; kita minta sekali lagi."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = _polling_app(["normal"] * 40)
+    monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
+
+    PastexApp._send_paste_now(app)
+    steps = 0
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 40:  # pragma: no cover - safety net
+            break
+
+    assert steps * app_module.MINIMIZE_RETRY_MS >= app_module.MINIMIZE_WAIT_MS
+    assert app.iconify_calls == ["iconify"], "satu permintaan ulang saja"
+    assert app._paste_finished is True
 
 
 def test_hide_for_paste_keeps_the_window_when_iconify_fails():

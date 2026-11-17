@@ -87,6 +87,14 @@ ICON_NAME = APP_ID
 # after Pastex hides itself, before Ctrl+V is sent.
 FOCUS_SETTLE_MS = 80
 
+# iconify() only *asks* the compositor to minimize; on GNOME the window is
+# still reported as "normal" for a while (see the 1.8.1 log line "did not
+# minimize (state=normal)"), so the check is retried instead of taken once.
+MINIMIZE_WAIT_MS = 300
+MINIMIZE_RETRY_MS = 20
+# Some compositors need a second request before they hide the window.
+MINIMIZE_REHIDE_AT_MS = 120
+
 # Hard deadline for the "send Ctrl+V" half of a click. Every tool call has its
 # own timeout, but a wedged daemon or an unanswered portal consent dialog could
 # still keep the window minimized for a minute; when this fires the window is
@@ -416,10 +424,15 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         copy_plan, paste_plan = prewarm_clipboard()
         self._copy_plan = copy_plan
         self._paste_plan = paste_plan
+        try:
+            daemon = "jalan" if uinput.ydotoold_running() else "tidak-jalan"
+        except Exception:  # noqa: BLE001 - diagnostics must never break startup
+            daemon = "?"
         log_error(
             "[paste] siap: "
             f"salin={','.join(copy_plan.tool_names()) or '-'} "
-            f"tempel={','.join(paste_plan.tool_names()) or '-'}"
+            f"tempel={','.join(paste_plan.tool_names()) or '-'} "
+            f"ydotoold={daemon}"
         )
         if self.__dict__.get("settings", {}).get("clipboard_owner"):
             self._start_clipboard_owner()
@@ -1865,23 +1878,55 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
         Returns True when the window is hidden and the paste may go ahead.
         """
+        self._minimize_waited_ms = 0
+        self._rehide_done = False
+        self._hide_logged = False
         try:
             self.iconify()
             self.update_idletasks()
         except TK_ERRORS:
             log_error("[paste] minimize failed; the window stays visible")
             return False
+        # Whether the window actually hid is decided in _send_paste_now: the
+        # compositor answers asynchronously and reported "normal" here even
+        # when the minimize worked a few milliseconds later.
+        return True
+
+    def _paste_window_hidden(self) -> bool:
+        """True when the window is off screen (or nothing can be read)."""
         try:
             state = str(self.state())
-        except TK_ERRORS:  # pragma: no cover - state unavailable in test doubles
-            state = "iconic"
-        if state not in {"iconic", "withdrawn"}:
-            log_error(
-                f"[paste] window manager did not minimize (state={state}); "
-                "the window stays visible"
-            )
+        except TK_ERRORS:  # test doubles: keep the previous behaviour
+            return True
+        if state in {"iconic", "withdrawn"}:
+            if not self.__dict__.get("_hide_logged", False):
+                self._hide_logged = True
+                log_error("[paste] window minimized before Ctrl+V; dock entry kept")
+            return True
+        return False
+
+    def _wait_for_the_window_hiding(self) -> bool:
+        """Retry the minimize check; True when another attempt was scheduled."""
+        waited = self.__dict__.get("_minimize_waited_ms", 0)
+        if waited >= MINIMIZE_WAIT_MS or not PastexApp._tk_ready(self):
             return False
-        log_error("[paste] window minimized before Ctrl+V; dock entry kept")
+        waited += MINIMIZE_RETRY_MS
+        self._minimize_waited_ms = waited
+        if waited >= MINIMIZE_REHIDE_AT_MS and not self.__dict__.get("_rehide_done"):
+            # Ask once more: some compositors ignore the first request.
+            self._rehide_done = True
+            try:
+                self.iconify()
+            except TK_ERRORS:  # pragma: no cover - interpreter already gone
+                pass
+        try:
+            # Bind explicitly: Tk calls the callback with no arguments, and
+            # test doubles have no instance method to pass along.
+            self._paste_send_id = self.after(
+                MINIMIZE_RETRY_MS, lambda app=self: PastexApp._send_paste_now(app)
+            )
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            return False
         return True
 
     def _send_paste(self) -> None:
@@ -1926,8 +1971,25 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             # The window is already hidden but the clipboard tool has not
             # finished yet; _after_copy() calls back here as soon as it has.
             return
+        if not PastexApp._paste_window_hidden(self):
+            if PastexApp._wait_for_the_window_hiding(self):
+                return
+            # The window manager never hid the window: keep it (the dock icon
+            # matters more than pasting), leave the text on the clipboard and
+            # ask the user to press Ctrl+V instead of typing into Pastex.
+            self._paste_pending = False
+            self._pasting = False
+            self._paste_finished = True
+            PastexApp._cancel_paste_watchdog(self)
+            self.status_var.set(PASTE_MANUAL_HINT)
+            log_error(
+                f"[paste] jendela tetap tampil setelah {MINIMIZE_WAIT_MS} ms; "
+                "Ctrl+V tidak dikirim"
+            )
+            return
         self._paste_pending = False
-        self._cancel_paste_send_timeout()
+        # Explicit class call keeps partially-built test doubles working.
+        PastexApp._cancel_paste_send_timeout(self)
         _run_in_thread(self._paste_sender)
 
     def _cancel_paste_send_timeout(self) -> None:
