@@ -1,3 +1,13 @@
+pastex (1.6.12-1) unstable; urgency=medium
+
+  * Remove the last withdraw() fallbacks, so the window is never unmapped and
+    the dock icon can no longer disappear. Hiding during a paste is now only
+    ever iconify(); when the window manager refuses to minimize, Pastex keeps
+    the window visible, skips the synthetic Ctrl+V (which would have gone to
+    Pastex itself) and reports "Text copied - press Ctrl+V".
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 13:30:00 +0000
+
 pastex (1.6.11-1) unstable; urgency=medium
 
   * Overlap the two slow halves of a paste: the window is minimized right away
