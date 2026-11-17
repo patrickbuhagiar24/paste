@@ -748,11 +748,10 @@ def test_x11_window_unmapped_reads_the_x_server_answer(monkeypatch):
     assert clipboard.x11_window_unmapped("0x400001", runner=runner) is True
     assert captured == [["xwininfo", "-id", "0x400001"]]
 
+    # A reparenting WM leaves the client window viewable while the frame is
+    # unmapped, so this is "cannot tell", never "still on screen".
     runner = _x11_runner([], out="  Map State: IsViewable\n")
-    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is False
-
-    runner = _x11_runner([], out="  Map State: IsUnviewable\n")
-    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is False
+    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is None
 
 
 def test_x11_window_unmapped_reports_unknown_when_the_query_fails():
@@ -834,3 +833,78 @@ def test_window_manager_falls_back_to_xprop(monkeypatch):
 
     # The property exists, so a WM is there even though wmctrl is missing.
     assert clipboard.window_manager(runner=runner) == "unnamed"
+
+
+def test_x11_wm_state_reads_the_published_state(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    captured = []
+    runner = _x11_runner(
+        captured,
+        out="WM_STATE(WM_STATE):\n\t\twindow state: Iconic\n\t\ticon window: 0x0\n",
+    )
+    assert clipboard.x11_wm_state("0x2a00009", runner=runner) == "iconic"
+    assert captured == [["xprop", "-id", "0x2a00009", "-notype", "WM_STATE"]]
+
+    runner = _x11_runner([], out="WM_STATE(WM_STATE):\n\twindow state: Normal\n")
+    assert clipboard.x11_wm_state("0x1", runner=runner) == "normal"
+
+    assert clipboard.x11_wm_state("0x1", runner=_x11_runner([], rc=1)) is None
+
+
+def test_x11_active_window_parses_the_focus(monkeypatch):
+    runner = _x11_runner([], out="44040205\n")
+    assert clipboard.x11_active_window(runner=runner) == hex(44040205)
+
+    captured = []
+
+    def fails_first(cmd, **kwargs):
+        captured.append(list(cmd))
+        if cmd == ["xdotool", "getactivewindow"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="0x2a00009\n", stderr="")
+
+    # getactivewindow is unsupported on some WMs; getwindowfocus is the fallback.
+    assert clipboard.x11_active_window(runner=fails_first) == "0x2a00009"
+    assert captured == [
+        ["xdotool", "getactivewindow"],
+        ["xdotool", "getwindowfocus"],
+    ]
+
+
+def test_x11_focus_moved_compares_the_window_id(monkeypatch):
+    """The paste needs the focus to leave Pastex, nothing more."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def runner(active_id, wm_class="Nautilus"):
+        def run(cmd, **kwargs):
+            if "getactivewindow" in cmd:
+                return SimpleNamespace(returncode=0, stdout=f"{active_id}\n", stderr="")
+            if "WM_CLASS" in cmd:
+                return SimpleNamespace(
+                    returncode=0, stdout=f'WM_CLASS(STRING) = "x", "{wm_class}"\n', stderr=""
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        return run
+
+    assert clipboard.x11_focus_moved("0x2a00009", runner=runner("0x2a00009")) is False
+    assert clipboard.x11_focus_moved("0x2a00009", runner=runner("0x3000004")) is True
+
+
+def test_x11_focus_moved_recognises_our_own_frame(monkeypatch):
+    """Muffin keeps the focus on a frame that is not our window id."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def run(cmd, **kwargs):
+        if "getactivewindow" in cmd:
+            return SimpleNamespace(returncode=0, stdout="0x3000004\n", stderr="")
+        return SimpleNamespace(
+            returncode=0, stdout='WM_CLASS(STRING) = "pastex", "Pastex"\n', stderr=""
+        )
+
+    assert clipboard.x11_focus_moved("0x2a00009", runner=run) is False
+
+
+def test_x11_focus_moved_reports_unknown_without_xdotool():
+    assert clipboard.x11_focus_moved("0x1", runner=_x11_runner([], rc=1)) is None

@@ -1,3 +1,25 @@
+pastex (1.10.4-1) unstable; urgency=medium
+
+  * Decide the paste from the input focus instead of the window state.
+    Muffin on a Cinnamon X11 session (wm=Mutter (Muffin)) reported
+    state=normal for the whole 900 ms budget even though the window had been
+    iconified, and the client window stays IsViewable while a reparenting WM
+    unmaps the frame around it, so xwininfo could not answer either. Both
+    checks therefore refused to send Ctrl+V on a machine where the minimize
+    worked. What the paste actually needs is the focus back on the target
+    application, so the active window is now read with xdotool every 120 ms
+    (a frame that still belongs to Pastex is recognised through its WM_CLASS)
+    and that verdict decides the paste. WM_STATE and xwininfo remain the
+    fallback when xdotool cannot answer.
+  * Treat a viewable client window as "cannot tell" rather than "still on
+    screen", and log the focus verdict, the mechanism that decided the paste
+    and the observed focus in the give-up line.
+  * Do not report an empty clipboard read-back as a mismatch: xclip forks the
+    owner that takes the selection over, so pastex --check now re-reads once
+    before judging and explains an empty clipboard instead.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Tue, 18 Nov 2026 09:15:00 +0700
+
 pastex (1.10.3-1) unstable; urgency=medium
 
   * Make the paste work on a machine whose window manager ignores the

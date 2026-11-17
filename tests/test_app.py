@@ -2322,6 +2322,8 @@ def test_the_x_server_can_end_the_minimize_wait_early(monkeypatch):
     from pastex.app import PastexApp
 
     scheduled = []
+    monkeypatch.setattr(app_module, "x11_focus_moved", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "x11_wm_state", lambda *a, **k: "iconic")
     monkeypatch.setattr(app_module, "x11_window_unmapped", lambda window_id: True)
 
     class FakeApp:
@@ -2341,6 +2343,8 @@ def test_a_mapped_window_is_not_declared_hidden_by_the_x_server(monkeypatch):
     from pastex.app import PastexApp
 
     scheduled = []
+    monkeypatch.setattr(app_module, "x11_focus_moved", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "x11_wm_state", lambda *a, **k: "normal")
     monkeypatch.setattr(app_module, "x11_window_unmapped", lambda window_id: False)
 
     class FakeApp:
@@ -2462,9 +2466,13 @@ def test_the_window_manager_is_asked_when_iconify_is_ignored(monkeypatch):
     forced = [c for c in threads if c[0] is app_module.force_minimize_window]
     # Asked exactly once, with the real X11 window id.
     assert forced == [(app_module.force_minimize_window, ("0x2800003",))]
-    # And the X server is asked as well, once.
-    checked = [c for c in threads if c[0] is PastexApp._x11_confirm_hidden_worker]
-    assert checked == [(PastexApp._x11_confirm_hidden_worker, (app, "0x2800003"))]
+    # The focus is re-read every 120 ms: a WM may hand it over late.
+    checked = [
+        args[-1]
+        for fn, args in threads
+        if fn is PastexApp._x11_confirm_hidden_worker
+    ]
+    assert checked == [200, 320, 440, 560, 680, 800]
 
 
 def test_a_window_without_an_x11_id_still_gives_up_quietly(monkeypatch):
@@ -2488,3 +2496,100 @@ def test_a_window_without_an_x11_id_still_gives_up_quietly(monkeypatch):
 
     assert threads == []
     assert app._paste_finished is True
+
+
+def test_a_focus_that_moved_away_is_enough_to_paste(monkeypatch):
+    """The paste only needs the focus back on the target app.
+
+    On a real Cinnamon session Muffin reported ``normal`` from ``wm state``
+    for the whole budget while the focus had in fact left Pastex, which is
+    why 1.10.3 still sent no Ctrl+V.
+    """
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    monkeypatch.setattr(app_module, "x11_focus_moved", lambda *a, **k: True)
+    monkeypatch.setattr(app_module, "x11_wm_state", lambda *a, **k: "normal")
+    monkeypatch.setattr(app_module, "x11_window_unmapped", lambda *a, **k: None)
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    PastexApp._x11_confirm_hidden_worker(app, "0x2a00009", 200)
+
+    assert app._window_unmapped is True
+    assert app._hide_signal == "focus"
+    assert app._focus_state == "moved"
+    assert scheduled == [(0, PastexApp._send_paste_now, (app,))]
+
+
+def test_a_focus_that_still_belongs_to_pastex_blocks_the_paste(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    monkeypatch.setattr(app_module, "x11_focus_moved", lambda *a, **k: False)
+    # Even a WM that claims iconic must not override the focus.
+    monkeypatch.setattr(app_module, "x11_wm_state", lambda *a, **k: "iconic")
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    PastexApp._x11_confirm_hidden_worker(app, "0x2a00009", 320)
+
+    assert app.__dict__.get("_window_unmapped", False) is False
+    assert app._focus_state == "ours"
+    assert scheduled == []
+
+
+def test_the_wm_state_is_used_when_the_focus_cannot_be_read(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    monkeypatch.setattr(app_module, "x11_focus_moved", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "x11_wm_state", lambda *a, **k: "iconic")
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    PastexApp._x11_confirm_hidden_worker(app, "0x2a00009", 440)
+
+    assert app._window_unmapped is True
+    assert app._hide_signal == "wm-state"
+    assert scheduled == [(0, PastexApp._send_paste_now, (app,))]
+
+
+def test_a_second_focus_verdict_is_not_repeated(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    scheduled = []
+    monkeypatch.setattr(
+        app_module,
+        "x11_focus_moved",
+        lambda *a, **k: calls.append(1) or True,
+    )
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    app._window_unmapped = True  # already decided by the previous check
+    PastexApp._x11_confirm_hidden_worker(app, "0x2a00009", 560)
+
+    assert calls == []  # no more xdotool calls once the window is known hidden
+    assert scheduled == []
