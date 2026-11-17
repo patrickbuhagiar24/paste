@@ -1437,3 +1437,142 @@ def test_search_repaints_from_the_cache_after_the_debounce():
     timers[0][1]()
 
     assert forces == [False]
+
+
+# --- Incremental treeview updates -----------------------------------------
+
+
+def test_refresh_reuses_rows_instead_of_rebuilding(gui, tmp_path):
+    """Repaint menambal baris yang ada, tidak menghapus lalu membangun ulang."""
+    root = tmp_path / "snippets"
+    (root / "Folder").mkdir(parents=True)
+    (root / "Folder" / "A.txt").write_text("a", encoding="utf-8")
+    (root / "B.txt").write_text("b", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+
+    rows_before = [(row["iid"], row["parent"]) for row in app.tree.rows]
+    deleted_before = app.tree.deleted
+
+    app.refresh_tree(force=False)
+
+    assert [(row["iid"], row["parent"]) for row in app.tree.rows] == rows_before
+    assert app.tree.deleted == deleted_before, "tidak boleh ada baris yang dihapus"
+    assert app.tree.inserts == 3, "baris lama tidak boleh disisipkan ulang"
+    assert app.tree.moves == 0
+    assert app.tree.item_updates == 0, "tidak ada nilai yang berubah"
+
+
+def test_refresh_adds_only_the_new_row(gui, tmp_path):
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "A.txt").write_text("a", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+    first = app.tree.by_iid(root / "A.txt")
+
+    (root / "B.txt").write_text("b", encoding="utf-8")
+    app.refresh_tree()
+
+    assert app.tree.by_iid(root / "A.txt") is first, "baris lama dipakai ulang"
+    assert app.tree.by_iid(root / "B.txt")["text"].endswith("B")
+    assert len(app.tree.rows) == 2
+
+
+def test_refresh_drops_rows_that_left_the_disk(gui, tmp_path):
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "Keep.txt").write_text("keep", encoding="utf-8")
+    (root / "Gone.txt").write_text("gone", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+
+    (root / "Gone.txt").unlink()
+    app.refresh_tree()
+
+    assert not app.tree.exists(str(root / "Gone.txt"))
+    assert app.tree.exists(str(root / "Keep.txt"))
+    assert len(app.tree.rows) == 1
+
+
+def test_refresh_updates_the_open_state_in_place(gui, sample_root):
+    from pastex import app as app_module
+
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = app.tree.by_iid(sample_root / "Email")
+    assert folder["open"] is True
+
+    app.settings["collapsed"] = [app_module._norm_path(sample_root / "Email")]
+    app.refresh_tree(force=False)
+
+    assert app.tree.by_iid(sample_root / "Email") is folder, "baris yang sama"
+    assert folder["open"] is False, "status ciut harus menimpa baris lama"
+
+
+def test_refresh_keeps_the_selection(gui, tmp_path):
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "A.txt").write_text("a", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+    app.tree.selection_set(str(root / "A.txt"))
+
+    app.refresh_tree(force=False)
+
+    assert app.tree.selection() == (str(root / "A.txt"),)
+
+
+def test_refresh_reorders_rows_without_rebuilding(gui, tmp_path):
+    from pastex import app as app_module
+
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "A.txt").write_text("a", encoding="utf-8")
+    (root / "B.txt").write_text("b", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+    first = app.tree.by_iid(root / "A.txt")
+    deleted_before = app.tree.deleted
+
+    app.settings["order"] = {app_module._norm_path(root): ["B.txt", "A.txt"]}
+    app.refresh_tree(force=False)
+
+    assert list(app.tree.get_children("")) == [
+        str(root / "B.txt"),
+        str(root / "A.txt"),
+    ]
+    assert app.tree.by_iid(root / "A.txt") is first
+    assert app.tree.deleted == deleted_before
+
+
+def test_two_roots_with_the_same_path_keep_stable_ids(gui, tmp_path):
+    """Root ganda (checkout + salinan sistem) tidak boleh bertabrakan iid."""
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "A.txt").write_text("a", encoding="utf-8")
+    app = gui(roots=[root, root])
+    app.refresh_tree()
+
+    ids = [row["iid"] for row in app.tree.rows]
+    assert len(ids) == len(set(ids)) == 2
+    assert ids == [str(root / "A.txt"), f"{root / 'A.txt'}#{root}"]
+
+    app.refresh_tree(force=False)
+
+    assert [row["iid"] for row in app.tree.rows] == ids
+
+
+def test_row_update_accepts_tcl_string_options(gui, tmp_path):
+    """Tk mengembalikan "1"/"dir" untuk opsi; itu bukan perubahan."""
+    root = tmp_path / "snippets"
+    (root / "Folder").mkdir(parents=True)
+    (root / "Folder" / "A.txt").write_text("a", encoding="utf-8")
+    app = gui(roots=[root])
+    app.tree.string_options = True
+    app.refresh_tree()
+
+    app.tree.item_updates = 0
+    app.refresh_tree(force=False)
+
+    assert app.tree.item_updates == 0, "nilai Tcl yang setara tidak boleh ditulis ulang"

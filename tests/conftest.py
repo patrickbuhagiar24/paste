@@ -24,6 +24,11 @@ class FakeTree:
     def __init__(self):
         self.rows: list[dict] = []
         self.deleted = 0
+        self.inserts = 0
+        self.moves = 0
+        self.item_updates = 0
+        # Bila True, opsi dibaca sebagai string seperti Tcl/Tk asli ("1", "dir").
+        self.string_options = False
         self._selection: tuple[str, ...] = ()
         self._focus = ""
         self._child_order: dict[str, list[str]] = {}
@@ -31,10 +36,27 @@ class FakeTree:
 
     # -- API yang dipakai app.py --
     def delete(self, *items):
+        """Hapus baris yang disebut (beserta turunannya), seperti Tk."""
         self.deleted += 1
-        self.rows.clear()
-        self._child_order.clear()
-        self._selection = ()
+        if not items:
+            self.rows.clear()
+            self._child_order.clear()
+            self._selection = ()
+            return
+        doomed = set(items)
+        changed = True
+        while changed:  # ikut hapus semua keturunan
+            changed = False
+            for row in self.rows:
+                if row["parent"] in doomed and row["iid"] not in doomed:
+                    doomed.add(row["iid"])
+                    changed = True
+        self.rows = [row for row in self.rows if row["iid"] not in doomed]
+        for order in self._child_order.values():
+            order[:] = [iid for iid in order if iid not in doomed]
+        self._selection = tuple(iid for iid in self._selection if iid not in doomed)
+        if self._focus in doomed:
+            self._focus = ""
 
     def get_children(self, item=""):
         children = [r["iid"] for r in self.rows if r["parent"] == item]
@@ -46,6 +68,7 @@ class FakeTree:
         return next(r["parent"] for r in self.rows if r["iid"] == iid)
 
     def move(self, iid, parent, index):
+        self.moves += 1
         children = list(self.get_children(parent))
         children.remove(iid)
         children.insert(int(index), iid)
@@ -57,6 +80,7 @@ class FakeTree:
     def insert(self, parent, index, iid=None, **kw):
         assert index == "end", f"index salah: {index!r}"
         assert iid is not None, "iid harus keyword"
+        self.inserts += 1
         self.rows.append(
             {
                 "parent": parent,
@@ -88,8 +112,19 @@ class FakeTree:
 
     def item(self, iid, option=None, **kwargs):
         row = next(r for r in self.rows if r["iid"] == iid)
+        if kwargs:
+            self.item_updates += 1
         row.update(kwargs)
-        return row.get(option) if option else row
+        if option is None:
+            return row
+        value = row.get(option)
+        if self.string_options:
+            if option == "open":
+                return "1" if value else "0"
+            if option == "tags":
+                tags = value if isinstance(value, (tuple, list)) else (value,)
+                return " ".join(tag for tag in tags if tag)
+        return value
 
     def bind(self, *_a, **_kw):
         pass

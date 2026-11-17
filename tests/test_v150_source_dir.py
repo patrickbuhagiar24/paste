@@ -273,7 +273,7 @@ def test_cli_list_explains_when_nothing_found(tmp_path, capsys):
     assert run_cli(["--dir", str(empty), "--list"]) == 0
     err = capsys.readouterr().err
     assert "no .txt files found" in err
-    assert "--export-data" in err
+    assert "--dir FOLDER" in err
 
 
 # --- pemasangan baru: benar-benar kosong, contoh hanya atas permintaan ----
@@ -286,14 +286,6 @@ def test_nothing_written_into_user_root_automatically(gui, tmp_path, monkeypatch
     app = gui(roots=[target])
     app.refresh_tree()
     assert not target.exists(), "folder pengguna diisi otomatis"
-
-
-def test_export_data_is_opt_in(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    assert app_module.run_cli(["--export-data"]) == 0
-    created = list(user_root().rglob("*.txt"))
-    assert created, "no samples were created"
-    assert (user_root() / "General" / "Greeting.txt") in created
 
 
 def test_source_dir_selection_does_not_get_samples(

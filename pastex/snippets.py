@@ -256,36 +256,3 @@ def writable_root(roots: list[Path] | None = None) -> Path:
     if roots:
         return Path(roots[-1])
     return default_roots()[-1]
-
-
-# --- Built-in samples ----------------------------------------------------
-#
-# Since 1.5.0, the repository and Debian package no longer include sample data.
-# Existing samples installed at
-# /usr/share/pastex/snippets remain available and are not removed.
-#
-# New installations do not include samples by default. The GUI asks users to
-# choose a source folder first. Samples below are exported only when
-# requested with `pastex --export-data [FOLDER]`.
-
-DEFAULT_SAMPLES: dict[str, dict[str, str]] = {
-    "General": {
-        "Greeting": "Hello, how are you? I hope you are doing well.\n",
-        "Signature": "Best regards,\nYour Name\nTitle — Company\n",
-    },
-    "Email": {
-        "Application Reply": (
-            "Thank you for your application. We will contact you "
-            "when the selection process is complete.\n"
-        ),
-        "Follow Up": (
-            "I am following up on my previous message. Is there any update "
-            "you can share?\n"
-        ),
-    },
-    "Work": {
-        "Report Template": (
-            "Weekly Report\n\nSummary:\n- \n\nChallenges:\n- \n\nNext steps:\n- \n"
-        ),
-    },
-}

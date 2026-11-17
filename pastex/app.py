@@ -31,7 +31,6 @@ from .instance import SingleInstance, send_command
 from .picker import open_picker
 from .watcher import DirectoryWatcher
 from .snippets import (
-    DEFAULT_SAMPLES,
     Node,
     create_folder,
     create_snippet,
@@ -41,7 +40,6 @@ from .snippets import (
     read_text,
     rename_folder,
     scan_roots,
-    user_root,
     writable_root,
     write_text,
 )
@@ -299,32 +297,6 @@ def save_settings(settings: dict) -> None:
         )
     except OSError:
         pass
-
-
-def export_data(target_dir: Path) -> list[Path]:
-    """Copy built-in samples to ``target_dir`` once and return the created files.
-
-    Used by ``--export-data``. New installations no longer bundle sample data,
-    so users request it explicitly. Existing files are never overwritten.
-    """
-    target_dir = Path(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    created: list[Path] = []
-    skipped: list[Path] = []
-    for folder, files in DEFAULT_SAMPLES.items():
-        for name, content in files.items():
-            target = target_dir / folder / f"{name}.txt"
-            if target.exists():
-                skipped.append(target)
-                continue
-            write_text(target, content)
-            created.append(target)
-    for path in skipped:
-        print(f"Skipped (already exists): {path}")
-    for path in created:
-        print(f"Created: {path}")
-    print(f"{len(created)} files created, {len(skipped)} skipped in {target_dir}")
-    return created
 
 
 def filter_tree(nodes: list[Node], hits: list[Node]) -> list[Node]:
@@ -1202,7 +1174,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         previous_highlight = self.__dict__.get("_context_highlight_iid", "")
         self._hover_iid = ""
         self._context_highlight_iid = ""
-        self.tree.delete(*self.tree.get_children())
         roots = self.active_roots()
         if self.index.set_roots(roots):
             force = True
@@ -1216,12 +1187,17 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # restore the saved collapsed state.
         self.collapsed = set() if query else self._collapsed_paths()
         total = 0
+        top_level: list[Node] = []
         for root_node in nodes:
             # The source folder is a container; show its contents
             # directly at the top level, including files at the root.
-            for child in root_node.children:
-                self._insert_node("", child)
+            top_level.extend(root_node.children)
             total += root_node.count_texts()
+        # Patch the existing rows instead of deleting and rebuilding the tree:
+        # item ids survive, so the scroll position, the expanded folders and the
+        # selection stay put, and unchanged rows cost a comparison instead of an
+        # insert. This is the only remaining per-refresh cost on the GUI side.
+        self._sync_nodes("", top_level, claimed=set())
         self._show_empty_state(not nodes)
         if query and has_roots:
             self._show_empty_state(False)
@@ -1251,25 +1227,117 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         else:
             var.set("")
 
-    def _insert_node(self, parent: str, node: Node, *, label: str | None = None) -> str:
-        icon = "📁 " if node.is_dir else "📄 "
+    def _node_iid(self, node: Node, claimed: set[str]) -> str:
+        """Item id for ``node``, stable across refreshes.
+
+        The path is the id, which is what lets a refresh reuse the existing row.
+        ``claimed`` catches the (rare) case of two roots sharing a path, as with
+        a development checkout and the system copy: the second one gets a suffix.
+        """
         iid = str(node.path)
-        # Avoid duplicate item ids if two roots share a path (development vs system).
-        if self.tree.exists(iid):
+        if iid in claimed:
             iid = f"{iid}#{node.source_root}"
-        collapsed = getattr(self, "collapsed", set())
-        is_open = node.is_dir and str(node.path) not in collapsed
-        self.tree.insert(
-            parent,
-            "end",
-            iid=iid,
-            text=f"{icon}{label if label is not None else node.name}",
-            open=is_open,
-            tags=("dir" if node.is_dir else "file"),
-        )
-        for child in node.children:
-            self._insert_node(iid, child)
+        claimed.add(iid)
         return iid
+
+    def _row_values(self, node: Node, label: str | None = None) -> dict:
+        icon = "📁 " if node.is_dir else "📄 "
+        collapsed = getattr(self, "collapsed", set())
+        return {
+            "text": f"{icon}{label if label is not None else node.name}",
+            "open": node.is_dir and str(node.path) not in collapsed,
+            "tags": ("dir" if node.is_dir else "file"),
+        }
+
+    def _insert_row(self, parent: str, node: Node, iid: str, label=None) -> None:
+        self.tree.insert(parent, "end", iid=iid, **self._row_values(node, label))
+
+    def _insert_children(
+        self, iid: str, children: list[Node], claimed: set[str], label=None
+    ) -> None:
+        for child in children:
+            child_iid = self._node_iid(child, claimed)
+            self._insert_row(iid, child, child_iid, label)
+            self._insert_children(child_iid, child.children, claimed, label)
+
+    def _insert_node(
+        self,
+        parent: str,
+        node: Node,
+        *,
+        label: str | None = None,
+        claimed: set[str] | None = None,
+        iid: str | None = None,
+    ) -> str:
+        """Insert ``node`` and its children under ``parent`` (new rows only)."""
+        if claimed is None:
+            claimed = set()
+        if iid is None:
+            iid = self._node_iid(node, claimed)
+        self._insert_row(parent, node, iid, label)
+        self._insert_children(iid, node.children, claimed, label)
+        return iid
+
+    @staticmethod
+    def _as_tags(value) -> tuple[str, ...]:
+        """Normalise ``-tags``: Tk may hand back a string or a tuple."""
+        if isinstance(value, str):
+            return tuple(part for part in value.split() if part)
+        return tuple(value or ())
+
+    @staticmethod
+    def _as_flag(value) -> bool:
+        """Normalise ``-open``: Tk may hand back 1/0 or "1"/"0"."""
+        if isinstance(value, str):
+            try:
+                return bool(int(value))
+            except ValueError:
+                return bool(value)
+        return bool(value)
+
+    def _update_row(self, iid: str, node: Node) -> None:
+        """Rewrite a row in place, but only when a value actually changed."""
+        values = self._row_values(node)
+        current = {
+            "text": self.tree.item(iid, "text"),
+            "open": self._as_flag(self.tree.item(iid, "open")),
+            "tags": self._as_tags(self.tree.item(iid, "tags")),
+        }
+        desired = {
+            "text": values["text"],
+            "open": bool(values["open"]),
+            "tags": self._as_tags(values["tags"]),
+        }
+        changes = {
+            key: values[key] for key, want in desired.items() if current[key] != want
+        }
+        if changes:
+            self.tree.item(iid, **changes)
+
+    def _order_children(self, parent: str, wanted: list[str]) -> None:
+        """Delete rows that left the tree and put the rest in ``wanted`` order."""
+        current = list(self.tree.get_children(parent))
+        if current == wanted:
+            return
+        keep = set(wanted)
+        for iid in current:
+            if iid not in keep:
+                self.tree.delete(iid)
+        for index, iid in enumerate(wanted):
+            self.tree.move(iid, parent, index)
+
+    def _sync_nodes(self, parent: str, nodes: list[Node], *, claimed: set[str]) -> None:
+        """Make the rows under ``parent`` match ``nodes``, touching only changes."""
+        wanted: list[str] = []
+        for node in nodes:
+            iid = self._node_iid(node, claimed)
+            if self.tree.exists(iid):
+                self._update_row(iid, node)
+                self._sync_nodes(iid, node.children, claimed=claimed)
+            else:
+                self._insert_node(parent, node, claimed=claimed, iid=iid)
+            wanted.append(iid)
+        self._order_children(parent, wanted)
 
     def move_selected(
         self, direction: int, *, item_ids: list[str] | None = None
@@ -2137,14 +2205,6 @@ def run_cli(argv: list[str] | None = None) -> int:
         help="Request /dev/uinput access (the 'pastex' group via pkexec).",
     )
     parser.add_argument(
-        "--export-data",
-        metavar="FOLDER",
-        nargs="?",
-        const="",
-        default=None,
-        help="Export sample snippets to FOLDER (default: the user data folder).",
-    )
-    parser.add_argument(
         "--pick",
         action="store_true",
         help=(
@@ -2165,10 +2225,6 @@ def run_cli(argv: list[str] | None = None) -> int:
         return run_permission_info()
     if args.enable_permissions:
         return run_enable_permission()
-    if args.export_data is not None:
-        target = Path(args.export_data) if args.export_data else user_root()
-        export_data(target)
-        return 0
     if args.list:
         nodes = scan_roots(roots)
         for node in nodes:
@@ -2176,8 +2232,7 @@ def run_cli(argv: list[str] | None = None) -> int:
         if not flatten_texts(nodes):
             print("(no .txt files found)", file=sys.stderr)
             print(
-                "Choose a source folder in the GUI, use --dir FOLDER, or "
-                "run --export-data.",
+                "Choose a source folder in the GUI or pass --dir FOLDER.",
                 file=sys.stderr,
             )
         return 0
