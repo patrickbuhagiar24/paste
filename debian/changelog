@@ -1,3 +1,15 @@
+pastex (1.7.1-1) unstable; urgency=medium
+
+  * Fix the live refresh never firing on a machine that just booted: the
+    watcher compared the first inotify event against 0.0 instead of "no
+    previous event", so when the monotonic clock (uptime) was smaller than the
+    coalescing window the first change after start-up was swallowed. Found by
+    the CI runner, whose uptime was below the window used in the test.
+  * Make the coalescing window's unit explicit (seconds) and cover it with
+    deterministic tests using a fake clock, plus two regression mutations.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 16:00:00 +0000
+
 pastex (1.7.0-1) unstable; urgency=medium
 
   * Add a frameless snippet picker: "pastex --pick" (also a desktop action)

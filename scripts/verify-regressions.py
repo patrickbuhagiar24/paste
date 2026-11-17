@@ -357,6 +357,23 @@ MUTATIONS = [
         ],
     ),
     (
+        "the first watcher event is swallowed on a freshly booted machine",
+        "pastex/watcher.py",
+        "        if self._last is not None and now - self._last < self.coalesce:",
+        "        if now - (self._last or 0.0) < self.coalesce:",
+        ["tests/test_watcher.py::test_first_event_fires_even_on_a_clock_that_just_started"],
+    ),
+    (
+        "every inotify event refreshes the tree (no coalescing)",
+        "pastex/watcher.py",
+        "        if self._last is not None and now - self._last < self.coalesce:",
+        "        if False:",
+        [
+            "tests/test_watcher.py::test_events_are_coalesced",
+            "tests/test_watcher.py::test_coalesce_window_is_measured_from_the_last_callback",
+        ],
+    ),
+    (
         "the tree ignores the in-memory index",
         "pastex/app.py",
         "        nodes = self.index.nodes(force=force)",

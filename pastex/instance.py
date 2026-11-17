@@ -158,7 +158,7 @@ class SingleInstance:
             self._lock_file = None
 
 
-def send_command(command: str, *, directory=None, timeout: float = 0.6) -> dict | None:
+def send_command(command: str, *, directory=None, timeout: float = 2.0) -> dict | None:
     """Ask the running instance to run ``command``; None when it is not there."""
     if command not in COMMANDS:
         raise ValueError(f"unknown command: {command}")
