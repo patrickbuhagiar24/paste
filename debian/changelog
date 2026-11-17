@@ -1,3 +1,11 @@
+pastex (1.6.5-1) unstable; urgency=medium
+
+  * Fix click, preview, and Select mode clearing behaviors, and add darker
+    right-click row highlighting in normal mode.
+  * Remove the Always on top checkbox and deploy GitHub Pages via GitHub Actions.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 23:55:00 +0000
+
 pastex (1.6.4-1) unstable; urgency=medium
 
   * Clear hover highlighting after clicks, including outside the list and on context menus.
