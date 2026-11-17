@@ -31,7 +31,9 @@ from .clipboard import (
     set_clipboard_owner,
     simulate_paste,
     window_manager,
+    x11_focus_moved,
     x11_window_unmapped,
+    x11_wm_state,
 )
 from .index import SnippetIndex
 from .instance import SingleInstance, send_command
@@ -98,10 +100,12 @@ FOCUS_SETTLE_MS = 80
 # made the code decide "never hidden" and skip Ctrl+V entirely.
 MINIMIZE_WAIT_MS = 900
 MINIMIZE_RETRY_MS = 20
-# After this much waiting, ask the X server directly (xwininfo) whether the
-# window is really unmapped; Tk's state can lag a window manager that animates
-# the minimize, and a false "still visible" costs the whole paste.
-MINIMIZE_X11_CHECK_AT_MS = 200
+# After this much waiting, ask the X server who holds the input focus. The
+# paste only needs the focus to leave Pastex, and WM_STATE (which Tk's
+# ``state()`` reports) is not updated by every window manager, so polling the
+# focus is what actually decides the paste.
+MINIMIZE_FOCUS_CHECK_AT_MS = 200
+MINIMIZE_FOCUS_RETRY_MS = 120
 # Restoring is checked and repeated as well: deiconify() is dropped when it
 # lands while the minimize animation is still running, which left the window
 # minimized for good.
@@ -1773,6 +1777,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Reset the hide diagnostics of the previous attempt.
         self._window_unmapped = False
         self._x11_hide_checked = False
+        self._x11_checked_ms = None
+        self._focus_state = None
+        self._hide_signal = None
         self._force_minimize_tried = False
         if hide is None and not PastexApp._paste_tools_ready(self):
             # A previous click (or startup) already showed that Ctrl+V cannot
@@ -2048,18 +2055,46 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         )
         _run_in_thread(force_minimize_window, window_id)
 
-    def _x11_confirm_hidden(self) -> None:
-        """Ask the X server whether the window is unmapped after all."""
+    def _x11_confirm_hidden(self, waited_ms: int = 0) -> None:
+        """Ask the X server whether the window really left the foreground."""
         self._x11_hide_checked = True
+        self._x11_checked_ms = waited_ms
         window_id = PastexApp._window_id(self)
         if window_id is None:
             return
-        _run_in_thread(PastexApp._x11_confirm_hidden_worker, self, window_id)
+        _run_in_thread(
+            PastexApp._x11_confirm_hidden_worker, self, window_id, waited_ms
+        )
 
-    def _x11_confirm_hidden_worker(self, window_id: str) -> None:
-        if not x11_window_unmapped(window_id):
+    def _x11_confirm_hidden_worker(self, window_id: str, waited_ms: int = 0) -> None:
+        """Decide the hide from the X focus, falling back to the WM's own state.
+
+        ``wm state`` (Tk) and ``WM_STATE`` are updated late or not at all by
+        some window managers -- Muffin reported ``normal`` for the whole budget
+        on a real Cinnamon session -- while the input focus has to leave an
+        iconified window. That makes the focus the honest signal.
+        """
+        if self.__dict__.get("_window_unmapped", False):
             return
+        moved = x11_focus_moved(window_id, WM_CLASS)
+        self._focus_state = {True: "moved", False: "ours"}.get(moved, "unknown")
+        if moved is None:
+            # No xdotool or no focus information: ask the window manager.
+            if x11_wm_state(window_id) != "iconic" and not x11_window_unmapped(
+                window_id
+            ):
+                return
+            signal = "wm-state"
+        elif not moved:
+            return
+        else:
+            signal = "focus"
         self._window_unmapped = True
+        self._hide_signal = signal
+        log_error(
+            f"[paste] the window left the foreground after {waited_ms} ms "
+            f"({signal}); sending Ctrl+V"
+        )
         try:
             self.after(0, PastexApp._send_paste_now, self)
         except TK_ERRORS:  # pragma: no cover - shutting down
@@ -2082,10 +2117,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             except TK_ERRORS:  # pragma: no cover - interpreter already gone
                 pass
             PastexApp._force_minimize(self)
-        if waited >= MINIMIZE_X11_CHECK_AT_MS and not self.__dict__.get(
-            "_x11_hide_checked"
+        checked = self.__dict__.get("_x11_checked_ms")
+        if waited >= MINIMIZE_FOCUS_CHECK_AT_MS and (
+            checked is None or waited - checked >= MINIMIZE_FOCUS_RETRY_MS
         ):
-            PastexApp._x11_confirm_hidden(self)
+            # Keep asking: the window manager animates the minimize, so the
+            # focus can move a couple of hundred milliseconds after the click.
+            PastexApp._x11_confirm_hidden(self, waited)
         try:
             # Bind explicitly: Tk calls the callback with no arguments, and
             # test doubles have no instance method to pass along.
@@ -2154,9 +2192,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             PastexApp._restore_window(self)
             self.status_var.set(PASTE_MANUAL_HINT)
             log_error(
-                f"[paste] the window did not hide after {MINIMIZE_WAIT_MS} ms "
-                f"(tk={PastexApp._window_state(self) or '?'}, "
-                f"unmapped={self.__dict__.get('_window_unmapped', False)}, "
+                f"[paste] the window stayed in the foreground for "
+                f"{MINIMIZE_WAIT_MS} ms (tk={PastexApp._window_state(self) or '?'}, "
+                f"focus={self.__dict__.get('_focus_state', 'unknown')}, "
                 f"forced={self.__dict__.get('_force_minimize_tried', False)}, "
                 f"zoomed={self.__dict__.get('_paste_was_zoomed', False)}); Ctrl+V "
                 "was not sent; the window was restored and the text stays on the "
@@ -2916,10 +2954,21 @@ def clipboard_status() -> list[str]:
     lines.append(f"✅ copied through {result.tool}")
 
     back = read_text_from_clipboard()
+    if back is not None and back.strip() != probe:
+        # xclip forks an owner that takes the selection over; right after the
+        # copy a read can come back empty on a busy session. Ask again before
+        # claiming the clipboard is wrong.
+        time.sleep(0.15)
+        back = read_text_from_clipboard()
     if back is None:
         lines.append("(read-back not supported — install wl-paste or xclip)")
     elif back.strip() == probe:
         lines.append("✅ read-back matches")
+    elif not back.strip():
+        lines.append(
+            "⚠️ read-back is empty — the clipboard owner may have exited; "
+            "run `pastex --test-paste --ctrl-v` to check what Ctrl+V pastes"
+        )
     else:
         lines.append(f"⚠️ read-back differs: {back.strip()[:40]!r}")
     return lines

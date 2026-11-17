@@ -144,16 +144,24 @@ def detect_session() -> str:
     return "unknown"
 
 
+def _window_id(value: str) -> str | None:
+    """Normalise a window id (``41943043``, ``0x2800003``) to hex form."""
+    text = (value or "").strip().splitlines()[-1].strip() if value else ""
+    try:
+        return hex(int(text, 0))
+    except (TypeError, ValueError):
+        return None
+
+
 def x11_window_unmapped(
     window_id: str, runner: Runner = _default_runner
 ) -> bool | None:
-    """Ask the X server whether ``window_id`` is off screen.
+    """Ask the X server whether ``window_id`` is unmapped.
 
-    Tk reports ``wm state`` from the WM_STATE property, which some window
-    managers update late (or not at all while they animate a minimize). The
-    X server itself knows whether the window is mapped, so this is the
-    authoritative answer: True = unmapped, False = still viewable, None =
-    the query failed (no xwininfo, bad id, no display).
+    Only ``IsUnMapped`` is an answer: with a reparenting window manager
+    (Muffin, Mutter, Xfwm) the *client* window stays ``IsViewable`` while the
+    WM unmaps the frame around it, so a viewable client proves nothing.
+    True = unmapped, None = cannot tell (or no xwininfo).
     """
     try:
         proc = _run_with_timeout(
@@ -166,9 +174,96 @@ def x11_window_unmapped(
     out = f"{getattr(proc, 'stdout', '') or ''}"
     if "Map State: IsUnMapped" in out:
         return True
-    if "Map State: IsViewable" in out or "Map State: IsUnviewable" in out:
-        return False
     return None
+
+
+def x11_wm_state(
+    window_id: str, runner: Runner = _default_runner
+) -> str | None:
+    """Return the WM_STATE the window manager published: 'iconic' or 'normal'."""
+    if shutil.which("xprop") is None:
+        return None
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xprop", "-id", str(window_id), "-notype", "WM_STATE"],
+            X11_QUERY_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    out = f"{getattr(proc, 'stdout', '') or ''}".lower()
+    if "iconic" in out:
+        return "iconic"
+    if "normal" in out:
+        return "normal"
+    return None
+
+
+def x11_active_window(runner: Runner = _default_runner) -> str | None:
+    """Return the window that currently has the input focus, in hex form."""
+    for cmd in (
+        ["xdotool", "getactivewindow"],
+        ["xdotool", "getwindowfocus"],
+    ):
+        try:
+            proc = _run_with_timeout(runner, cmd, X11_QUERY_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if getattr(proc, "returncode", 1) == 0:
+            window = _window_id(getattr(proc, "stdout", "") or "")
+            if window is not None:
+                return window
+    return None
+
+
+def x11_window_class(
+    window_id: str, runner: Runner = _default_runner
+) -> str | None:
+    """Return the last WM_CLASS name of a window ('Pastex' for Pastex)."""
+    if shutil.which("xprop") is None:
+        return None
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xprop", "-id", str(window_id), "-notype", "WM_CLASS"],
+            X11_QUERY_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    out = f"{getattr(proc, 'stdout', '') or ''}"
+    if "=" not in out:
+        return None
+    names = [part.strip().strip('"') for part in out.split("=", 1)[1].split(",")]
+    return names[-1] if names else None
+
+
+def x11_focus_moved(
+    window_id: str,
+    wm_class: str = "Pastex",
+    runner: Runner = _default_runner,
+) -> bool | None:
+    """Say whether the X input focus has left Pastex's window.
+
+    Hiding the window exists for one reason: the focus has to go back to the
+    previous application before Ctrl+V is sent. Asking the X server who holds
+    the focus answers that directly, while ``wm state`` and ``WM_STATE`` can
+    lag behind (or never be updated by the window manager). True = the focus is
+    elsewhere, False = Pastex still has it, None = cannot tell.
+    """
+    active = x11_active_window(runner)
+    if active is None:
+        return None
+    own = _window_id(window_id)
+    if own is not None and active == own:
+        return False
+    if wm_class and x11_window_class(active, runner) == wm_class:
+        # A frame or a child of ours still holds the focus.
+        return False
+    return True
 
 
 def force_minimize_window(window_id: str, runner: Runner = _default_runner) -> bool:
