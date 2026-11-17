@@ -522,10 +522,10 @@ MUTATIONS = [
     (
         "a missing user unit leaves ydotool without a daemon",
         "pastex/clipboard.py",
-        "    binary = shutil.which(\"ydotoold\")\n    if binary is None or not os.path.exists(binary):",
-        "    binary = None\n    if binary is None or not os.path.exists(binary):",
+        '    binary = shutil.which("ydotoold")\n    if binary is None:',
+        "    binary = None\n    if binary is None:",
         [
-            "tests/test_clipboard.py::test_ensure_ydotoold_starts_its_own_daemon_when_the_unit_is_missing",
+            "tests/test_clipboard.py::test_the_private_daemon_is_started_with_our_own_socket",
         ],
     ),
     (

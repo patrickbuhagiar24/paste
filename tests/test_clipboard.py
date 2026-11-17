@@ -656,50 +656,60 @@ def test_the_abort_flag_is_checked_between_the_two_ydotool_syntaxes(monkeypatch)
     assert len(calls) == 1  # percobaan kedua dilewati
 
 
-def test_ensure_ydotoold_starts_its_own_daemon_when_the_unit_is_missing(monkeypatch, tmp_path):
+def test_the_private_daemon_is_started_with_our_own_socket(monkeypatch, tmp_path):
     """Ubuntu mengirim ydotoold.service sebagai unit sistem: kita mulai sendiri."""
-    socket = tmp_path / "pastex-ydotool.sock"
     spawned = []
 
-    class FakeProc:
-        def __init__(self, cmd):
-            self.cmd = cmd
+    socket = tmp_path / "pastex-ydotool.sock"
 
     def fake_popen(cmd, **kwargs):
-        spawned.append(cmd)
+        spawned.append((cmd, kwargs))
+        # Daemon sungguhan membuat socket-nya; di sini cukup dibuat manual.
         socket.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotoold")
-    monkeypatch.setattr(
-        clipboard.os.path,
-        "exists",
-        lambda path: str(path) in {"/usr/bin/ydotoold", str(socket)},
-    )
     monkeypatch.setattr(clipboard.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(clipboard, "_ydotoold_socket_paths", lambda: [str(socket)])
-    monkeypatch.setattr(
-        clipboard, "_ydotoold_socket_exists", lambda: socket.exists()
-    )
     monkeypatch.setattr(clipboard, "_runtime_dir", lambda: str(tmp_path))
     monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    monkeypatch.delenv("YDOTOOL_SOCKET", raising=False)
+
+    ok = clipboard._spawn_private_ydotoold()
+
+    assert spawned, "ydotoold harus dijalankan"
+    cmd, kwargs = spawned[0]
+    assert cmd[0] == "/usr/bin/ydotoold"
+    assert "--socket-path" in cmd and str(socket) in cmd
+    assert "--socket-own" in cmd
+    assert kwargs.get("start_new_session") is True
+    # ydotool hanya bicara ke daemon kita kalau YDOTOOL_SOCKET diset.
+    assert clipboard.os.environ["YDOTOOL_SOCKET"] == str(socket)
+    assert ok is True
+    clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
+
+
+def test_ensure_ydotoold_falls_back_to_the_private_daemon(monkeypatch):
+    """Unit pengguna tidak ada, jadi daemon sendiri yang dipakai."""
+    started = []
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: False)
+    monkeypatch.setattr(
+        clipboard,
+        "_spawn_private_ydotoold",
+        lambda: started.append(True) or True,
+    )
 
     ok = clipboard.ensure_ydotoold(runner=lambda cmd, **kw: _mk(count=1))
 
     assert ok is True
-    assert spawned and "--socket-path" in spawned[0]
-    assert clipboard.os.environ["YDOTOOL_SOCKET"] == str(socket)
-    clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
+    assert started == [True]
 
 
 def test_ensure_ydotoold_gives_up_when_no_socket_appears(monkeypatch, tmp_path):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotoold")
-    monkeypatch.setattr(clipboard.os.path, "exists", lambda path: path == "/usr/bin/ydotoold")
     monkeypatch.setattr(clipboard.subprocess, "Popen", lambda cmd, **kw: None)
-    monkeypatch.setattr(clipboard, "_ydotoold_socket_paths", lambda: [str(tmp_path / "x.sock")])
     monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: False)
     monkeypatch.setattr(clipboard, "_runtime_dir", lambda: str(tmp_path))
     monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
-    clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
+    monkeypatch.delenv("YDOTOOL_SOCKET", raising=False)
 
     assert clipboard.ensure_ydotoold(runner=lambda cmd, **kw: _mk(count=1)) is False
     assert "YDOTOOL_SOCKET" not in clipboard.os.environ
@@ -707,11 +717,13 @@ def test_ensure_ydotoold_gives_up_when_no_socket_appears(monkeypatch, tmp_path):
 
 def test_ydotoold_socket_lookup_honours_YDOTOOL_SOCKET(monkeypatch, tmp_path):
     socket = tmp_path / "custom.sock"
-    seen = []
     monkeypatch.setenv("YDOTOOL_SOCKET", str(socket))
-    monkeypatch.setattr(
-        clipboard.os.path, "exists", lambda path: seen.append(path) or path == str(socket)
-    )
+    # No file yet: the lookup must not invent one.
+    assert clipboard._ydotoold_socket_exists() is False
+
+    socket.write_text("", encoding="utf-8")
 
     assert clipboard._ydotoold_socket_exists() is True
-    assert str(socket) in seen
+    assert str(socket) in clipboard._ydotoold_socket_paths()
+
+
