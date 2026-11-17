@@ -220,3 +220,51 @@ def test_helper_activates_the_templates_only_when_called():
     assert helper.count(uinput.RULE_TEMPLATE) >= 1
     assert uinput.UDEV_RULE in helper  # the template is copied to the active path
     assert uinput.GROUP in helper
+
+
+# --- the generated control file must be shell-proof -----------------------
+
+
+def _control_heredoc() -> str:
+    """Return the control heredoc body from scripts/build-deb.sh."""
+    text = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    start = text.index('cat > "$STAGE/DEBIAN/control"')
+    marker = "<<'EOF'\n"
+    body = text.index(marker, start) + len(marker)
+    return text[body : text.index("\nEOF\n", body)]
+
+
+def test_build_deb_control_heredoc_is_quoted():
+    """An unquoted heredoc ran the description through the shell in 1.10.0."""
+    text = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    assert 'cat > "$STAGE/DEBIAN/control" <<\'EOF\'' in text
+    assert 's|@PKG@|$PKG|g' in text
+    assert 's|@VERSION@|$VERSION|g' in text
+    assert 's|@ARCH@|$ARCH|g' in text
+
+
+def test_rendered_control_keeps_the_description_text():
+    """Render the control file the way the script does and check the text."""
+    body = _control_heredoc()
+    rendered = (
+        body.replace("@PKG@", "pastex")
+        .replace("@VERSION@", "1.10.0")
+        .replace("@ARCH@", "all")
+    )
+    assert "Package: pastex" in rendered
+    assert "Version: 1.10.0-1" in rendered
+    description = rendered.split("Description:", 1)[1]
+    assert "pastex --enable-permissions" in description
+    assert "`" not in description
+    assert "$" not in description
+
+
+def test_descriptions_avoid_shell_metacharacters():
+    """Neither metadata source may reintroduce backticks or "$"."""
+    for name, text in (
+        ("debian/control", (ROOT / "debian" / "control").read_text(encoding="utf-8")),
+        ("scripts/build-deb.sh", _control_heredoc()),
+    ):
+        description = text.split("Description:", 1)[1]
+        assert "`" not in description, f"{name} uses a backtick"
+        assert "$" not in description, f"{name} uses a shell variable"

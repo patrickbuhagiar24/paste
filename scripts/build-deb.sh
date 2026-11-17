@@ -49,12 +49,15 @@ install -m 755 debian/postinst "$STAGE/DEBIAN/postinst"
 install -m 755 debian/postrm "$STAGE/DEBIAN/postrm"
 gzip -9 -n "$STAGE/usr/share/doc/$PKG/README.md" 2>/dev/null || true
 
-cat > "$STAGE/DEBIAN/control" <<EOF
-Package: $PKG
-Version: ${VERSION}-1
+# Quoted heredoc on purpose: an unquoted one lets the shell expand backticks and
+# "$" inside the Description, which silently deleted the command text from the
+# published 1.10.0 package. Only the placeholders below are substituted.
+cat > "$STAGE/DEBIAN/control" <<'EOF'
+Package: @PKG@
+Version: @VERSION@-1
 Section: utils
 Priority: optional
-Architecture: $ARCH
+Architecture: @ARCH@
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Conflicts: paste-teks
@@ -73,13 +76,19 @@ Description: One-click desktop text snippet manager for Linux Mint
  .
  Installing the package changes nothing on the system: the optional Wayland
  udev rule, the 'pastex' group and the per-user ydotoold unit ship as inert
- templates under /usr/lib/pastex, and only `pastex --enable-permissions`
+ templates under /usr/lib/pastex, and only pastex --enable-permissions
  installs them.
  .
  Choose a source folder in the GUI. User snippets are stored under
  ~/.local/share/pastex/snippets and can be managed in the GUI.
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF
+
+sed -i \
+  -e "s|@PKG@|$PKG|g" \
+  -e "s|@VERSION@|$VERSION|g" \
+  -e "s|@ARCH@|$ARCH|g" \
+  "$STAGE/DEBIAN/control"
 
 mkdir -p dist
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT"

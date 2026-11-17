@@ -26,7 +26,7 @@ Description: One-click desktop text snippet manager for Linux Mint
  .
  Installing the package changes nothing on the system: the optional Wayland
  udev rule, the 'pastex' group and the per-user ydotoold unit ship as inert
- templates under /usr/lib/pastex, and only `pastex --enable-permissions`
+ templates under /usr/lib/pastex, and only pastex --enable-permissions
  installs them.
  .
  Choose a source folder in the GUI. User snippets are stored under
