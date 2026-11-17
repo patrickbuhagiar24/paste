@@ -343,3 +343,123 @@ def test_wayland_ydotool_success_is_confident(monkeypatch):
     assert result.ok is True
     assert result.tool == "ydotool"
     assert result.confident is True
+
+
+# --- Plans: PATH lookups happen once, not on every click ------------------
+
+
+def test_copy_text_skips_path_lookups_when_a_plan_is_given(monkeypatch):
+    """Plan hasil prewarm menghilangkan shutil.which dari jalur klik."""
+    from pastex import clipboard
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    lookups = []
+
+    def which(name):
+        lookups.append(name)
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(clipboard.shutil, "which", which)
+
+    plan = clipboard.resolve_copy_plan()
+    assert lookups == ["wl-copy", "xclip", "xsel"]
+
+    lookups.clear()
+    captured = []
+    result = clipboard.copy_text("halo", runner=_fake_runner(captured), plan=plan)
+
+    assert result.ok and result.tool == "wl-copy"
+    assert lookups == [], "jalur klik tidak boleh memanggil shutil.which lagi"
+
+
+def test_simulate_paste_skips_path_lookups_when_a_plan_is_given(monkeypatch):
+    from pastex import clipboard
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    lookups = []
+
+    def which(name):
+        lookups.append(name)
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(clipboard.shutil, "which", which)
+    monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda **kw: True)
+
+    plan = clipboard.resolve_paste_plan()
+    lookups.clear()
+    captured = []
+
+    result = clipboard.simulate_paste(runner=_fake_runner(captured), plan=plan)
+
+    assert result.ok and result.tool == "ydotool"
+    assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
+    assert lookups == []
+
+
+def test_plans_keep_only_the_tools_that_exist(monkeypatch):
+    from pastex import clipboard
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(
+        clipboard.shutil, "which", lambda name: "/usr/bin/xsel" if name == "xsel" else None
+    )
+
+    copy_plan = clipboard.resolve_copy_plan()
+    paste_plan = clipboard.resolve_paste_plan()
+
+    assert copy_plan.tool_names() == ["xsel"]
+    assert copy_plan.candidates == [("xsel", ["xsel", "--clipboard", "--input"])]
+    assert paste_plan.candidates == []
+    assert bool(paste_plan) is False
+
+
+def test_prewarm_starts_ydotoold_before_the_first_click(monkeypatch):
+    from pastex import clipboard
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: False)
+    started = []
+    monkeypatch.setattr(
+        clipboard, "ensure_ydotoold", lambda **kwargs: started.append(kwargs) or True
+    )
+
+    copy_plan, paste_plan = clipboard.prewarm()
+
+    assert started == [{}], "ydotoold harus distart di background saat startup"
+    assert copy_plan.tool_names() == ["wl-copy", "xclip", "xsel"]
+    assert paste_plan.tool_names() == ["ydotool"]
+
+
+def test_prewarm_leaves_a_running_ydotoold_alone(monkeypatch):
+    from pastex import clipboard
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: True)
+    started = []
+    monkeypatch.setattr(
+        clipboard, "ensure_ydotoold", lambda **kwargs: started.append(kwargs) or True
+    )
+
+    clipboard.prewarm()
+
+    assert started == []
+
+
+def test_prewarm_never_starts_ydotoold_on_x11(monkeypatch):
+    from pastex import clipboard
+
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    started = []
+    monkeypatch.setattr(
+        clipboard, "ensure_ydotoold", lambda **kwargs: started.append(kwargs) or True
+    )
+
+    copy_plan, paste_plan = clipboard.prewarm()
+
+    assert started == []
+    assert copy_plan.tool_names()[0] == "xclip"
+    assert paste_plan.tool_names() == ["xdotool", "ydotool"]

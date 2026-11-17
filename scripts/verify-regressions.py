@@ -312,9 +312,56 @@ MUTATIONS = [
     (
         "paste waits for the old slow restore delay",
         "pastex/app.py",
-        '    "restore_delay": 0.05,',
+        '    "restore_delay": 0.03,',
         '    "restore_delay": 0.1,',
-        ["tests/test_app.py::test_paste_done_waits_50ms_after_sending_before_restoring"],
+        ["tests/test_app.py::test_paste_done_waits_30ms_after_sending_before_restoring"],
+    ),
+    (
+        "Ctrl+V is sent before the clipboard owns the text",
+        "pastex/app.py",
+        (
+            '        if not self.__dict__.get("_paste_clipboard_ready", True):\n'
+            "            # The window is already hidden but the clipboard tool has not\n"
+            "            # finished yet; _after_copy() calls back here as soon as it has.\n"
+            "            return\n"
+        ),
+        "",
+        ["tests/test_app.py::test_ctrl_v_waits_until_the_clipboard_is_ready"],
+    ),
+    (
+        "the window is only hidden after the copy finishes",
+        "pastex/app.py",
+        (
+            "        self._hide_for_paste()\n"
+            "        self._send_paste()\n"
+            "        _run_in_thread(self._paste_worker, text)"
+        ),
+        "        _run_in_thread(self._paste_worker, text)",
+        ["tests/test_app.py::test_paste_hides_the_window_before_copying"],
+    ),
+    (
+        "startup no longer prewarms the clipboard tools",
+        "pastex/app.py",
+        (
+            "        # Resolve clipboard and paste tools off the click path.\n"
+            "        self._prewarm_paste()"
+        ),
+        "        pass  # prewarm dihilangkan",
+        ["tests/test_app.py::test_startup_schedules_the_prewarm"],
+    ),
+    (
+        "paste ignores the prewarmed tool plans",
+        "pastex/app.py",
+        'copy_text(text, plan=getattr(self, "_copy_plan", None))',
+        "copy_text(text)",
+        ["tests/test_app.py::test_paste_passes_the_prewarmed_plans"],
+    ),
+    (
+        "prewarm starts ydotoold outside a Wayland session",
+        "pastex/clipboard.py",
+        'if session == "wayland" and paste_plan and not _ydotoold_socket_exists():',
+        "if paste_plan and not _ydotoold_socket_exists():",
+        ["tests/test_clipboard.py::test_prewarm_never_starts_ydotoold_on_x11"],
     ),
     (
         "unmap no longer triggers the paste",

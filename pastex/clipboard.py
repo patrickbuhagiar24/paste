@@ -29,6 +29,13 @@ _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 # Clipboard read timeout for explicit diagnostics; never let a read hang the GUI.
 READ_TIMEOUT = 0.3
 
+# Ctrl+V as ydotool >= 1.0 keycodes: 29=LeftCtrl, 47=V.
+# Order: press Ctrl, press V, release V, release Ctrl.
+KEYCODE_CTRL_V = ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
+# ydotool 0.1.x uses key names; try those as a fallback.
+NAME_CTRL_V = ["ydotool", "key", "ctrl+v"]
+XDOTOOL_CTRL_V = ["xdotool", "key", "ctrl+v"]
+
 # Clipboard reader tools used for explicit diagnostics.
 READER_TOOLS = ("wl-paste", "xclip", "xsel")
 
@@ -108,26 +115,127 @@ def available_tools() -> dict[str, bool]:
     }
 
 
-def copy_text(text: str, runner: Runner = _default_runner) -> ClipboardResult:
-    """Copy text to the system clipboard and return the tool that succeeded."""
-    session = detect_session()
+def _copy_candidates(session: str) -> list[tuple[str, list[str]]]:
+    """Clipboard tools to try, best first for the detected session."""
     # Prefer Wayland tools in Wayland sessions and X11 tools otherwise.
     if session == "wayland":
-        candidates = [
+        return [
             ("wl-copy", ["wl-copy"]),
             ("xclip", ["xclip", "-selection", "clipboard"]),
             ("xsel", ["xsel", "--clipboard", "--input"]),
         ]
-    else:
-        candidates = [
-            ("xclip", ["xclip", "-selection", "clipboard"]),
-            ("xsel", ["xsel", "--clipboard", "--input"]),
-            ("wl-copy", ["wl-copy"]),
+    return [
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("xsel", ["xsel", "--clipboard", "--input"]),
+        ("wl-copy", ["wl-copy"]),
+    ]
+
+
+def _paste_candidates(session: str) -> list[tuple[str, list[str]]]:
+    """Keystroke tools to try, best first for the detected session.
+
+    ydotool >= 1.0 (breaking change): ``key`` accepts only keycodes, written
+    as <keycode>:<press/release>. Linux: 29=LeftCtrl, 47=V, 42=Shift.
+    """
+    if session == "wayland":
+        # Do not use xdotool on Wayland: it uses XTEST and only reaches
+        # XWayland windows, while still returning exit code 0 even when
+        # native Wayland apps receive nothing.
+        return [
+            ("ydotool", KEYCODE_CTRL_V),
+            ("ydotool", NAME_CTRL_V),
         ]
+    return [
+        ("xdotool", [*XDOTOOL_CTRL_V]),
+        ("ydotool", KEYCODE_CTRL_V),
+        ("ydotool", NAME_CTRL_V),
+    ]
+
+
+@dataclass
+class ToolPlan:
+    """Tool candidates that exist on this machine, resolved against PATH once.
+
+    ``shutil.which`` stats every PATH entry, so resolving the same candidates
+    on every click cost a few milliseconds that a click-to-paste cannot
+    afford. :func:`prewarm` resolves both plans in a background thread at
+    startup and the GUI passes them back in through ``plan=``.
+    """
+
+    session: str
+    candidates: list[tuple[str, list[str]]]
+
+    def __bool__(self) -> bool:
+        return bool(self.candidates)
+
+    def tool_names(self) -> list[str]:
+        """Unique tool names in priority order, for logging."""
+        names: list[str] = []
+        for name, _cmd in self.candidates:
+            if name not in names:
+                names.append(name)
+        return names
+
+
+def resolve_copy_plan(session: str | None = None) -> ToolPlan:
+    """Resolve the available clipboard tools now, so pastes can skip PATH."""
+    session = session or detect_session()
+    return ToolPlan(
+        session,
+        [
+            (name, cmd)
+            for name, cmd in _copy_candidates(session)
+            if shutil.which(cmd[0]) is not None
+        ],
+    )
+
+
+def resolve_paste_plan(session: str | None = None) -> ToolPlan:
+    """Resolve the available keystroke tools now, so pastes can skip PATH."""
+    session = session or detect_session()
+    return ToolPlan(
+        session,
+        [
+            (name, [*cmd])
+            for name, cmd in _paste_candidates(session)
+            if shutil.which(cmd[0]) is not None
+        ],
+    )
+
+
+def prewarm() -> tuple[ToolPlan, ToolPlan]:
+    """Resolve both plans and start ydotool's daemon before the first click.
+
+    Without this, the first click pays for the PATH lookups and, on Wayland,
+    for ``ydotoold`` being started by the failure path of the first
+    ``ydotool key`` (which sleeps in 50 ms steps while the socket appears).
+    Intended to run in a background thread; the current session is detected
+    here rather than passed in.
+    """
+    session = detect_session()
+    copy_plan = resolve_copy_plan(session)
+    paste_plan = resolve_paste_plan(session)
+    if session == "wayland" and paste_plan and not _ydotoold_socket_exists():
+        try:
+            ensure_ydotoold()
+        except (OSError, subprocess.SubprocessError):  # pragma: no cover - daemon optional
+            pass
+    return copy_plan, paste_plan
+
+
+def copy_text(
+    text: str,
+    runner: Runner = _default_runner,
+    plan: ToolPlan | None = None,
+) -> ClipboardResult:
+    """Copy text to the system clipboard and return the tool that succeeded.
+
+    Pass a pre-resolved ``plan`` to skip the PATH lookups on the click path;
+    without one the candidates are resolved here, as before.
+    """
+    plan = plan or resolve_copy_plan()
     errors: list[str] = []
-    for name, cmd in candidates:
-        if shutil.which(cmd[0]) is None:
-            continue
+    for name, cmd in plan.candidates:
         try:
             proc = runner(cmd, input=text)
             if proc.returncode == 0:
@@ -255,35 +363,20 @@ def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
         return PasteResult(ok=False, tool="", message=str(exc))
 
 
-def simulate_paste(runner: Runner = _default_runner) -> PasteResult:
-    """Send Ctrl+V to the focused application."""
-    session = detect_session()
-    # ydotool >= 1.0 (breaking change): `key` accepts only keycodes, written
-    # as <keycode>:<press/release>. Linux: 29=LeftCtrl, 47=V, 42=Shift.
-    # Urutan: tekan Ctrl, tekan V, lepas V, lepas Ctrl.
-    KEYCODE_CTRL_V = ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
-    # ydotool 0.1.x uses key names; try those as a fallback.
-    NAME_CTRL_V = ["ydotool", "key", "ctrl+v"]
-    if session == "wayland":
-        # Do not use xdotool on Wayland: it uses XTEST and only reaches
-        # XWayland windows, while still returning exit code 0 even when
-        # native Wayland apps receive nothing. Claiming success in this case
-        # would be misleading and make diagnosis harder.
-        candidates = [
-            ("ydotool", KEYCODE_CTRL_V),
-            ("ydotool", NAME_CTRL_V),
-        ]
-    else:
-        candidates = [
-            ("xdotool", ["xdotool", "key", "ctrl+v"]),
-            ("ydotool", KEYCODE_CTRL_V),
-            ("ydotool", NAME_CTRL_V),
-        ]
+def simulate_paste(
+    runner: Runner = _default_runner,
+    plan: ToolPlan | None = None,
+) -> PasteResult:
+    """Send Ctrl+V to the focused application.
+
+    Pass a pre-resolved ``plan`` to skip the PATH lookups on the click path;
+    without one the candidates are resolved here, as before.
+    """
+    plan = plan or resolve_paste_plan()
+    session = plan.session
     errors: list[str] = []
     daemon_tried = False
-    for name, cmd in candidates:
-        if shutil.which(cmd[0]) is None:
-            continue
+    for name, cmd in plan.candidates:
         try:
             proc = runner(cmd)
             # ydotool needs its daemon; if it fails, start it once and retry.

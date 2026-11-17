@@ -1,3 +1,18 @@
+pastex (1.6.11-1) unstable; urgency=medium
+
+  * Overlap the two slow halves of a paste: the window is minimized right away
+    while the clipboard is filled in a worker thread, and Ctrl+V is released as
+    soon as both are done, so a click no longer waits for copy then hide.
+  * Resolve the clipboard and paste tools once in a background thread at
+    startup instead of on every click, and start ydotoold then instead of from
+    the failure path of the first ydotool key.
+  * Restore the window after 30 ms instead of 50 ms; the text is already pasted
+    at that point, so this only shortens how long the icon stays away.
+  * Document the verified keyring location (/etc/apt/keyrings), the expected
+    fingerprint, and the world-readable requirement in the install steps.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 12:00:00 +0000
+
 pastex (1.6.10-1) unstable; urgency=medium
 
   * Publish an APT index page without links to files the archive does not
