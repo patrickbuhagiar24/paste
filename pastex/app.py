@@ -30,6 +30,7 @@ from .clipboard import (
     read_text_from_clipboard,
     set_clipboard_owner,
     simulate_paste,
+    verify_copy as verify_clipboard,
     window_manager,
     x11_focus_moved,
     x11_window_unmapped,
@@ -1882,16 +1883,92 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         log_error(
             f"[paste] copy: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
         )
+        empty = False
+        if result.ok:
+            # xclip exits 0 as soon as it handed the text to the process it
+            # forks, so a successful exit does not prove the clipboard holds
+            # anything: verify it before Ctrl+V pastes an empty clipboard.
+            empty = not PastexApp._clipboard_holds(self, text, result)
+            if empty:
+                result = ClipboardResult(
+                    ok=False,
+                    tool=result.tool,
+                    message=(
+                        f"{result.tool} reported success, but the clipboard does "
+                        "not hold the text"
+                    ),
+                )
         if not result.ok:
             # Resolve the tools again next time: a missing tool may have been
             # installed while Pastex was running.
             self._copy_plan = None
-        self.after(0, self._after_copy, result)
+        self.after(0, self._after_copy, result, empty)
 
-    def _after_copy(self, result) -> None:
+    def _clipboard_holds(self, text: str, result) -> bool:
+        """Verify the copy, taking the selection over in Tk when it was lost.
+
+        Runs in the copy worker. When the tool claims success but the clipboard
+        is empty or different, Tk itself claims the CLIPBOARD selection: no
+        subprocess can lose it then, which is what makes Ctrl+V paste something
+        on a machine where xclip's forked owner does not survive.
+        """
+        try:
+            verdict = verify_clipboard(text)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not block
+            log_error(f"[paste] clipboard verification failed: {exc}")
+            return True
+        if verdict is True:
+            log_error(f"[paste] clipboard verified through {result.tool}")
+            return True
+        if verdict is None:
+            log_error(
+                f"[paste] the clipboard cannot be read back; trusting {result.tool}"
+            )
+            return True
+        log_error(
+            f"[paste] {result.tool} reported success but the clipboard is empty "
+            "or different; claiming the selection with Tk"
+        )
+        if PastexApp._claim_the_clipboard(self, text):
+            if verify_clipboard(text) is not False:
+                log_error("[paste] the clipboard now holds the text (Tk owner)")
+                return True
+        log_error(
+            "[paste] the clipboard still does not hold the text; Ctrl+V would "
+            "paste nothing"
+        )
+        return False
+
+    def _claim_the_clipboard(self, text: str) -> bool:
+        """Make Tk own the CLIPBOARD selection (Tk calls must run on its thread)."""
+        outcome: dict[str, bool] = {}
+        done = threading.Event()
+
+        def claim() -> None:
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(text)
+                # Tk takes the selection when it next idles.
+                self.update_idletasks()
+                outcome["ok"] = True
+            except Exception:  # noqa: BLE001 - never kill the copy worker
+                outcome["ok"] = False
+            finally:
+                done.set()
+
+        try:
+            self.after(0, claim)
+        except TK_ERRORS:
+            return False
+        return done.wait(1.5) and outcome.get("ok", False)
+
+    def _after_copy(self, result, clipboard_empty: bool = False) -> None:
         """Release the armed Ctrl+V once the clipboard holds the copied text."""
         if not result.ok:
-            self._paste_failed(result.message)
+            if clipboard_empty:
+                self._copy_failed(result.message)
+            else:
+                self._paste_failed(result.message)
             return
         self._paste_clipboard_ready = True
         if self.__dict__.get("_paste_started", False):
@@ -2286,6 +2363,31 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.status_var.set(
             f"⚡ {result.message} If the text does not appear, press Ctrl+V."
         )
+
+    def _copy_failed(self, message: str) -> None:
+        """Report a clipboard that does not hold the text (nothing to paste).
+
+        Unlike :meth:`_paste_failed` this must not tell the user to press
+        Ctrl+V: the clipboard is empty, so pasting would insert nothing.
+        """
+        self._paste_finished = True
+        self._pasting = False
+        self._paste_pending = False
+        self._paste_clipboard_ready = False
+        self._paste_ready = False
+        PastexApp._cancel_paste_send_timeout(self)
+        PastexApp._cancel_paste_watchdog(self)
+        self.status_var.set(f"Could not copy to the clipboard: {message}")
+        PastexApp._restore_window(self)
+        try:
+            messagebox.showerror(
+                "Could not copy to the clipboard",
+                f"{message}.\n\nNothing was pasted. Check the clipboard with "
+                "`pastex --check` and see the log at "
+                f"{ERROR_LOG}.",
+            )
+        except TK_ERRORS:  # pragma: no cover - no display in tests
+            pass
 
     def _paste_failed(self, message: str) -> None:
         self._paste_finished = True
@@ -2966,8 +3068,9 @@ def clipboard_status() -> list[str]:
         lines.append("✅ read-back matches")
     elif not back.strip():
         lines.append(
-            "⚠️ read-back is empty — the clipboard owner may have exited; "
-            "run `pastex --test-paste --ctrl-v` to check what Ctrl+V pastes"
+            "⚠️ read-back is empty — the tool accepted the text but serves "
+            "nothing. Pastex now claims the clipboard itself before Ctrl+V, so "
+            "a click still pastes; please report this log"
         )
     else:
         lines.append(f"⚠️ read-back differs: {back.strip()[:40]!r}")

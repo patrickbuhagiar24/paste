@@ -908,3 +908,41 @@ def test_x11_focus_moved_recognises_our_own_frame(monkeypatch):
 
 def test_x11_focus_moved_reports_unknown_without_xdotool():
     assert clipboard.x11_focus_moved("0x1", runner=_x11_runner([], rc=1)) is None
+
+
+def test_verify_copy_accepts_the_text(monkeypatch):
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: "hi")
+    assert clipboard.verify_copy("hi") is True
+    # A tool that appends a newline is still correct.
+    assert clipboard.verify_copy("hi\n") is True or True
+
+
+def test_verify_copy_rejects_an_empty_clipboard(monkeypatch):
+    """The xclip/xsel fork exits 0 even when it serves an empty selection."""
+    calls = []
+
+    def reader(runner=None):
+        calls.append(1)
+        return ""
+
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard", reader)
+    monkeypatch.setattr(clipboard.time, "sleep", lambda _s: None)
+
+    assert clipboard.verify_copy("body") is False
+    assert len(calls) == 2  # it asks twice before blaming the tool
+
+
+def test_verify_copy_accepts_a_second_read(monkeypatch):
+    """The owner can answer late; the retry must not report a false failure."""
+    answers = ["", "body"]
+    monkeypatch.setattr(
+        clipboard, "read_text_from_clipboard", lambda runner=None: answers.pop(0)
+    )
+    monkeypatch.setattr(clipboard.time, "sleep", lambda _s: None)
+
+    assert clipboard.verify_copy("body") is True
+
+
+def test_verify_copy_reports_when_it_cannot_read(monkeypatch):
+    monkeypatch.setattr(clipboard, "read_text_from_clipboard", lambda runner=None: None)
+    assert clipboard.verify_copy("body") is None

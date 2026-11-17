@@ -1019,6 +1019,62 @@ MUTATIONS = [
         '    if "iconic" in out:\n        return "normal"',
         ["tests/test_clipboard.py::test_x11_wm_state_reads_the_published_state"],
     ),
+    (
+        "an empty clipboard is trusted because the tool exited 0",
+        "pastex/app.py",
+        "            empty = not PastexApp._clipboard_holds(self, text, result)",
+        "            empty = False",
+        ["tests/test_app.py::test_the_worker_marks_an_empty_clipboard"],
+    ),
+    (
+        "the copy is never verified at all",
+        "pastex/app.py",
+        "            verdict = verify_clipboard(text)",
+        "            verdict = True",
+        ["tests/test_app.py::test_an_empty_clipboard_is_claimed_by_tk"],
+    ),
+    (
+        "an empty clipboard is not claimed with tk",
+        "pastex/app.py",
+        "        if PastexApp._claim_the_clipboard(self, text):",
+        "        if False:",
+        ["tests/test_app.py::test_an_empty_clipboard_is_claimed_by_tk"],
+    ),
+    (
+        "an unreadable clipboard blocks the paste",
+        "pastex/app.py",
+        "        if verdict is None:\n            log_error(",
+        "        if False:\n            log_error(",
+        ["tests/test_app.py::test_an_unreadable_clipboard_keeps_the_tool_result"],
+    ),
+    (
+        "an empty clipboard still gets the press-ctrl-v hint",
+        "pastex/app.py",
+        "            if clipboard_empty:\n                self._copy_failed(result.message)",
+        "            if False:\n                self._copy_failed(result.message)",
+        ["tests/test_app.py::test_an_empty_clipboard_does_not_send_ctrl_v"],
+    ),
+    (
+        "a clipboard that cannot be read counts as wrong",
+        "pastex/clipboard.py",
+        "    back = read_text_from_clipboard(runner=runner)\n    if back is None:\n        return None",
+        "    back = read_text_from_clipboard(runner=runner)\n    if back is None:\n        return False",
+        ["tests/test_clipboard.py::test_verify_copy_reports_when_it_cannot_read"],
+    ),
+    (
+        "the clipboard is never compared with the text",
+        "pastex/clipboard.py",
+        "    if _same_text(back, text):\n        return True",
+        "    if True:\n        return True",
+        ["tests/test_clipboard.py::test_verify_copy_rejects_an_empty_clipboard"],
+    ),
+    (
+        "the empty clipboard is never read a second time",
+        "pastex/clipboard.py",
+        "    # The owner may take a moment to answer with the contents it just took over.\n    time.sleep(0.15)",
+        "    # The owner may take a moment to answer with the contents it just took over.\n    return False",
+        ["tests/test_clipboard.py::test_verify_copy_accepts_a_second_read"],
+    ),
 ]
 
 
