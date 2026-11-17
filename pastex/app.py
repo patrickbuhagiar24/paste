@@ -25,15 +25,18 @@ from .clipboard import (
     available_tools,
     copy_text,
     detect_session,
+    force_minimize_window,
     prewarm as prewarm_clipboard,
     read_text_from_clipboard,
     set_clipboard_owner,
     simulate_paste,
+    window_manager,
+    x11_window_unmapped,
 )
 from .index import SnippetIndex
 from .instance import SingleInstance, send_command
 from .picker import open_picker
-from .watcher import DirectoryWatcher
+from .watcher import DirectoryWatcher, last_error as watcher_module_last_error
 from .snippets import (
     Node,
     create_folder,
@@ -93,8 +96,12 @@ FOCUS_SETTLE_MS = 80
 # Cinnamon animates the minimize, so the window can take a few hundred ms to
 # report "iconic". 600 ms keeps three times that headroom; giving up earlier
 # made the code decide "never hidden" and skip Ctrl+V entirely.
-MINIMIZE_WAIT_MS = 600
+MINIMIZE_WAIT_MS = 900
 MINIMIZE_RETRY_MS = 20
+# After this much waiting, ask the X server directly (xwininfo) whether the
+# window is really unmapped; Tk's state can lag a window manager that animates
+# the minimize, and a false "still visible" costs the whole paste.
+MINIMIZE_X11_CHECK_AT_MS = 200
 # Restoring is checked and repeated as well: deiconify() is dropped when it
 # lands while the minimize animation is still running, which left the window
 # minimized for good.
@@ -436,11 +443,17 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             daemon = "running" if uinput.ydotoold_running() else "not running"
         except Exception:  # noqa: BLE001 - diagnostics must never break startup
             daemon = "?"
+        try:
+            wm = window_manager() or "none (nothing can minimize the window)"
+        except Exception:  # noqa: BLE001 - diagnostics must never break startup
+            wm = "?"
         log_error(
             "[paste] ready: "
             f"copy={','.join(copy_plan.tool_names()) or '-'} "
             f"paste={','.join(paste_plan.tool_names()) or '-'} "
-            f"ydotoold={daemon}"
+            f"ydotoold={daemon} wm={wm} "
+            f"session={os.environ.get('XDG_SESSION_TYPE', '-')}/"
+            f"{os.environ.get('XDG_CURRENT_DESKTOP', '-')}"
         )
         if self.__dict__.get("settings", {}).get("clipboard_owner"):
             self._start_clipboard_owner()
@@ -1673,7 +1686,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         watcher = DirectoryWatcher(self.active_roots(), self._on_folders_changed)
         self.watcher = watcher
         if not watcher.start():
-            log_error("[index] inotify unavailable; manual refresh only")
+            log_error("[index] no folder watcher available; manual refresh only")
+        elif getattr(watcher, "poll_only", False):
+            log_error(
+                "[index] inotify unavailable "
+                f"(errno {watcher_module_last_error()}); polling the folders "
+                "every 2 s instead"
+            )
 
     def _on_folders_changed(self) -> None:
         """Watcher thread callback: repaint on the Tk thread."""
@@ -1751,6 +1770,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._paste_hide_widget = hide
         # Only restore the window that was actually hidden.
         self._paste_restore_window = hide is None
+        # Reset the hide diagnostics of the previous attempt.
+        self._window_unmapped = False
+        self._x11_hide_checked = False
+        self._force_minimize_tried = False
         if hide is None and not PastexApp._paste_tools_ready(self):
             # A previous click (or startup) already showed that Ctrl+V cannot
             # be sent here, so there is nothing to minimize for: copy the text
@@ -1905,6 +1928,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.deiconify()
         except TK_ERRORS:  # test doubles without Tk, or interpreter gone
             return
+        if self.__dict__.pop("_paste_was_zoomed", False):
+            # Bring back the maximized window the user had before the paste.
+            try:
+                self.state("zoomed")
+            except TK_ERRORS:
+                pass
         self._restore_waited_ms = 0
         PastexApp._wait_for_the_restore(self)
 
@@ -1955,6 +1984,18 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._minimize_waited_ms = 0
         self._rehide_done = False
         self._hide_logged = False
+        # Tk/X11 drops iconify() for a maximized ("zoomed") window, and the
+        # window then never hides at all. Unzoom first and put the zoom back
+        # when the window is restored.
+        self._paste_was_zoomed = False
+        try:
+            if str(self.state()) == "zoomed":
+                self._paste_was_zoomed = True
+                log_error("[paste] unmaximizing before the paste; the zoom is restored")
+                self.state("normal")
+                self.update_idletasks()
+        except TK_ERRORS:
+            self._paste_was_zoomed = False
         try:
             self.iconify()
             self.update_idletasks()
@@ -1967,7 +2008,15 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return True
 
     def _paste_window_hidden(self) -> bool:
-        """True when the window is off screen (or nothing can be read)."""
+        """True when the window is off screen (or nothing can be read).
+
+        A picker popup is destroyed instead of minimized and the main window
+        stays visible on purpose, so its state must not be consulted there.
+        """
+        if self.__dict__.get("_paste_hide_widget") is not None:
+            return True
+        if self.__dict__.get("_window_unmapped", False):
+            return True
         try:
             state = str(self.state())
         except TK_ERRORS:  # test doubles: keep the previous behaviour
@@ -1979,6 +2028,43 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return True
         return False
 
+    def _window_id(self) -> str | None:
+        """Return the X11 window id as a hex string, if Tk can provide it."""
+        try:
+            return hex(int(self.winfo_id()))
+        except TK_ERRORS:
+            return None
+
+    def _force_minimize(self) -> None:
+        """Ask the window manager to minimize, for when iconify() is ignored."""
+        if self.__dict__.get("_force_minimize_tried", False):
+            return
+        self._force_minimize_tried = True
+        window_id = PastexApp._window_id(self)
+        if window_id is None:
+            return
+        log_error(
+            f"[paste] iconify() did not hide the window; asking the WM ({window_id})"
+        )
+        _run_in_thread(force_minimize_window, window_id)
+
+    def _x11_confirm_hidden(self) -> None:
+        """Ask the X server whether the window is unmapped after all."""
+        self._x11_hide_checked = True
+        window_id = PastexApp._window_id(self)
+        if window_id is None:
+            return
+        _run_in_thread(PastexApp._x11_confirm_hidden_worker, self, window_id)
+
+    def _x11_confirm_hidden_worker(self, window_id: str) -> None:
+        if not x11_window_unmapped(window_id):
+            return
+        self._window_unmapped = True
+        try:
+            self.after(0, PastexApp._send_paste_now, self)
+        except TK_ERRORS:  # pragma: no cover - shutting down
+            pass
+
     def _wait_for_the_window_hiding(self) -> bool:
         """Retry the minimize check; True when another attempt was scheduled."""
         waited = self.__dict__.get("_minimize_waited_ms", 0)
@@ -1987,12 +2073,19 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         waited += MINIMIZE_RETRY_MS
         self._minimize_waited_ms = waited
         if waited >= MINIMIZE_REHIDE_AT_MS and not self.__dict__.get("_rehide_done"):
-            # Ask once more: some compositors ignore the first request.
+            # Ask once more: some window managers ignore the first request, and
+            # a maximized window ignores iconify() outright. xdotool sends the
+            # EWMH request directly, which the WM cannot mistake for a Tk no-op.
             self._rehide_done = True
             try:
                 self.iconify()
             except TK_ERRORS:  # pragma: no cover - interpreter already gone
                 pass
+            PastexApp._force_minimize(self)
+        if waited >= MINIMIZE_X11_CHECK_AT_MS and not self.__dict__.get(
+            "_x11_hide_checked"
+        ):
+            PastexApp._x11_confirm_hidden(self)
         try:
             # Bind explicitly: Tk calls the callback with no arguments, and
             # test doubles have no instance method to pass along.
@@ -2061,9 +2154,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             PastexApp._restore_window(self)
             self.status_var.set(PASTE_MANUAL_HINT)
             log_error(
-                f"[paste] the window was still visible after {MINIMIZE_WAIT_MS} ms "
-                f"(state={PastexApp._window_state(self) or '?'}); Ctrl+V was not "
-                "sent; the window was restored and the text stays on the clipboard"
+                f"[paste] the window did not hide after {MINIMIZE_WAIT_MS} ms "
+                f"(tk={PastexApp._window_state(self) or '?'}, "
+                f"unmapped={self.__dict__.get('_window_unmapped', False)}, "
+                f"forced={self.__dict__.get('_force_minimize_tried', False)}, "
+                f"zoomed={self.__dict__.get('_paste_was_zoomed', False)}); Ctrl+V "
+                "was not sent; the window was restored and the text stays on the "
+                "clipboard"
             )
             return
         self._paste_pending = False
@@ -2865,6 +2962,18 @@ def run_check(roots: list[Path]) -> int:
     except OSError:  # pragma: no cover - read-only runtime dir
         running = False
     print(f"Running instance: {'yes (later launches reuse it)' if running else 'no'}")
+    from .clipboard import window_manager  # noqa: PLC0415 - local import
+
+    wm = window_manager()
+    print(
+        "Window manager: "
+        + (
+            f"{wm} (minimizes the window for the paste)"
+            if wm
+            else "none — nothing can minimize the window, so automatic paste "
+            "cannot be used (start a desktop session with a window manager)"
+        )
+    )
     from . import wlowner  # noqa: PLC0415 - optional feature
 
     owner_wanted = bool(load_settings().get("clipboard_owner"))

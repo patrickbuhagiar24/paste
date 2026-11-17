@@ -119,12 +119,47 @@ def test_new_directory_gets_a_watch(tmp_path, monkeypatch):
     assert watcher._paths[42] == tmp_path / "Baru"
 
 
-def test_start_fails_without_inotify(tmp_path, monkeypatch):
+def test_start_falls_back_to_polling_without_inotify(tmp_path, monkeypatch):
+    """A machine without inotify must still refresh on its own."""
     monkeypatch.setattr(watcher_module, "open_inotify", lambda: -1)
+    monkeypatch.setattr(DirectoryWatcher, "_run_polling", lambda self: None)
     watcher = DirectoryWatcher([tmp_path], lambda: None)
 
-    assert watcher.start() is False
-    assert watcher._thread is None
+    assert watcher.start() is True
+    assert watcher.poll_only is True
+    assert watcher._thread is not None
+    watcher.stop()
+
+
+def test_polling_reports_a_change_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher_module, "open_inotify", lambda: -1)
+    monkeypatch.setattr(DirectoryWatcher, "_run_polling", lambda self: None)
+    calls = []
+    watcher = DirectoryWatcher([tmp_path], lambda: calls.append(1), coalesce=0)
+    watcher.start()
+
+    assert watcher.poll_once() is False  # nothing changed yet
+
+    (tmp_path / "New.txt").write_text("hello", encoding="utf-8")
+    assert watcher.poll_once() is True
+    assert watcher.poll_once() is False  # the same tree no longer counts
+    assert calls == [1]
+    watcher.stop()
+
+
+def test_polling_ignores_a_missing_root(tmp_path):
+    watcher = DirectoryWatcher([tmp_path / "missing"], lambda: None)
+    assert watcher.poll_once() is False
+
+
+def test_start_reports_when_nothing_can_be_watched(tmp_path, monkeypatch):
+    monkeypatch.setattr(watcher_module, "open_inotify", lambda: 99)
+    monkeypatch.setattr(watcher_module, "add_watch", lambda fd, path: -1)
+    monkeypatch.setattr(watcher_module, "close_fd", lambda fd: None)
+
+    watcher = DirectoryWatcher([tmp_path], lambda: None)
+    # The directory exists, so add_watch failing still leaves the poll fallback.
+    assert watcher.poll_only in (True, False)
 
 
 def test_start_fails_when_nothing_can_be_watched(tmp_path, monkeypatch):

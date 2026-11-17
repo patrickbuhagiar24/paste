@@ -727,3 +727,110 @@ def test_ydotoold_socket_lookup_honours_YDOTOOL_SOCKET(monkeypatch, tmp_path):
     assert str(socket) in clipboard._ydotoold_socket_paths()
 
 
+
+
+def _x11_runner(captured, *, rc=0, out=""):
+    """Record the command and answer like a CompletedProcess."""
+
+    def run(cmd, **kwargs):
+        captured.append(list(cmd))
+        return SimpleNamespace(returncode=rc, stdout=out, stderr="")
+
+    return run
+
+
+def test_x11_window_unmapped_reads_the_x_server_answer(monkeypatch):
+    """Tk's state can lag; the X server says whether the window is mapped."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
+
+    captured = []
+    runner = _x11_runner(captured, out="  Map State: IsUnMapped\n")
+    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is True
+    assert captured == [["xwininfo", "-id", "0x400001"]]
+
+    runner = _x11_runner([], out="  Map State: IsViewable\n")
+    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is False
+
+    runner = _x11_runner([], out="  Map State: IsUnviewable\n")
+    assert clipboard.x11_window_unmapped("0x400001", runner=runner) is False
+
+
+def test_x11_window_unmapped_reports_unknown_when_the_query_fails():
+    assert clipboard.x11_window_unmapped("0x1", runner=_x11_runner([], rc=1)) is None
+    assert (
+        clipboard.x11_window_unmapped("0x1", runner=_x11_runner([], out="garbage"))
+        is None
+    )
+
+    def missing(cmd, **kwargs):
+        raise FileNotFoundError("xwininfo")
+
+    assert clipboard.x11_window_unmapped("0x1", runner=missing) is None
+
+
+def test_force_minimize_asks_the_window_manager_synchronously(monkeypatch):
+    """EWMH minimize works where Tk's iconify() is silently dropped."""
+    monkeypatch.setattr(
+        clipboard.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+    captured = []
+    assert (
+        clipboard.force_minimize_window(
+            "0x400001", runner=_x11_runner(captured)
+        )
+        is True
+    )
+    # --sync makes xdotool wait until the WM really unmapped the window.
+    assert captured == [["xdotool", "windowminimize", "--sync", "0x400001"]]
+
+    assert (
+        clipboard.force_minimize_window("0x1", runner=_x11_runner([], rc=1))
+        is False
+    )
+
+
+def test_force_minimize_needs_xdotool(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    called = []
+    assert clipboard.force_minimize_window("0x1", runner=_x11_runner(called)) is False
+    assert called == []
+
+
+def test_window_manager_names_the_wm(monkeypatch):
+    monkeypatch.setattr(
+        clipboard.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+    captured = []
+    runner = _x11_runner(
+        captured, out="Name: Mutter (Muffin)\nClass: N/A\nPID: 1234\n"
+    )
+
+    assert clipboard.window_manager(runner=runner) == "Mutter (Muffin)"
+    assert captured == [["wmctrl", "-m"]]
+
+
+def test_window_manager_reports_none_without_a_wm(monkeypatch):
+    """No WM means iconify() cannot work, which the log must make obvious."""
+
+    def which(name):
+        return f"/usr/bin/{name}" if name == "xprop" else None
+
+    monkeypatch.setattr(clipboard.shutil, "which", which)
+    captured = []
+    runner = _x11_runner(
+        captured, out='_NET_SUPPORTING_WM_CHECK:  not found.\n'
+    )
+
+    assert clipboard.window_manager(runner=runner) is None
+    assert captured == [["xprop", "-root", "-notype", "_NET_SUPPORTING_WM_CHECK"]]
+
+
+def test_window_manager_falls_back_to_xprop(monkeypatch):
+    def which(name):
+        return f"/usr/bin/{name}" if name == "xprop" else None
+
+    monkeypatch.setattr(clipboard.shutil, "which", which)
+    runner = _x11_runner([], out="_NET_SUPPORTING_WM_CHECK: window id # 0x2e00003\n")
+
+    # The property exists, so a WM is there even though wmctrl is missing.
+    assert clipboard.window_manager(runner=runner) == "unnamed"

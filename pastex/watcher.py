@@ -5,9 +5,11 @@ the source folders means a file dropped in by an editor, a sync client, or
 ``pastex --copy`` shows up immediately, and the tree no longer has to be
 re-walked "just in case".
 
-Everything here is best-effort: if inotify is unavailable (or the platform is
-not Linux) :func:`open_inotify` returns ``-1`` and the caller keeps working
-with the manual refresh. No exception ever escapes the watcher thread.
+Everything here is best-effort: if inotify is unavailable (a low
+``fs.inotify.max_user_instances``, a container, or a non-Linux platform)
+:func:`open_inotify` returns ``-1`` and the watcher falls back to polling the
+folders every couple of seconds, so the tree still refreshes by itself. No
+exception ever escapes the watcher thread.
 """
 
 from __future__ import annotations
@@ -51,6 +53,15 @@ WATCH_MASK = (
 
 _EVENT_HEADER = struct.Struct("iIII")
 
+# Polling fallback when inotify cannot be opened.
+POLL_INTERVAL = 2.0
+_LAST_ERRNO = 0
+
+
+def last_error() -> int:
+    """Return the errno of the last failed :func:`open_inotify` (0 if none)."""
+    return _LAST_ERRNO
+
 try:  # Linux only; elsewhere the watcher simply stays unavailable.
     _LIBC = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
 except OSError:  # pragma: no cover - depends on the platform
@@ -64,11 +75,15 @@ def available() -> bool:
 
 def open_inotify() -> int:
     """Open a non-blocking inotify descriptor, or return -1."""
+    global _LAST_ERRNO
     if not available():  # pragma: no cover - platform dependent
+        _LAST_ERRNO = errno.ENOSYS
         return -1
     fd = _LIBC.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
     if fd < 0:  # pragma: no cover - resource limits
+        _LAST_ERRNO = ctypes.get_errno() or errno.EMFILE
         return -1
+    _LAST_ERRNO = 0
     return int(fd)
 
 
@@ -104,6 +119,27 @@ def parse_events(data: bytes) -> list[tuple[int, int, str]]:
     return events
 
 
+def tree_signature(roots) -> tuple:
+    """Return (path, mtime, size, is_dir) for everything under ``roots``.
+
+    Used by the polling fallback: cheap to compute, and different as soon as a
+    file is created, edited, renamed or deleted.
+    """
+    items: list[tuple[str, int, int, bool]] = []
+    for root in roots:
+        try:
+            paths = sorted(Path(root).rglob("*"))
+        except OSError:  # pragma: no cover - vanished mid-walk
+            continue
+        for path in paths:
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            items.append((str(path), info.st_mtime_ns, info.st_size, path.is_dir()))
+    return tuple(items)
+
+
 class DirectoryWatcher:
     """Watch snippet folders in a daemon thread and call ``on_change``.
 
@@ -131,15 +167,29 @@ class DirectoryWatcher:
         self._last: float | None = None
         self._paths: dict[int, Path] = {}
         self.changes = 0
+        # True when inotify was unavailable and the folders are polled instead.
+        self.poll_only = False
+        self._signature: tuple | None = None
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> bool:
-        """Start watching; return False when nothing could be watched."""
+        """Start watching; return False when nothing could be watched.
+
+        Without inotify the watcher polls instead, so a machine where the
+        inotify instances are exhausted still refreshes the tree by itself.
+        """
         if self._thread is not None:
             return True
         self._fd = open_inotify()
         if self._fd < 0:
-            return False
+            self.poll_only = True
+            self._signature = tree_signature(self.roots)
+            self._thread = threading.Thread(
+                target=self._run_polling, name="pastex-watcher-poll", daemon=True
+            )
+            self._thread.start()
+            return True
+        self.poll_only = False
         self._watch_tree()
         if not self._paths:
             self.stop()
@@ -159,6 +209,8 @@ class DirectoryWatcher:
         close_fd(self._fd)
         self._fd = -1
         self._paths.clear()
+        self.poll_only = False
+        self._signature = None
 
     def set_roots(self, roots) -> bool:
         """Point the watcher at new folders; return True when it restarted."""
@@ -211,6 +263,29 @@ class DirectoryWatcher:
             if not data:
                 continue
             self.handle_events(parse_events(data))
+
+    def _run_polling(self) -> None:
+        """Fallback loop: compare the tree signature every ``POLL_INTERVAL``."""
+        while not self._stop.is_set():
+            if self._stop.wait(POLL_INTERVAL):
+                return
+            try:
+                self.poll_once()
+            except Exception:  # noqa: BLE001 - a watcher must never die
+                continue
+
+    def poll_once(self) -> bool:
+        """Rescan once; return True when something changed."""
+        signature = tree_signature(self.roots)
+        if self._signature is None:
+            # First scan: record the baseline instead of crying wolf.
+            self._signature = signature
+            return False
+        if signature == self._signature:
+            return False
+        self._signature = signature
+        self._trigger()
+        return True
 
     def handle_events(self, events) -> None:
         """React to parsed inotify events (public so it can be unit-tested)."""
