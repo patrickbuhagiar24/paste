@@ -1,3 +1,16 @@
+pastex (1.8.0-1) unstable; urgency=medium
+
+  * Optional clipboard owner: own the Wayland selection through
+    ext-data-control-v1 instead of spawning wl-copy for every copy. Opt in
+    with "pastex --wayland-clipboard"; the choice is saved. The protocol layer
+    runs in a separate helper process, only becomes the copy path after a
+    nonce/read-back self-test, and every failure (no data-control support, no
+    read-back, helper exit) falls back to wl-copy for that copy and then for
+    the session. Copies that use it no longer pay the 5-20 ms fork/connect of
+    wl-copy. "--check" reports whether it is available and enabled.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 18:00:00 +0000
+
 pastex (1.7.2-1) unstable; urgency=medium
 
   * Repaint the tree by patching rows instead of deleting and rebuilding it:

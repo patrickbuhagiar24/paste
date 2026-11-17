@@ -89,6 +89,31 @@ request to it and exit immediately instead of starting a second Tk process
 (~200-400 ms) or a second dock entry. `--dir` sessions stay separate on
 purpose, because they use different folders.
 
+### Faster copies (experimental, opt-in)
+
+Every copy normally runs `wl-copy`, which forks, connects to the compositor and
+daemonises: 5-20 ms on the click path. Pastex can instead own the Wayland
+selection itself through the data-control protocol
+(`ext-data-control-v1`, GNOME 47+/mutter), which turns a copy into a couple of
+marshalled messages:
+
+```bash
+pastex --wayland-clipboard      # opt in; remembered in settings.json
+```
+
+The owner runs in a **separate helper process**
+(`python3 /usr/share/pastex/pastex/wlserver.py --serve`), so a compositor or
+protocol problem cannot take the window down with it. Pastex
+only starts using it after a self-test: it copies a nonce, reads it back with
+`wl-paste`, and puts your previous clipboard back. If anything fails - no
+data-control support, no read-back, the helper exiting - Pastex keeps using
+`wl-copy` for the rest of the session, and every individual copy falls back too.
+`--check` shows whether it is available, wanted, or off.
+
+It is off by default because the protocol layer cannot be exercised in CI: it
+needs a live compositor. Turn it on and check the log if you want the last few
+milliseconds; nothing breaks if it does not work here.
+
 ### Live refresh
 
 The snippet folders are watched with inotify, so files added, edited, renamed or
@@ -113,6 +138,8 @@ refresh. If inotify is unavailable, `F5` still works as before.
 - One running instance with instant re-launch, inotify-driven live refresh,
   and repaints that update rows in place.
 - Rootless Ctrl+V fallback through the desktop portal when `ydotool` is unavailable.
+- Optional (experimental) clipboard owner that copies without spawning a
+  process, with a self-test and automatic fallback.
 
 ## Clipboard and permissions
 
@@ -157,6 +184,8 @@ pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE] [--pick]
 - `--enable-permissions`: request permission setup through `pkexec`.
 - `--test-paste [--ctrl-v]`: run a paste diagnostic.
 - `--pick`: show the snippet picker (reuses a running Pastex).
+- `--wayland-clipboard`: own the Wayland selection from a helper process
+  (experimental; falls back to `wl-copy`).
 
 ## Data locations
 
