@@ -2102,3 +2102,180 @@ def test_a_click_with_a_hidden_window_arms_the_watchdog(monkeypatch):
     PastexApp._paste_text(app, "body")
 
     assert scheduled == [app_module.PASTE_DEADLINE_MS]
+
+# --- The window must never be left minimized ------------------------------
+
+
+def _restore_app(states, *, tk_ready=True, restore=True):
+    """Test double that answers state() and records iconify/deiconify/lift."""
+    calls = []
+    scheduled = []
+
+    class FakeApp:
+        def __init__(self):
+            if tk_ready:
+                self.tk = object()
+            self._paste_pending = True
+            self._paste_clipboard_ready = True
+            self._paste_restore_window = restore
+            self._paste_finished = False
+            self._pasting = True
+            self.statuses = []
+
+        def state(self):
+            return states.pop(0) if states else "normal"
+
+        def after(self, delay, callback=None):
+            scheduled.append((delay, callback))
+            return f"id-{len(scheduled)}"
+
+        def after_cancel(self, _id):
+            return None
+
+        def iconify(self):
+            calls.append("iconify")
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+        def _paste_sender(self):
+            return None
+
+    app = FakeApp()
+    app.status_var = type("V", (), {"set": staticmethod(app.statuses.append)})()
+    app.scheduled = scheduled
+    app.calls = calls
+    return app
+
+
+def test_the_window_is_restored_when_the_hide_check_gives_up(monkeypatch):
+    """The state read lags the WM: giving up must not leave it minimized."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = _restore_app(["normal"] * 60, tk_ready=False)
+    monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
+
+    PastexApp._send_paste_now(app)
+
+    assert app._paste_finished is True
+    assert app.calls.count("deiconify") == 1
+    assert app.statuses[-1] == app_module.PASTE_MANUAL_HINT
+
+
+def test_a_late_minimize_is_undone_after_the_give_up(monkeypatch):
+    """The window finishes minimizing right after the check gave up."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    # The polling is driven by after(); answer "normal" until the budget is
+    # exhausted, then let the WM report the window as hidden.
+    states = ["normal"] * 60
+    app = _restore_app(states, tk_ready=True)
+    monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
+
+    PastexApp._send_paste_now(app)
+    assert app.calls.count("deiconify") == 0  # still polling, nothing decided
+
+    steps = 0
+    while app.scheduled and not app._paste_finished:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 80:  # pragma: no cover - safety net
+            break
+
+    assert app._paste_finished is True
+    assert app.calls.count("deiconify") == 1  # the give-up restored it
+
+    # The window finishes minimizing right now, so the restore check sees it.
+    states.insert(0, "iconic")
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+
+    assert app.calls.count("deiconify") == 2
+
+
+def test_the_restore_is_repeated_until_the_window_is_back():
+    """Cinnamon drops deiconify() that lands during the minimize animation."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    app = _restore_app(["iconic", "iconic", "normal"])
+    result = PasteResult(ok=True, tool="xdotool", message="Paste sent.")
+
+    PastexApp._finish_paste(app, result)
+    assert app.calls.count("deiconify") == 1
+    assert app.scheduled, "a restore check must be scheduled"
+
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+
+    assert app.calls.count("deiconify") == 3
+    assert app._restore_waited_ms >= 2 * app_module.RESTORE_RETRY_MS
+
+
+def test_the_restore_stops_once_the_window_is_visible():
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    app = _restore_app(["normal"])
+    result = PasteResult(ok=True, tool="xdotool", message="Paste sent.")
+
+    PastexApp._finish_paste(app, result)
+    assert app.calls.count("deiconify") == 1
+
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+
+    assert app.calls.count("deiconify") == 1
+
+
+def test_the_restore_gives_up_after_the_wait_budget():
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    app = _restore_app(["iconic"] * 400)
+    PastexApp._finish_paste(app, PasteResult(ok=True, tool="xdotool", message="ok"))
+
+    steps = 0
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 100:  # pragma: no cover - safety net
+            break
+
+    assert steps <= app_module.RESTORE_WAIT_MS // app_module.RESTORE_RETRY_MS + 1
+
+
+def test_the_minimize_wait_covers_a_cinnamon_minimize_animation():
+    from pastex import app as app_module
+
+    assert app_module.MINIMIZE_WAIT_MS >= 600
+    assert app_module.RESTORE_WAIT_MS >= 1000
+
+
+def test_a_late_copy_result_does_not_overwrite_a_running_paste():
+    """The <Unmap> signal can release the send before the copy reports back."""
+    from pastex.app import PastexApp
+    from pastex.clipboard import ClipboardResult
+
+    app = _restore_app(["normal"])
+    app._paste_pending = False
+    app._paste_started = True
+
+    PastexApp._after_copy(app, ClipboardResult(ok=True, tool="xclip"))
+
+    assert app._pasting is True
+    assert app.statuses == []
+    assert app._paste_clipboard_ready is True

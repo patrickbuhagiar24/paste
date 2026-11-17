@@ -90,8 +90,16 @@ FOCUS_SETTLE_MS = 80
 # iconify() only *asks* the window manager to minimize; the window is still
 # reported as "normal" for a while (see the 1.8.1 log line "did not minimize
 # (state=normal)"), so the check is retried instead of taken once.
-MINIMIZE_WAIT_MS = 300
+# Cinnamon animates the minimize, so the window can take a few hundred ms to
+# report "iconic". 600 ms keeps three times that headroom; giving up earlier
+# made the code decide "never hidden" and skip Ctrl+V entirely.
+MINIMIZE_WAIT_MS = 600
 MINIMIZE_RETRY_MS = 20
+# Restoring is checked and repeated as well: deiconify() is dropped when it
+# lands while the minimize animation is still running, which left the window
+# minimized for good.
+RESTORE_WAIT_MS = 1200
+RESTORE_RETRY_MS = 60
 # Some compositors need a second request before they hide the window.
 MINIMIZE_REHIDE_AT_MS = 120
 
@@ -1728,6 +1736,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         """
         self._pasting = True
         self._paste_finished = False
+        # True once the sender has been launched for this attempt, so a late
+        # copy result does not mistake a running paste for a skipped one.
+        self._paste_started = False
         # Cleared so the watchdog can abandon a paste that stalls; the sender
         # checks it between tools and before the portal.
         self._paste_aborted = False
@@ -1853,6 +1864,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._paste_failed(result.message)
             return
         self._paste_clipboard_ready = True
+        if self.__dict__.get("_paste_started", False):
+            # The <Unmap> signal already released the send and the sender is
+            # running; it reports back through _paste_done. Touching the status
+            # here used to replace the result with a "press Ctrl+V" hint.
+            return
         if not self.__dict__.get("_paste_pending", False):
             # The window could not be minimized, so no Ctrl+V was armed: keep
             # the icon and let the user paste manually.
@@ -1863,6 +1879,64 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # The window is normally hidden by now (the <Unmap> signal arrives
         # first); this call covers the opposite order and the fallback timer.
         self._send_paste_now()
+
+    def _window_state(self) -> str:
+        """Return the window state as text, tolerating missing Tk support."""
+        try:
+            return str(self.state())
+        except TK_ERRORS:
+            return ""
+
+    def _restore_window(self, *, raise_window: bool = False) -> None:
+        """Bring the window back and confirm that the WM really did it.
+
+        ``deiconify()`` is dropped when it arrives while Cinnamon is still
+        animating the minimize, and the window then stayed minimized for good.
+        The state is re-checked every ``RESTORE_RETRY_MS`` for up to
+        ``RESTORE_WAIT_MS`` and the request is repeated while it still reports
+        "iconic" or "withdrawn".
+        """
+        if raise_window:
+            try:
+                self.lift()
+            except TK_ERRORS:
+                pass
+        try:
+            self.deiconify()
+        except TK_ERRORS:  # test doubles without Tk, or interpreter gone
+            return
+        self._restore_waited_ms = 0
+        PastexApp._wait_for_the_restore(self)
+
+    def _wait_for_the_restore(self) -> bool:
+        """Schedule the next restore check; True when one was scheduled."""
+        waited = self.__dict__.get("_restore_waited_ms", 0)
+        if waited >= RESTORE_WAIT_MS or not PastexApp._tk_ready(self):
+            return False
+        try:
+            self._restore_check_id = self.after(
+                RESTORE_RETRY_MS, lambda app=self: PastexApp._restore_check(app)
+            )
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            return False
+        return True
+
+    def _restore_check(self) -> None:
+        """Repeat deiconify() while the window is still reported as hidden."""
+        self._restore_check_id = None
+        waited = self.__dict__.get("_restore_waited_ms", 0) + RESTORE_RETRY_MS
+        self._restore_waited_ms = waited
+        if PastexApp._window_state(self) not in {"iconic", "withdrawn"}:
+            return
+        log_error(
+            "[paste] the window manager kept the window hidden; "
+            f"restoring again ({waited} ms)"
+        )
+        try:
+            self.deiconify()
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            return
+        PastexApp._wait_for_the_restore(self)
 
     def _hide_for_paste(self) -> bool:
         """Minimize Pastex, keeping its panel entry, and report whether it worked.
@@ -1981,13 +2055,19 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._pasting = False
             self._paste_finished = True
             PastexApp._cancel_paste_watchdog(self)
+            # The state read lags the window manager: the window can finish
+            # minimizing right after this check gives up. Ask for it back
+            # instead of leaving it minimized, as 1.10.x did.
+            PastexApp._restore_window(self)
             self.status_var.set(PASTE_MANUAL_HINT)
             log_error(
-                f"[paste] the window was still visible after {MINIMIZE_WAIT_MS} ms;"
-                " Ctrl+V was not sent"
+                f"[paste] the window was still visible after {MINIMIZE_WAIT_MS} ms "
+                f"(state={PastexApp._window_state(self) or '?'}); Ctrl+V was not "
+                "sent; the window was restored and the text stays on the clipboard"
             )
             return
         self._paste_pending = False
+        self._paste_started = True
         # Explicit class call keeps partially-built test doubles working.
         PastexApp._cancel_paste_send_timeout(self)
         _run_in_thread(self._paste_sender)
@@ -2052,7 +2132,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         restore = self.__dict__.get("_paste_restore_window", True)
         self._paste_hide_widget = None
         if restore:
-            self.deiconify()
+            PastexApp._restore_window(self)
         if not result.ok:
             if restore:
                 self.lift()

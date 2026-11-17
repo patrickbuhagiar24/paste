@@ -1,3 +1,27 @@
+pastex (1.10.2-1) unstable; urgency=medium
+
+  * Never leave the window minimized, and stop skipping Ctrl+V on a slow
+    minimize. The hide check gave up after 300 ms, but Cinnamon animates the
+    minimize for a few hundred milliseconds; when the window finished hiding
+    just after the check, Pastex had already decided "never hidden", sent no
+    Ctrl+V and left the window minimized. The check now allows 600 ms.
+  * Restore the window instead of giving up on it. The branch that concluded
+    "the window never hid" did not deiconify anything, so a minimize that
+    completed a moment later was permanent. It now asks for the window back
+    and logs the observed state.
+  * Verify the restore. deiconify() is dropped when it arrives while the
+    minimize animation is still running, which also left the window minimized
+    for good. The state is now re-read every 60 ms for up to 1.2 s and the
+    request is repeated until the window is really back, in every path
+    (success, failure, watchdog deadline and the give-up case).
+  * Do not overwrite a running paste with the manual hint. When the <Unmap>
+    signal released Ctrl+V before the copy worker reported back, the copy
+    result replaced the status with "press Ctrl+V" even though the sender was
+    already running; a _paste_started flag keeps that path quiet.
+  * Seven new tests and three new mutation checks cover the restore path.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 18:00:00 +0000
+
 pastex (1.10.1-1) unstable; urgency=medium
 
   * Fix the package Description that shipped in 1.10.0. The control file is
