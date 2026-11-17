@@ -354,7 +354,7 @@ def _spawn_private_ydotoold() -> bool:
     /dev/uinput, which ``pastex --enable-permissions`` sets up.
     """
     binary = shutil.which("ydotoold")
-    if binary is None or not os.path.exists(binary):
+    if binary is None:
         return False
     runtime = _runtime_dir()
     socket = f"{runtime}/pastex-ydotool.sock"
