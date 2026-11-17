@@ -861,13 +861,9 @@ MUTATIONS = [
     (
         "the restore request is never repeated",
         "pastex/app.py",
-        "        try:\n"
-        "            self.deiconify()\n"
-        "        except TK_ERRORS:  # pragma: no cover - interpreter already gone\n"
-        "            return\n"
-        "        PastexApp._wait_for_the_restore(self)",
-        "        pass",
-        ["tests/test_app.py::test_the_restore_is_repeated_until_the_window_is_back"],
+        "        if waited >= RESTORE_ACTIVATE_AT_MS and not self.__dict__.get(",
+        "        if False and not self.__dict__.get(",
+        ["tests/test_app.py::test_the_window_is_reactivated_when_deiconify_is_dropped"],
     ),
     (
         "a late copy result overwrites a running paste",
@@ -914,8 +910,8 @@ MUTATIONS = [
     (
         "a window without an x11 id still runs the paste",
         "pastex/app.py",
-        "        if window_id is None:\n            return\n        log_error(",
-        "        if window_id is None:\n            window_id = '0x0'\n        log_error(",
+        "        window_id = PastexApp._window_id(self)\n        if window_id is None:\n            return\n        _run_in_thread(",
+        "        window_id = PastexApp._window_id(self)\n        if window_id is None:\n            window_id = '0x0'\n        _run_in_thread(",
         ["tests/test_app.py::test_a_window_without_an_x11_id_still_gives_up_quietly"],
     ),
     (
@@ -1031,14 +1027,14 @@ MUTATIONS = [
         "pastex/app.py",
         "            verdict = verify_clipboard(text)",
         "            verdict = True",
-        ["tests/test_app.py::test_an_empty_clipboard_is_claimed_by_tk"],
+        ["tests/test_app.py::test_an_empty_clipboard_is_reported_even_though_tk_owns_it"],
     ),
     (
         "an empty clipboard is not claimed with tk",
         "pastex/app.py",
-        "        if PastexApp._claim_the_clipboard(self, text):",
+        "        if not claimed and PastexApp._claim_the_clipboard(self, text):",
         "        if False:",
-        ["tests/test_app.py::test_an_empty_clipboard_is_claimed_by_tk"],
+        ["tests/test_app.py::test_a_clipboard_that_stays_empty_blocks_the_paste"],
     ),
     (
         "an unreadable clipboard blocks the paste",
@@ -1071,8 +1067,8 @@ MUTATIONS = [
     (
         "the empty clipboard is never read a second time",
         "pastex/clipboard.py",
-        "    # The owner may take a moment to answer with the contents it just took over.\n    time.sleep(0.15)",
-        "    # The owner may take a moment to answer with the contents it just took over.\n    return False",
+        "    time.sleep(VERIFY_RETRY_SLEEP)",
+        "    return False",
         ["tests/test_clipboard.py::test_verify_copy_accepts_a_second_read"],
     ),
     (
@@ -1085,8 +1081,8 @@ MUTATIONS = [
     (
         "the sender presses ctrl+v even though the text must be typed",
         "pastex/app.py",
-        "            if typing:\n                result = type_text_x11(",
-        "            if False:\n                result = type_text_x11(",
+        "            if typing:\n                typed_at = time.monotonic()",
+        "            if False:\n                typed_at = time.monotonic()",
         ["tests/test_app.py::test_the_sender_types_instead_of_pressing_ctrl_v"],
     ),
     (
@@ -1137,6 +1133,36 @@ MUTATIONS = [
         '    if getattr(proc, "returncode", 1) != 0:\n        detail = ',
         "    if False:\n        detail = ",
         ["tests/test_clipboard.py::test_type_text_x11_reports_a_failing_xdotool"],
+    ),
+    (
+        "the restore stops as soon as the state says normal",
+        "pastex/app.py",
+        '        if state not in {"iconic", "withdrawn"} and waited > RESTORE_REPEAT_MS:',
+        '        if state not in {"iconic", "withdrawn"}:',
+        [
+            "tests/test_app.py::test_the_restore_keeps_asking_even_when_the_state_says_normal",
+        ],
+    ),
+    (
+        "the window manager is never asked to show the window again",
+        "pastex/app.py",
+        "            PastexApp._activate_the_window(self)",
+        "            pass",
+        ["tests/test_app.py::test_the_window_is_reactivated_when_deiconify_is_dropped"],
+    ),
+    (
+        "the clipboard is claimed only after a failed read",
+        "pastex/app.py",
+        "        claimed = PastexApp._claim_the_clipboard(self, text)",
+        "        claimed = False",
+        ["tests/test_app.py::test_the_clipboard_is_claimed_before_it_is_read"],
+    ),
+    (
+        "the window is raised instead of activated",
+        "pastex/clipboard.py",
+        '            ["xdotool", "windowactivate", "--sync", str(window_id)],',
+        '            ["xdotool", "windowraise", str(window_id)],',
+        ["tests/test_clipboard.py::test_activate_window_asks_the_window_manager"],
     ),
 ]
 

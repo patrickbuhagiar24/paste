@@ -2197,7 +2197,7 @@ def test_a_late_minimize_is_undone_after_the_give_up(monkeypatch):
         _delay, callback = app.scheduled.pop(0)
         callback()
 
-    assert app.calls.count("deiconify") == 2
+    assert app.calls.count("deiconify") >= 2  # repeated, not a single ask
 
 
 def test_the_restore_is_repeated_until_the_window_is_back():
@@ -2217,26 +2217,71 @@ def test_the_restore_is_repeated_until_the_window_is_back():
         _delay, callback = app.scheduled.pop(0)
         callback()
 
-    assert app.calls.count("deiconify") == 3
+    # Repeated at least while the state said "iconic" (the repeat window adds
+    # a few more asks; see test_the_restore_keeps_asking_even_when_the_state_says_normal).
+    assert app.calls.count("deiconify") >= 3
     assert app._restore_waited_ms >= 2 * app_module.RESTORE_RETRY_MS
 
 
-def test_the_restore_stops_once_the_window_is_visible():
+def test_the_restore_keeps_asking_even_when_the_state_says_normal():
+    """Muffin reported "normal" for a window it had left minimized.
+
+    Trusting that state cut the repeat loop short after one dropped
+    deiconify(), so the window stayed minimized after a successful paste.
+    The request is now repeated for RESTORE_REPEAT_MS whatever the state says.
+    """
     from pastex import app as app_module
     from pastex.app import PastexApp
     from pastex.clipboard import PasteResult
 
-    app = _restore_app(["normal"])
+    app = _restore_app(["normal"] * 50)
     result = PasteResult(ok=True, tool="xdotool", message="Paste sent.")
 
     PastexApp._finish_paste(app, result)
     assert app.calls.count("deiconify") == 1
 
+    steps = 0
     while app.scheduled:
         _delay, callback = app.scheduled.pop(0)
         callback()
+        steps += 1
+        if steps > 60:  # pragma: no cover - safety net
+            break
 
-    assert app.calls.count("deiconify") == 1
+    repeats = app_module.RESTORE_REPEAT_MS // app_module.RESTORE_RETRY_MS
+    assert app.calls.count("deiconify") >= repeats
+    assert app._restore_waited_ms > app_module.RESTORE_REPEAT_MS
+    # It still stops: the asks are bounded by the repeat window.
+    assert app.calls.count("deiconify") <= repeats + 3
+
+
+def test_the_window_is_reactivated_when_deiconify_is_dropped(monkeypatch):
+    """EWMH activation is the last resort when the WM ignores deiconify()."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    activated = []
+    app = _restore_app(["iconic"] * 50)
+    app.winfo_id = lambda: 41943043  # 0x2800003
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: activated.append((target, args)),
+    )
+
+    PastexApp._finish_paste(app, PasteResult(ok=True, tool="xdotool", message="ok"))
+    steps = 0
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 60:  # pragma: no cover - safety net
+            break
+
+    # Asked exactly once, with the real window id.
+    assert [args for _fn, args in activated] == [("0x2800003",)]
+    assert activated[0][0] is app_module.activate_window
 
 
 def test_the_restore_gives_up_after_the_wait_budget():
@@ -2472,7 +2517,13 @@ def test_the_window_manager_is_asked_when_iconify_is_ignored(monkeypatch):
         for fn, args in threads
         if fn is PastexApp._x11_confirm_hidden_worker
     ]
-    assert checked == [200, 320, 440, 560, 680, 800]
+    assert checked == list(
+        range(
+            app_module.MINIMIZE_FOCUS_CHECK_AT_MS,
+            app_module.MINIMIZE_WAIT_MS,
+            app_module.MINIMIZE_FOCUS_RETRY_MS,
+        )
+    )
 
 
 def test_a_window_without_an_x11_id_still_gives_up_quietly(monkeypatch):
@@ -2635,24 +2686,28 @@ def _clipboard_app(monkeypatch, *, verdicts, claim=True):
     return app, claimed, calls
 
 
-def test_a_verified_clipboard_needs_no_owner(monkeypatch):
+def test_the_clipboard_is_claimed_before_it_is_read(monkeypatch):
+    """Tk owns the selection first: instant, in-process, and it cannot be lost.
+
+    Reading first cost about a second per click on a machine where both
+    clipboard readers are slow, which is why the text appeared late.
+    """
     from pastex.app import PastexApp
 
     app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[True])
     result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
 
     assert PastexApp._clipboard_holds(app, "body", result) is True
-    assert claimed == []  # the tool's copy was real; leave it alone
+    assert claimed == ["clear", "body", "idle"]
 
 
-def test_an_empty_clipboard_is_claimed_by_tk(monkeypatch):
-    """xclip can exit 0 and serve nothing; Tk owning the selection fixes it."""
+def test_an_empty_clipboard_is_reported_even_though_tk_owns_it(monkeypatch):
     from pastex.app import PastexApp
 
-    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False, True])
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False])
     result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
 
-    assert PastexApp._clipboard_holds(app, "body", result) is True
+    assert PastexApp._clipboard_holds(app, "body", result) is False
     assert claimed == ["clear", "body", "idle"]
 
 
@@ -2663,17 +2718,18 @@ def test_an_unreadable_clipboard_keeps_the_tool_result(monkeypatch):
     result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
 
     assert PastexApp._clipboard_holds(app, "body", result) is True
-    assert claimed == []
+    assert claimed == ["clear", "body", "idle"]
 
 
 def test_a_clipboard_that_stays_empty_blocks_the_paste(monkeypatch):
     from pastex.app import PastexApp
 
-    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False, False], claim=False)
+    app, claimed, _calls = _clipboard_app(monkeypatch, verdicts=[False], claim=False)
     result = type("R", (), {"ok": True, "tool": "xclip", "message": ""})()
 
     assert PastexApp._clipboard_holds(app, "body", result) is False
-    assert claimed == ["clear"]
+    # It tried once up front and once more after the failed read.
+    assert claimed == ["clear", "clear"]
 
 
 def test_the_worker_marks_an_empty_clipboard(monkeypatch):

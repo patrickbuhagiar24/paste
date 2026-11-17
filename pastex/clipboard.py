@@ -46,6 +46,8 @@ _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 
 # Clipboard read timeout for explicit diagnostics; never let a read hang the GUI.
 READ_TIMEOUT = 0.3
+# A click must not wait on the clipboard: the verification retries once, briefly.
+VERIFY_RETRY_SLEEP = 0.06
 
 # A keystroke must be quick: if `ydotool key` has not returned by then the
 # daemon is unreachable or wedged, and waiting longer only delays the restore
@@ -266,6 +268,26 @@ def x11_focus_moved(
         # A frame or a child of ours still holds the focus.
         return False
     return True
+
+
+def activate_window(window_id: str, runner: Runner = _default_runner) -> bool:
+    """Raise and un-minimize a window through EWMH with xdotool.
+
+    ``deiconify()`` can be dropped while the window manager animates, and the
+    WM's own ``WM_STATE`` is not reliable enough to notice; asking the window
+    manager to activate the window brings it back on every desktop tested.
+    """
+    if shutil.which("xdotool") is None:
+        return False
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xdotool", "windowactivate", "--sync", str(window_id)],
+            FORCE_MINIMIZE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return getattr(proc, "returncode", 1) == 0
 
 
 def force_minimize_window(window_id: str, runner: Runner = _default_runner) -> bool:
@@ -666,8 +688,9 @@ def verify_copy(text: str, runner: Runner = _default_runner) -> bool | None:
         return None
     if _same_text(back, text):
         return True
-    # The owner may take a moment to answer with the contents it just took over.
-    time.sleep(0.15)
+    # The owner may take a moment to answer with the contents it just took over,
+    # but this runs on the click path: one short retry, no long waits.
+    time.sleep(VERIFY_RETRY_SLEEP)
     back = read_text_from_clipboard(runner=runner)
     if back is None:
         return None

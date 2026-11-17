@@ -1,5 +1,5 @@
 """Pastex, a one-click text snippet manager for Linux Mint (X11 and Wayland)."""
 
-__version__ = "1.10.6"
+__version__ = "1.10.7"
 __app_name__ = "pastex"
 __app_title__ = "Pastex"
