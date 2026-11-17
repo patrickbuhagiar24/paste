@@ -1,3 +1,20 @@
+pastex (1.8.2-1) unstable; urgency=medium
+
+  * Fix one-click paste doing nothing on GNOME. The log said "window manager
+    did not minimize (state=normal)", but iconify() only *asks* the compositor:
+    the window is still reported as "normal" for a few milliseconds, so Pastex
+    concluded the minimize had failed and copied the text without ever sending
+    Ctrl+V. The state is now polled in 20 ms steps for up to 300 ms, the
+    minimize request is repeated once at 120 ms for compositors that ignore
+    the first one, and the <Unmap> signal still sends Ctrl+V as soon as the
+    window really hides. Only a window that never hides keeps the manual
+    Ctrl+V hint.
+  * Report the daemon in the startup line: "siap: salin=... tempel=...
+    ydotoold=jalan|tidak-jalan", so a missing ydotoold is visible before the
+    first click instead of only after it.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 17 Nov 2026 13:00:00 +0000
+
 pastex (1.8.1-1) unstable; urgency=medium
 
   * Never leave the window minimized when Ctrl+V cannot be delivered. A click

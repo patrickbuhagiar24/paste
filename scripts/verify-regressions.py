@@ -329,23 +329,33 @@ MUTATIONS = [
         ["tests/test_app.py::test_hide_for_paste_minimizes_instead_of_unmapping"],
     ),
     (
-        "a refusing window manager withdraws the window again",
+        "a hidden window is no longer recognized",
         "pastex/app.py",
-        (
-            '        if state not in {"iconic", "withdrawn"}:\n'
-            "            log_error(\n"
-            '                f"[paste] window manager did not minimize (state={state}); "\n'
-            '                "the window stays visible"\n'
-            "            )\n"
-            "            return False\n"
-        ),
-        (
-            '        if state not in {"iconic", "withdrawn"}:\n'
-            "            self.withdraw()\n"
-            "            return True\n"
-        ),
+        '        if state in {"iconic", "withdrawn"}:\n            if not self.__dict__.get("_hide_logged", False):',
+        '        if False:\n            if not self.__dict__.get("_hide_logged", False):',
+        ["tests/test_app.py::test_the_hide_check_is_polled_until_the_compositor_answers"],
+    ),
+    (
+        "the minimize check is taken once instead of polled",
+        "pastex/app.py",
+        "        if waited >= MINIMIZE_WAIT_MS or not PastexApp._tk_ready(self):\n            return False",
+        "        if True:\n            return False",
+        ["tests/test_app.py::test_the_hide_check_is_polled_until_the_compositor_answers"],
+    ),
+    (
+        "Ctrl+V is sent into a window that never hid",
+        "pastex/app.py",
+        "        if not PastexApp._paste_window_hidden(self):",
+        "        if False:",
+        ["tests/test_app.py::test_a_window_that_never_hides_keeps_ctrl_v_unsent"],
+    ),
+    (
+        "the ignored minimize request is never repeated",
+        "pastex/app.py",
+        "            self._rehide_done = True\n            try:\n                self.iconify()",
+        "            self._rehide_done = True\n            try:\n                pass",
         [
-            "tests/test_app.py::test_hide_for_paste_keeps_the_window_when_minimize_is_refused"
+            "tests/test_app.py::test_the_minimize_request_is_repeated_when_the_first_one_is_ignored"
         ],
     ),
     (
