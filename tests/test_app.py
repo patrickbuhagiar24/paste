@@ -181,6 +181,7 @@ def test_paste_hides_the_window_before_copying(monkeypatch):
 
         def _hide_for_paste(self):
             calls.append(("hide",))
+            return True
 
         def _send_paste(self):
             calls.append(("arm",))
@@ -211,6 +212,11 @@ def test_after_copy_releases_the_armed_paste():
     calls = []
 
     class FakeApp:
+        def __init__(self):
+            # An instance attribute on purpose: _after_copy() reads __dict__ so
+            # partially-built test doubles keep working.
+            self._paste_pending = True
+
         def _send_paste_now(self):
             calls.append(("send_now", self._paste_clipboard_ready))
 
@@ -515,6 +521,7 @@ def test_hide_for_paste_minimizes_instead_of_unmapping():
     calls = []
 
     class FakeApp:
+        # No withdraw() at all: calling it would raise and fail this test.
         def iconify(self):
             calls.append("iconify")
 
@@ -524,16 +531,12 @@ def test_hide_for_paste_minimizes_instead_of_unmapping():
         def state(self):
             return "iconic"
 
-        def withdraw(self):
-            calls.append("withdraw")
-
-    PastexApp._hide_for_paste(FakeApp())
-
+    assert PastexApp._hide_for_paste(FakeApp()) is True
     assert calls == ["iconify", "update"]
-    assert "withdraw" not in calls
 
 
-def test_hide_for_paste_falls_back_to_withdraw_when_minimize_is_refused():
+def test_hide_for_paste_keeps_the_window_when_minimize_is_refused():
+    """A refusing window manager leaves the window visible; no unmapping."""
     from pastex.app import PastexApp
 
     calls = []
@@ -548,15 +551,11 @@ def test_hide_for_paste_falls_back_to_withdraw_when_minimize_is_refused():
         def state(self):
             return "normal"
 
-        def withdraw(self):
-            calls.append("withdraw")
-
-    PastexApp._hide_for_paste(FakeApp())
-
-    assert calls[-1] == "withdraw"
+    assert PastexApp._hide_for_paste(FakeApp()) is False
+    assert calls == ["iconify", "update"]
 
 
-def test_hide_for_paste_falls_back_to_withdraw_when_iconify_fails():
+def test_hide_for_paste_keeps_the_window_when_iconify_fails():
     from pastex.app import PastexApp
 
     calls = []
@@ -565,12 +564,17 @@ def test_hide_for_paste_falls_back_to_withdraw_when_iconify_fails():
         def iconify(self):
             raise AttributeError("no display")
 
-        def withdraw(self):
-            calls.append("withdraw")
+    assert PastexApp._hide_for_paste(FakeApp()) is False
+    assert calls == []
 
-    PastexApp._hide_for_paste(FakeApp())
 
-    assert calls == ["withdraw"]
+def test_the_window_is_never_unmapped():
+    """The dock icon must never disappear, so withdraw() is gone for good."""
+    from pastex import app as app_module
+
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+
+    assert "self.withdraw()" not in source
 
 
 def test_send_paste_sends_immediately_when_window_unmaps(monkeypatch):
@@ -922,3 +926,80 @@ def test_startup_schedules_the_prewarm():
     assert "def _prewarm_paste(" in source
     assert "self._prewarm_paste()" in source
     assert "prewarm as prewarm_clipboard" in source
+
+
+def test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized(monkeypatch):
+    """Minimize gagal: ikon dipertahankan, Ctrl+V tidak dikirim, ada petunjuk."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    statuses = []
+
+    class FakePath:
+        def is_dir(self):
+            return False
+
+    class FakeApp:
+        _pasting = False
+
+        def __init__(self):
+            self.status_var = type(
+                "V", (), {"set": staticmethod(statuses.append)}
+            )()
+            self._paste_clipboard_ready = True
+
+        def selected_path(self):
+            return FakePath()
+
+        def _hide_for_paste(self):
+            calls.append(("hide",))
+            return False
+
+        def _send_paste(self):
+            calls.append("arm")
+
+        def _paste_worker(self, text):
+            calls.append(("copy", text))
+
+    app = FakeApp()
+    monkeypatch.setattr(app_module, "read_text", lambda _path: "isi")
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: calls.append(("start", target.__name__, *args)),
+    )
+
+    PastexApp.do_paste(app)
+
+    assert calls == [("hide",), ("start", "_paste_worker", "isi")]
+    assert "arm" not in calls, "Ctrl+V tidak boleh diarm bila window masih tampil"
+    assert app._paste_clipboard_ready is False
+
+
+def test_finished_copy_without_an_armed_send_shows_the_manual_hint():
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    statuses = []
+
+    class FakeApp:
+        def __init__(self):
+            self._pasting = True
+            self._paste_clipboard_ready = False
+            self.status_var = type(
+                "V", (), {"set": staticmethod(statuses.append)}
+            )()
+
+        def _send_paste_now(self):  # pragma: no cover - must not be reached
+            raise AssertionError("Ctrl+V tidak boleh dikirim")
+
+        def _paste_failed(self, message):  # pragma: no cover
+            raise AssertionError("copy berhasil")
+
+    app = FakeApp()
+    PastexApp._after_copy(app, ClipboardResultLike(True))
+
+    assert app._pasting is False
+    assert statuses[-1] == app_module.PASTE_MANUAL_HINT
+    assert "press Ctrl+V" in app_module.PASTE_MANUAL_HINT

@@ -81,6 +81,10 @@ ICON_NAME = APP_ID
 # after Pastex hides itself, before Ctrl+V is sent.
 FOCUS_SETTLE_MS = 80
 
+# Shown when the window could not be minimized: the text is on the
+# clipboard, but Pastex keeps focus so the synthetic Ctrl+V is skipped.
+PASTE_MANUAL_HINT = "📋 Text copied — press Ctrl+V in the target app."
+
 
 def log_error(message: str) -> None:
     """Append an error message to ~/.config/pastex/error.log for diagnostics."""
@@ -1435,7 +1439,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
           1. Minimize the window right away; minimizing keeps the dock entry,
              and the window manager then needs a few milliseconds to hand
-             focus back to the previous application.
+             focus back to the previous application. The window is never
+             unmapped, so the icon cannot disappear.
           2. Copy the text in a worker thread at the same time: the clipboard
              tool only has to own the selection, not the focus.
           3. Send Ctrl+V as soon as both are done. The ``<Unmap>`` signal
@@ -1458,10 +1463,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._pasting = True
         self.status_var.set("Preparing to paste...")
         # Ctrl+V may only be sent once the clipboard owns the text, so the
-        # send stays armed until _after_copy() reports success.
+        # send stays armed until _after_copy() reports success. When the
+        # window manager refuses to minimize nothing is armed: keeping the
+        # dock icon matters more than pasting, and Ctrl+V would land in Pastex.
         self._paste_clipboard_ready = False
-        self._hide_for_paste()
-        self._send_paste()
+        if self._hide_for_paste():
+            self._send_paste()
         _run_in_thread(self._paste_worker, text)
 
     def _paste_worker(self, text: str) -> None:
@@ -1483,41 +1490,49 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._paste_failed(result.message)
             return
         self._paste_clipboard_ready = True
+        if not self.__dict__.get("_paste_pending", False):
+            # The window could not be minimized, so no Ctrl+V was armed: keep
+            # the icon and let the user paste manually.
+            self._pasting = False
+            self.status_var.set(PASTE_MANUAL_HINT)
+            log_error("[paste] kept the window visible; Ctrl+V not sent")
+            return
         # The window is normally hidden by now (the <Unmap> signal arrives
         # first); this call covers the opposite order and the fallback timer.
         self._send_paste_now()
 
-    def _hide_for_paste(self) -> None:
-        """Take Pastex out of the way while keeping its dock entry alive.
+    def _hide_for_paste(self) -> bool:
+        """Minimize Pastex, keeping its dock entry, and report whether it worked.
 
         ``withdraw()`` unmaps the only window, so GNOME drops an unpinned app
         from the dock and only shows it again once a click makes the window
-        active — which looked like the icon vanishing on one click and coming
-        back on the next. Minimizing keeps the window mapped, so the dock
-        entry survives while focus returns to the previous application.
+        active — the icon appeared to vanish on one click and come back on the
+        next. Minimizing keeps the window mapped, so the dock entry survives
+        while focus returns to the previous application, and it is the only
+        thing done here: when the window manager refuses to minimize, the
+        window simply stays visible and the caller skips the synthetic Ctrl+V
+        instead of unmapping it.
+
+        Returns True when the window is hidden and the paste may go ahead.
         """
         try:
             self.iconify()
             self.update_idletasks()
         except TK_ERRORS:
-            try:
-                self.withdraw()
-            except TK_ERRORS:  # pragma: no cover - window already gone
-                pass
-            return
+            log_error("[paste] minimize failed; the window stays visible")
+            return False
         try:
             state = str(self.state())
         except TK_ERRORS:  # pragma: no cover - state unavailable in test doubles
             state = "iconic"
         if state not in {"iconic", "withdrawn"}:
-            # The window manager refused to minimize: fall back to withdrawing
-            # so the target application still receives Ctrl+V.
-            try:
-                self.withdraw()
-            except TK_ERRORS:  # pragma: no cover - window already gone
-                pass
-            return
+            log_error(
+                f"[paste] window manager did not minimize (state={state}); "
+                "the window stays visible"
+            )
+            return False
         log_error("[paste] window minimized before Ctrl+V; dock entry kept")
+        return True
 
     def _send_paste(self) -> None:
         """Arm the paste, which fires as soon as the window is hidden.

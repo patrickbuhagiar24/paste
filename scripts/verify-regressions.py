@@ -296,6 +296,55 @@ MUTATIONS = [
         ["tests/test_app.py::test_hide_for_paste_minimizes_instead_of_unmapping"],
     ),
     (
+        "a refusing window manager withdraws the window again",
+        "pastex/app.py",
+        (
+            '        if state not in {"iconic", "withdrawn"}:\n'
+            "            log_error(\n"
+            '                f"[paste] window manager did not minimize (state={state}); "\n'
+            '                "the window stays visible"\n'
+            "            )\n"
+            "            return False\n"
+        ),
+        (
+            '        if state not in {"iconic", "withdrawn"}:\n'
+            "            self.withdraw()\n"
+            "            return True\n"
+        ),
+        [
+            "tests/test_app.py::test_hide_for_paste_keeps_the_window_when_minimize_is_refused"
+        ],
+    ),
+    (
+        "Ctrl+V is armed even when the window stays visible",
+        "pastex/app.py",
+        (
+            "        if self._hide_for_paste():\n"
+            "            self._send_paste()\n"
+        ),
+        "        self._hide_for_paste()\n        self._send_paste()\n",
+        [
+            "tests/test_app.py::test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized"
+        ],
+    ),
+    (
+        "a copy that never armed Ctrl+V still reports a paste",
+        "pastex/app.py",
+        (
+            '        if not self.__dict__.get("_paste_pending", False):\n'
+            "            # The window could not be minimized, so no Ctrl+V was armed: keep\n"
+            "            # the icon and let the user paste manually.\n"
+            "            self._pasting = False\n"
+            "            self.status_var.set(PASTE_MANUAL_HINT)\n"
+            '            log_error("[paste] kept the window visible; Ctrl+V not sent")\n'
+            "            return\n"
+        ),
+        "",
+        [
+            "tests/test_app.py::test_finished_copy_without_an_armed_send_shows_the_manual_hint"
+        ],
+    ),
+    (
         "Ctrl+Down reorder shortcut is not bound",
         "pastex/app.py",
         '        self.tree.bind("<Control-Down>", lambda _e: self._on_tree_move_shortcut(1))',
@@ -332,8 +381,8 @@ MUTATIONS = [
         "the window is only hidden after the copy finishes",
         "pastex/app.py",
         (
-            "        self._hide_for_paste()\n"
-            "        self._send_paste()\n"
+            "        if self._hide_for_paste():\n"
+            "            self._send_paste()\n"
             "        _run_in_thread(self._paste_worker, text)"
         ),
         "        _run_in_thread(self._paste_worker, text)",
