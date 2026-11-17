@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import subprocess
 import time
 from collections.abc import Callable
@@ -606,28 +607,41 @@ except ImportError:  # pragma: no cover
 
 
 def read_text_from_clipboard(runner: Runner = _default_runner) -> str | None:
-    """Read clipboard contents for diagnostics, or return None if unsupported."""
+    """Read clipboard contents for diagnostics, or return None if unsupported.
+
+    Every reader on the machine is asked before an empty answer is believed: a
+    single broken tool that exits 0 with no output otherwise looks exactly like
+    an empty clipboard, which used to cancel a paste that would have worked.
+    """
     session = detect_session()
     if session == "wayland":
         candidates = [
             ["wl-paste", "--no-newline"],
             ["xclip", "-selection", "clipboard", "-o"],
+            ["xsel", "--clipboard", "--output"],
         ]
     else:
         candidates = [
             ["xclip", "-selection", "clipboard", "-o"],
+            ["xsel", "--clipboard", "--output"],
             ["wl-paste", "--no-newline"],
         ]
+    empty: str | None = None
     for cmd in candidates:
         if shutil.which(cmd[0]) is None:
             continue
         try:
             proc = runner(cmd)
-            if proc.returncode == 0:
-                return getattr(proc, "stdout", "") or ""
         except (OSError, subprocess.SubprocessError):
             continue
-    return None
+        if getattr(proc, "returncode", 0) != 0:
+            continue
+        out = f"{getattr(proc, 'stdout', '') or ''}"
+        if out:
+            return out
+        if empty is None:
+            empty = out  # every reader so far says empty; keep looking
+    return empty
 
 
 def _same_text(back: str, text: str) -> bool:
@@ -658,6 +672,75 @@ def verify_copy(text: str, runner: Runner = _default_runner) -> bool | None:
     if back is None:
         return None
     return _same_text(back, text)
+
+
+# The longest text Pastex will type when the clipboard cannot hold it. Typing
+# sends one key event per character, so a huge snippet would take minutes.
+TYPE_TEXT_LIMIT = 20_000
+
+
+def can_type_text(text: str) -> bool:
+    """True when ``text`` can be delivered by typing instead of the clipboard."""
+    return bool(text) and len(text) <= TYPE_TEXT_LIMIT and shutil.which("xdotool") is not None
+
+
+def type_text_x11(text: str, runner: Runner = _default_runner) -> PasteResult:
+    """Type ``text`` into the focused window with xdotool, without the clipboard.
+
+    Used when the clipboard cannot be made to hold the text: Ctrl+V would paste
+    nothing, while typing delivers the snippet anyway. The text goes through a
+    temporary file, because ``xdotool type`` would otherwise treat a snippet
+    that starts with "-" as an option.
+    """
+    if not can_type_text(text):
+        return PasteResult(
+            ok=False,
+            tool="xdotool",
+            message=(
+                "xdotool is not installed" if shutil.which("xdotool") is None
+                else f"the text is too long to type ({len(text)} characters)"
+            ),
+        )
+    handle = None
+    try:
+        handle = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".txt", prefix="pastex-type-", delete=False
+        )
+        handle.write(text)
+        handle.close()
+        proc = _run_with_timeout(
+            runner,
+            [
+                "xdotool",
+                "type",
+                "--clearmodifiers",
+                "--delay",
+                "0",
+                "--file",
+                handle.name,
+            ],
+            max(2.0, min(8.0, len(text) / 500 + 2)),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return PasteResult(ok=False, tool="xdotool", message=f"typing failed: {exc}")
+    finally:
+        if handle is not None:
+            try:
+                os.unlink(handle.name)
+            except OSError:
+                pass
+    if getattr(proc, "returncode", 1) != 0:
+        detail = (getattr(proc, "stderr", "") or "").strip()
+        return PasteResult(
+            ok=False,
+            tool="xdotool",
+            message=f"xdotool could not type the text{': ' + detail if detail else ''}",
+        )
+    return PasteResult(
+        ok=True,
+        tool="xdotool",
+        message="Typed the text with xdotool (the clipboard did not hold it).",
+    )
 
 
 def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:

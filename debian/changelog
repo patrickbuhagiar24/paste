@@ -1,3 +1,22 @@
+pastex (1.10.6-1) unstable; urgency=medium
+
+  * Type the snippet when the clipboard cannot hold it. On the reporting
+    machine xclip reports success, the clipboard reads back empty even after
+    Tk claims the selection, and 1.10.5 therefore cancelled the paste. The
+    text now arrives anyway: when the clipboard cannot be made to hold it,
+    Pastex types the snippet into the target window with xdotool (through a
+    temporary file, so a snippet that starts with "-" is not read as an
+    option) instead of pressing Ctrl+V on an empty clipboard. The text is
+    delivered exactly once either way, and only a text longer than 20 000
+    characters stops the paste and says so.
+  * Believe only a non-empty clipboard read. A single broken reader used to
+    make a full clipboard look empty and cancel a paste that would have
+    worked; xclip, xsel and wl-paste are all consulted now and an empty answer
+    is accepted only when every reader agrees.
+  * pastex --check explains the empty read-back and the typed delivery.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 13:40:00 +0700
+
 pastex (1.10.5-1) unstable; urgency=medium
 
   * Verify the copy before pasting. xclip, xsel and wl-copy exit 0 once they
