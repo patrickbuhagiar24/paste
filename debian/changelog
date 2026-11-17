@@ -1,3 +1,34 @@
+pastex (1.10.0-1) unstable; urgency=medium
+
+  * Stop configuring the Wayland helpers when the package is installed. Debian
+    postinst used to create the 'pastex' group, add the invoking account to it
+    (which needs a logout), reload the udev rules and enable a per-user
+    ydotoold unit on every install, even though Linux Mint's default X11
+    session needs none of it. It now only prints a one-time note pointing at
+    `pastex --enable-permissions`, and the executing account is never touched.
+  * Ship the optional Wayland payload as inert templates. The udev rule and the
+    ydotoold user unit moved from /usr/lib/udev/rules.d and /usr/lib/systemd/
+    user to /usr/lib/pastex; only `pastex --enable-permissions` (the existing
+    pkexec helper) copies the rule into place, adds the group membership and
+    enables the unit. A package upgrade therefore cannot change device
+    permissions by itself.
+  * Report the X11 session as needing no permissions anywhere in the UI. The
+    pastex group and the /dev/uinput rows, the "Next steps" advice and the
+    CLI hint no longer appear in `--check`, `--permissions` or the paste
+    failure dialog on X11; they are replaced by a single line stating that
+    xdotool types through XTEST. The paste failure dialog also stops blaming
+    /dev/uinput there and points at focus instead.
+  * Move the Wayland-only tool recommendations. Recommends is now xclip, xsel
+    and xdotool, so `apt install pastex` on X11 no longer drags in wl-clipboard,
+    ydotool and python3-dbus; those three are Suggests. A test keeps every
+    clipboard tool the code calls declared in one of the two fields.
+  * Fix the copy failure message: it no longer mentions the internal clipboard
+    fallback that was removed in 1.4.0, and it names the Mint packages
+    (xclip/xsel/xdotool) instead of wl-clipboard only.
+  * Five new mutation checks keep the X11 behaviour from regressing.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 14:00:00 +0000
+
 pastex (1.9.0-1) unstable; urgency=medium
 
   * Target Linux Mint only. Pastex now documents, packages and tests for Linux

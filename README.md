@@ -55,7 +55,7 @@ That is the whole installation. `apt update` reports `Hit:… https://patrickbuh
 
 If you installed a 1.8.x package before, the archive suite was renamed from `stonking` to `mint`. A `pastex.sources` written by the older instructions still asks for `stonking`, so `apt update` reports `404` for that suite and `apt upgrade` sees nothing new. Re-run the block above, or change `Suites: stonking` to `Suites: mint` in `/etc/apt/sources.list.d/pastex.sources`; the keyring does not need to be installed again.
 
-On Linux Mint, automatic paste needs only `xclip` and `xdotool` (both in the Mint repositories); the package recommends them, and the Mint Wayland session additionally uses `ydotool`. Nothing else has to be configured.
+On Linux Mint, automatic paste needs only `xclip` (or `xsel`) and `xdotool`, which the package **recommends**; the Wayland tools (`wl-clipboard`, `ydotool` and `python3-dbus` for the portal) are only **suggested**, because a default X11 session never uses them. Nothing else has to be configured, and installing the package changes nothing on the system: the optional Wayland udev rule, the `pastex` group and the per-user `ydotoold` unit ship as inert templates under `/usr/lib/pastex` and are only installed by `pastex --enable-permissions`.
 
 ### Upgrade
 
@@ -174,7 +174,7 @@ refresh. If inotify is unavailable, `F5` still works as before.
 
 Linux Mint starts an **X11** session by default, where Pastex copies with `xclip` (or `xsel`) and sends `Ctrl+V` with `xdotool`. Neither tool needs `/dev/uinput` access, a group membership, or a daemon, so on a default Mint install automatic paste works as soon as the recommended packages are installed. In the Cinnamon Wayland session, clipboard access uses `wl-clipboard` and automatic paste uses `ydotool` with `/dev/uinput`.
 
-On first launch, Pastex checks for clipboard and paste tools, the current display session (X11 or Wayland), `/dev/uinput` access and the `ydotoold` service before you select a snippet. On X11 the permission checks are reported as not needed, because `xdotool` uses XTEST. The check does not write a test value to the clipboard. If permission setup is available, Pastex asks before requesting administrator authorization; missing packages are reported with install instructions.
+On first launch, Pastex checks for clipboard and paste tools and the current display session (X11 or Wayland) before you select a snippet. On X11 that is the whole check: `--check`, `--permissions` and the paste-failure dialog all report the `/dev/uinput` permissions, the `pastex` group and `ydotoold` as **not needed**, because `xdotool` types through XTEST. Only in a Wayland session does Pastex inspect `/dev/uinput` and the `ydotoold` service, and only there does it offer to request administrator authorization; missing packages are reported with install instructions. The check never writes a test value to the clipboard.
 
 If paste does not work, inspect the environment:
 
@@ -184,10 +184,14 @@ pastex --permissions
 pastex --enable-permissions
 ```
 
-If `ydotool` fails (for example the udev rule was never installed), Pastex
+In a Wayland session, `pastex --enable-permissions` installs the udev rule from
+its template, adds your account to the `pastex` group and enables the per-user
+`ydotoold` unit; from an X11 session the same command prints that nothing is
+needed and exits. If `ydotool` fails (for example the udev rule was never
+installed on that session), Pastex
 falls back to the desktop portal (`org.freedesktop.portal.RemoteDesktop`), which
 injects `Ctrl+V` without root and without `/dev/uinput`; the desktop asks for
-permission once per session. The portal needs `python3-dbus` (a recommended
+permission once per session. The portal needs `python3-dbus` (a suggested
 package), and `pastex --check` reports whether it is available.
 
 In a Wayland session Pastex starts `ydotoold` for you: it asks the user unit

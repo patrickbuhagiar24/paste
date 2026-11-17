@@ -2100,6 +2100,16 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             f"{message}\n\nThe text is on the clipboard — "
             "press Ctrl+V in the target app."
         )
+        if not st.needed:
+            # X11: no permission is involved, so do not send the user to
+            # `pastex --enable-permissions`.
+            text += (
+                "\n\nThis is an X11 session, so no /dev/uinput permission is "
+                "involved: xdotool could not deliver Ctrl+V to the window that "
+                "was active before Pastex."
+            )
+            messagebox.showinfo("Automatic paste is unavailable", text)
+            return
         if st.ready:
             messagebox.showinfo("Automatic paste is unavailable", text)
             return
@@ -2627,9 +2637,20 @@ def _full_paste_test() -> int:
     return 0
 
 
+# Shown instead of the group//dev/uinput report on Linux Mint's default X11
+# session, where automatic paste needs no device permission at all.
+X11_PERMISSION_NOTE = (
+    "Automatic-paste permissions: not needed on X11 — xdotool sends Ctrl+V "
+    "through XTEST, with no /dev/uinput access, no 'pastex' group and no "
+    "ydotoold daemon."
+)
+
+
 def permission_report() -> str:
     """Build an automatic-paste permission report for --permissions and --check."""
     st = uinput.status()
+    if not st.needed:
+        return X11_PERMISSION_NOTE
     lines = "\n".join(_status_lines(st))
     return (
         f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):\n"
@@ -2651,6 +2672,12 @@ def run_enable_permission() -> int:
     if st.device_writable:
         print("Automatic paste permissions are already enabled.")
         return 0
+    if not st.needed:
+        print(
+            "This X11 session does not need /dev/uinput permissions: xdotool "
+            "sends Ctrl+V through XTEST. The setup below is only used by the "
+            "Cinnamon Wayland session."
+        )
     if not uinput.can_self_enable(st):
         print("Cannot request administrator privileges from here.")
         print("Run the following command in a terminal:\n")
@@ -2781,17 +2808,22 @@ def run_check(roots: list[Path]) -> int:
         )
     try:
         st = uinput.status()
-        print(
-            f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):"
-        )
-        for line in _status_lines(st):
-            print(f"  {line}")
-        print("\nNext steps:")
-        for line in uinput.explain(st).splitlines():
-            print(f"  {line}")
-        if not st.ready:
-            # Keep permission information in --check even though the GUI button was removed.
-            print(f"\n{uinput.CLI_HINT}")
+        if not st.needed:
+            print(X11_PERMISSION_NOTE)
+        else:
+            print(
+                f"Automatic-paste permissions "
+                f"(group '{uinput.GROUP}', account '{st.user}'):"
+            )
+            for line in _status_lines(st):
+                print(f"  {line}")
+            print("\nNext steps:")
+            for line in uinput.explain(st).splitlines():
+                print(f"  {line}")
+            if not st.ready:
+                # Keep permission information in --check even though the GUI
+                # button was removed.
+                print(f"\n{uinput.CLI_HINT}")
     except Exception as exc:  # noqa: BLE001 - diagnostics should continue after optional checks fail
         print(f"Automatic-paste permissions: could not be checked ({exc})")
     clip = clipboard_status()

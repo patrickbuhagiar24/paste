@@ -17,12 +17,14 @@ override_dh_auto_install:
 	  install -m 644 usr/share/icons/hicolor/$${size}x$${size}/apps/pastex.png \
 	    debian/pastex/usr/share/icons/hicolor/$${size}x$${size}/apps/; \
 	done
+	# The optional Wayland helpers are shipped as inert templates: only
+	# `pastex --enable-permissions` copies the udev rule into
+	# /usr/lib/udev/rules.d and enables the per-user ydotool unit. Linux Mint's
+	# default X11 session needs neither.
 	install -d debian/pastex/usr/lib/pastex
 	install -m 755 usr/lib/pastex/pastex-uinput-group debian/pastex/usr/lib/pastex/
-	install -d debian/pastex/usr/lib/udev/rules.d
-	install -m 644 usr/lib/udev/rules.d/70-pastex-uinput.rules debian/pastex/usr/lib/udev/rules.d/
-	install -d debian/pastex/usr/lib/systemd/user
-	install -m 644 usr/lib/systemd/user/ydotoold.service debian/pastex/usr/lib/systemd/user/
+	install -m 644 usr/lib/pastex/70-pastex-uinput.rules debian/pastex/usr/lib/pastex/
+	install -m 644 usr/lib/pastex/ydotoold.service debian/pastex/usr/lib/pastex/
 	install -d debian/pastex/usr/share/doc/pastex
 	install -m 644 README.md debian/pastex/usr/share/doc/pastex/README.md
 	install -m 644 LICENSE debian/pastex/usr/share/doc/pastex/copyright

@@ -27,6 +27,11 @@ from dataclasses import dataclass, field
 GROUP = "pastex"
 HELPER = "/usr/lib/pastex/pastex-uinput-group"
 UDEV_RULE = "/usr/lib/udev/rules.d/70-pastex-uinput.rules"
+# The package ships the rule and the user unit as *templates* next to the
+# helper; only `pastex --enable-permissions` installs them. Linux Mint's default
+# X11 session needs neither, because xdotool sends Ctrl+V through XTEST.
+RULE_TEMPLATE = "/usr/lib/pastex/70-pastex-uinput.rules"
+UNIT_TEMPLATE = "/usr/lib/pastex/ydotoold.service"
 DEVICE = "/dev/uinput"
 
 # ydotool >= 1.0 communicates with ydotoold through a Unix socket.
@@ -217,6 +222,8 @@ class UinputStatus:
     ydotoold_binary: bool
     socket: str | None
     groups: set[str] = field(default_factory=set)
+    # "x11", "wayland" or "unknown" (see pastex.clipboard.detect_session).
+    session_kind: str = "unknown"
     session: set[str] | None = None
     daemon: bool = False
     rule: bool = False
@@ -250,8 +257,20 @@ class UinputStatus:
         return self.daemon or self.socket is not None
 
     @property
+    def needed(self) -> bool:
+        """Return whether this session needs /dev/uinput access at all.
+
+        Only a Wayland session types through ydotool. Linux Mint's default X11
+        session uses xdotool, which goes through XTEST and needs no device
+        permission, no ``pastex`` group and no daemon.
+        """
+        return self.session_kind != "x11"
+
+    @property
     def ready(self) -> bool:
         """Return whether everything needed to send Ctrl+V is available."""
+        if not self.needed:
+            return True
         if self.device_writable:
             if not self.ydotoold_binary:
                 return True
@@ -270,6 +289,16 @@ class UinputStatus:
 
         rows: list[tuple[str, str, str]] = []
 
+        if not self.needed:
+            rows.append(
+                (
+                    "✅",
+                    f"{prefix}automatic paste on X11",
+                    "not needed — xdotool sends Ctrl+V through XTEST",
+                )
+            )
+            return rows
+
         if self.device_writable and self.account_ready:
             group_detail = "member, active in this session"
         elif self.needs_relogin:
@@ -281,7 +310,10 @@ class UinputStatus:
         elif self.group_exists:
             group_detail = "not a member yet"
         else:
-            group_detail = "group does not exist — is the package installed correctly?"
+            group_detail = (
+                "not created yet — run `pastex --enable-permissions` "
+                "in a Wayland session"
+            )
 
         if self.acl_granted and not self.account_ready:
             rows.append(
@@ -301,7 +333,10 @@ class UinputStatus:
         if self.device_writable:
             device_detail = f"{DEVICE} is writable"
         elif not self.rule:
-            device_detail = f"{DEVICE} is not writable — udev rule is missing"
+            device_detail = (
+                f"{DEVICE} is not writable — the udev rule is not installed "
+                "(`pastex --enable-permissions`)"
+            )
         elif self.needs_relogin:
             device_detail = f"{DEVICE} is not writable — a new login is required"
         else:
@@ -323,6 +358,13 @@ class UinputStatus:
         return rows
 
 
+def _session_kind() -> str:
+    """Return the graphical session kind without importing clipboard eagerly."""
+    from .clipboard import detect_session  # noqa: PLC0415 - avoids an import cycle
+
+    return detect_session()
+
+
 def status(user: str | None = None) -> UinputStatus:
     name = user or current_user()
     groups = user_groups(name)
@@ -335,6 +377,7 @@ def status(user: str | None = None) -> UinputStatus:
         group_exists = False
     return UinputStatus(
         user=name,
+        session_kind=_session_kind(),
         group_exists=group_exists,
         in_group=GROUP in groups,
         device_writable=device_writable(),
@@ -422,6 +465,12 @@ def explain(st: UinputStatus | None = None) -> str:
     If everything is ready, return a positive status message.
     """
     st = st or status()
+    if not st.needed:
+        return (
+            "This is an X11 session: automatic paste goes through xdotool and "
+            "needs no /dev/uinput access, no 'pastex' group and no ydotoold "
+            "daemon."
+        )
     if st.ready:
         return "Automatic paste is ready."
 
@@ -445,8 +494,9 @@ def explain(st: UinputStatus | None = None) -> str:
     if st.in_session and not st.device_writable and not st.needs_relogin:
         if not st.rule:
             steps.append(
-                "The 'pastex' udev group rule was not found. Reinstall "
-                "the package: `sudo apt install --reinstall pastex`."
+                "The 'pastex' udev rule is not installed. Run "
+                "`pastex --enable-permissions` to install it (the package "
+                "ships it as a template, so nothing is activated by installing)."
             )
         else:
             steps.append(

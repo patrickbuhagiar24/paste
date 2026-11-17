@@ -311,8 +311,9 @@ def copy_text(
         ok=False,
         tool="",
         message=(
-            f"Could not copy ({detail}). Install wl-clipboard or xclip, "
-            "or use the app’s Copy button (internal fallback)."
+            f"Could not copy ({detail}). On Linux Mint install the X11 tools "
+            "with: sudo apt install xclip xsel xdotool "
+            "(or wl-clipboard, ydotool for a Wayland session)."
         ),
     )
 
