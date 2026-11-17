@@ -10,14 +10,17 @@
   <h1>Pastex APT repository</h1>
   <p>This repository provides the <code>pastex</code> package for Ubuntu 26.10 (<code>stonking</code>). Its packages are architecture-independent.</p>
   <!--sgn:start-->
-  <p>Verify <a href="archive-keyring.fingerprint.txt">the signing-key fingerprint</a> against the fingerprint published by the maintainer before installing the key. Do not use <code>trusted=yes</code> or disable signature verification for a signed archive.</p>
+  <p>Install the keyring in <code>/etc/apt/keyrings</code> (local administrator configuration) rather than <code>/usr/share/keyrings</code> (files shipped by packages) or <code>/etc/apt/trusted.gpg.d</code> (trusted by every repository). Verify <a href="archive-keyring.fingerprint.txt">the signing-key fingerprint</a> against the fingerprint published by the maintainer before installing the key, and never use <code>trusted=yes</code> or disable signature verification for a signed archive.</p>
   <pre>sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg | sudo tee /etc/apt/keyrings/pastex.gpg &gt; /dev/null
-sudo chmod 0644 /etc/apt/keyrings/pastex.gpg
-curl -fsSL https://patrickbuhagiar24.github.io/paste/pastex.sources | sudo tee /etc/apt/sources.list.d/pastex.sources &gt; /dev/null
+curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt
+curl -fsSL --proto '=https' -o /tmp/pastex.gpg https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
+gpg --show-keys --with-fingerprint /tmp/pastex.gpg
+sudo install -m 0644 /tmp/pastex.gpg /etc/apt/keyrings/pastex.gpg
+curl -fsSL -o /tmp/pastex.sources https://patrickbuhagiar24.github.io/paste/pastex.sources
+sudo install -m 0644 /tmp/pastex.sources /etc/apt/sources.list.d/pastex.sources
 sudo apt update
 sudo apt install pastex</pre>
-  <p>APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste stonking InRelease</code>.</p>
+  <p>Both fingerprints must match. APT reads keyrings as the unprivileged <code>_apt</code> user, so <code>ls -l /etc/apt/keyrings/pastex.gpg</code> must show <code>-rw-r--r--</code>; a file only root can read makes <code>apt update</code> reject the repository. APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste stonking InRelease</code>.</p>
   <!--sgn:end-->
   <!--uns:start-->
   <p>This archive is published without a signing key. Download <a href="pastex-unsigned.sources">pastex-unsigned.sources</a> to <code>/etc/apt/sources.list.d/pastex.sources</code>; it marks the repository <code>Trusted: yes</code>, which skips verification.</p>

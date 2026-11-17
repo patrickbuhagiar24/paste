@@ -19,7 +19,13 @@ import traceback
 from pathlib import Path
 
 from . import __version__, uinput
-from .clipboard import available_tools, copy_text, detect_session, simulate_paste
+from .clipboard import (
+    available_tools,
+    copy_text,
+    detect_session,
+    prewarm as prewarm_clipboard,
+    simulate_paste,
+)
 from .snippets import (
     DEFAULT_SAMPLES,
     Node,
@@ -162,9 +168,15 @@ def apply_window_icon(window) -> list[Path]:
     return used
 
 
+# Restore delays shipped in earlier versions. They are migrated to the current
+# default at load time, while a value the user chose deliberately is kept.
+PREVIOUS_RESTORE_DELAYS = (0.1, 0.05)
+
 DEFAULT_SETTINGS = {
-    # Keep Pastex hidden briefly after Ctrl+V is sent before restoring its window.
-    "restore_delay": 0.05,
+    # Keep Pastex hidden briefly after Ctrl+V is sent before restoring its
+    # window. The text is already pasted by then, so this only delays the
+    # window coming back; 30 ms is enough for the target app to keep focus.
+    "restore_delay": 0.03,
     # User-selected source folder. If set, only this folder is displayed
     # and used for writes. The --dir argument does not change this value.
     "source_dir": None,
@@ -238,10 +250,14 @@ def load_settings() -> dict:
     settings = {**DEFAULT_SETTINGS, **data}
     # The old pre-paste focus delay has been replaced by a post-paste restore delay.
     settings.pop("focus_delay", None)
-    # Restores now happen sooner: migrate the previous 0.1 s default, but keep
-    # any value the user chose deliberately.
+    # Restores now happen sooner: migrate the earlier defaults, but keep any
+    # value the user chose deliberately.
     try:
-        if abs(float(settings.get("restore_delay", 0)) - 0.1) < 1e-9:
+        restore_delay = float(settings.get("restore_delay", 0))
+        if any(
+            abs(restore_delay - previous) < 1e-9
+            for previous in PREVIOUS_RESTORE_DELAYS
+        ):
             settings["restore_delay"] = DEFAULT_SETTINGS["restore_delay"]
     except (TypeError, ValueError):
         settings["restore_delay"] = DEFAULT_SETTINGS["restore_delay"]
@@ -364,6 +380,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.writable = writable_root(self.roots)
         self.current_file: Path | None = None
         self._pasting = False
+        # False only between clicking a snippet and the clipboard owning the
+        # text, so Ctrl+V never runs against the previous clipboard contents.
+        self._paste_clipboard_ready = False
+        # Tool plans resolved once in the background (see _prewarm_paste).
+        self._copy_plan = None
+        self._paste_plan = None
         self._search_after_id: str | None = None
         self._select_mode = False
         self.collapsed: set[str] = set()
@@ -374,9 +396,30 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.lift()
         self.focus_force()
         self._center_window()
+        # Resolve clipboard and paste tools off the click path.
+        self._prewarm_paste()
         if not self.settings.get("setup_assistant_seen", False):
             # Check in the background so system permission probes never delay startup.
             self.after(250, self._start_first_run_setup_check)
+
+    def _prewarm_paste(self) -> None:
+        """Resolve the clipboard and paste tools before the first click.
+
+        ``shutil.which`` walks PATH once per candidate and, on Wayland,
+        ``ydotoold`` has to be running before the first ``ydotool key``.
+        Both live in a daemon thread so startup stays instant.
+        """
+        _run_in_thread(self._prewarm_paste_worker)
+
+    def _prewarm_paste_worker(self) -> None:
+        copy_plan, paste_plan = prewarm_clipboard()
+        self._copy_plan = copy_plan
+        self._paste_plan = paste_plan
+        log_error(
+            "[paste] siap: "
+            f"salin={','.join(copy_plan.tool_names()) or '-'} "
+            f"tempel={','.join(paste_plan.tool_names()) or '-'}"
+        )
 
     def _start_first_run_setup_check(self) -> None:
         """Inspect paste prerequisites once, before the user clicks a snippet."""
@@ -1388,12 +1431,16 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def do_paste(self) -> None:
         """Click once to paste text into another app.
 
-        The flow is:
+        The two slow halves overlap instead of running one after the other:
 
-          1. Copy the text while Pastex remains visible.
-          2. Minimize the window after copying so the target app receives focus;
-             minimizing keeps the dock entry, unlike withdrawing the window.
-          3. Send Ctrl+V to the focused app.
+          1. Minimize the window right away; minimizing keeps the dock entry,
+             and the window manager then needs a few milliseconds to hand
+             focus back to the previous application.
+          2. Copy the text in a worker thread at the same time: the clipboard
+             tool only has to own the selection, not the focus.
+          3. Send Ctrl+V as soon as both are done. The ``<Unmap>`` signal
+             normally wins the race, and ``_after_copy()`` releases the send
+             when the clipboard tool is the slower half.
           4. Wait briefly, then restore Pastex with deiconify().
         """
         if self._pasting:
@@ -1410,26 +1457,35 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         self._pasting = True
         self.status_var.set("Preparing to paste...")
-        # Leave Pastex visible while setting the clipboard. Once copying succeeds,
-        # _after_copy() withdraws it immediately before sending Ctrl+V.
+        # Ctrl+V may only be sent once the clipboard owns the text, so the
+        # send stays armed until _after_copy() reports success.
+        self._paste_clipboard_ready = False
+        self._hide_for_paste()
+        self._send_paste()
         _run_in_thread(self._paste_worker, text)
 
     def _paste_worker(self, text: str) -> None:
         started = time.monotonic()
-        result = copy_text(text)
+        result = copy_text(text, plan=getattr(self, "_copy_plan", None))
         elapsed_ms = (time.monotonic() - started) * 1000
         log_error(
             f"[paste] salin: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
         )
+        if not result.ok:
+            # Resolve the tools again next time: a missing tool may have been
+            # installed while Pastex was running.
+            self._copy_plan = None
         self.after(0, self._after_copy, result)
 
     def _after_copy(self, result) -> None:
-        """Send Ctrl+V immediately after the clipboard tool accepts the text."""
+        """Release the armed Ctrl+V once the clipboard holds the copied text."""
         if not result.ok:
             self._paste_failed(result.message)
             return
-        self._hide_for_paste()
-        self._send_paste()
+        self._paste_clipboard_ready = True
+        # The window is normally hidden by now (the <Unmap> signal arrives
+        # first); this call covers the opposite order and the fallback timer.
+        self._send_paste_now()
 
     def _hide_for_paste(self) -> None:
         """Take Pastex out of the way while keeping its dock entry alive.
@@ -1491,8 +1547,16 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._send_paste_now()
 
     def _send_paste_now(self) -> None:
-        """Run the sender exactly once, for either the unmap or the timeout."""
+        """Run the sender once, when the window is hidden and the clipboard ready.
+
+        Called for the unmap signal, the fallback timer and the clipboard
+        result, in whichever order they arrive.
+        """
         if not self.__dict__.get("_paste_pending", False):
+            return
+        if not self.__dict__.get("_paste_clipboard_ready", True):
+            # The window is already hidden but the clipboard tool has not
+            # finished yet; _after_copy() calls back here as soon as it has.
             return
         self._paste_pending = False
         self._cancel_paste_send_timeout()
@@ -1510,10 +1574,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_sender(self) -> None:
         log_error("[paste] sending Ctrl+V")
-        result = simulate_paste()
+        result = simulate_paste(plan=getattr(self, "_paste_plan", None))
         log_error(
             f"[paste] hasil: ok={result.ok} tool={result.tool} pesan={result.message}"
         )
+        if not result.ok:
+            # Resolve the tools again next time: a missing tool may have been
+            # installed while Pastex was running.
+            self._paste_plan = None
         self.after(0, self._paste_done, result)
 
     def _paste_done(self, result) -> None:
@@ -1528,6 +1596,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _finish_paste(self, result) -> None:
         self._pasting = False
         self._paste_pending = False
+        self._paste_clipboard_ready = False
         # Explicit class call keeps partially-built test doubles working.
         PastexApp._cancel_paste_send_timeout(self)
         self.deiconify()
@@ -1551,6 +1620,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
         self._paste_pending = False
+        self._paste_clipboard_ready = False
         PastexApp._cancel_paste_send_timeout(self)
         # Keep the app visible so the clipboard failure message can be read.
         self.deiconify()

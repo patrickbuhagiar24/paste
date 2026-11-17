@@ -158,8 +158,8 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_copies_before_withdrawing(monkeypatch):
-    """Pastex tetap tampil saat copy; hide baru dilakukan setelah copy sukses."""
+def test_paste_hides_the_window_before_copying(monkeypatch):
+    """Hide dimulai lebih dulu, jadi compositor dan tool clipboard jalan paralel."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -173,14 +173,22 @@ def test_paste_copies_before_withdrawing(monkeypatch):
 
     class FakeApp:
         _pasting = False
+        _paste_clipboard_ready = True
         status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
 
         def selected_path(self):
             return FakePath()
 
+        def _hide_for_paste(self):
+            calls.append(("hide",))
+
+        def _send_paste(self):
+            calls.append(("arm",))
+
         def _paste_worker(self, text):
             calls.append(("copy", text))
 
+    app = FakeApp()
     monkeypatch.setattr(app_module, "read_text", lambda _path: "isi")
     monkeypatch.setattr(
         app_module,
@@ -188,29 +196,27 @@ def test_paste_copies_before_withdrawing(monkeypatch):
         lambda target, *args: calls.append(("start", target.__name__, *args)),
     )
 
-    PastexApp.do_paste(FakeApp())
+    PastexApp.do_paste(app)
 
-    assert calls == [("start", "_paste_worker", "isi")]
+    # Hide and arm happen on the click path; the copy runs in the worker.
+    assert calls == [("hide",), ("arm",), ("start", "_paste_worker", "isi")]
+    # Ctrl+V must not be released before the clipboard owns the text.
+    assert app._paste_clipboard_ready is False
 
 
-def test_after_copy_hides_then_sends_paste():
+def test_after_copy_releases_the_armed_paste():
     from pastex.app import PastexApp
     from pastex.clipboard import ClipboardResult
 
     calls = []
 
     class FakeApp:
-        def withdraw(self):
-            calls.append("withdraw")
+        def _send_paste_now(self):
+            calls.append(("send_now", self._paste_clipboard_ready))
 
-        def _hide_for_paste(self):
-            calls.append("hide")
-
-        def _send_paste(self):
-            calls.append("send")
-
-    PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "Text copied."))
-    assert calls == ["hide", "send"]
+    app = FakeApp()
+    PastexApp._after_copy(app, ClipboardResult(True, "wl-copy", "Text copied."))
+    assert calls == [("send_now", True)]
 
 
 def test_copy_failure_does_not_withdraw_or_send():
@@ -247,7 +253,7 @@ def test_do_paste_ignores_repeat_while_paste_is_in_progress():
     assert calls == ["Paste in progress..."]
 
 
-def test_paste_done_waits_50ms_after_sending_before_restoring():
+def test_paste_done_waits_30ms_after_sending_before_restoring():
     from pastex.app import DEFAULT_SETTINGS, PastexApp
     from pastex.clipboard import PasteResult
 
@@ -273,7 +279,7 @@ def test_paste_done_waits_50ms_after_sending_before_restoring():
 
     app = FakeApp()
     PastexApp._paste_done(app, PasteResult(True, "ydotool", "Pasted."))
-    assert calls == [("wait", 50)]
+    assert calls == [("wait", 30)]
     app.finish()
     assert calls[-1] == ("deiconify", None)
     assert app._pasting is False
@@ -725,3 +731,194 @@ def test_window_unmap_is_bound_to_the_paste_sender():
     assert 'self.bind("<Unmap>", self._on_window_unmap, add="+")' in source
     assert "def _on_window_unmap(" in source
     assert "def _send_paste_now(" in source
+
+
+# --- Overlapped hide/copy and prewarmed tool plans ------------------------
+
+
+def test_ctrl_v_waits_until_the_clipboard_is_ready(monkeypatch):
+    """Unmap boleh datang lebih dulu, tapi Ctrl+V menunggu clipboard siap."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app._pasting = True
+    app._paste_pending = True
+    app._paste_clipboard_ready = False
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(target.__name__)
+    )
+
+    # The window manager hides the window while wl-copy is still running.
+    PastexApp._send_paste_now(app)
+
+    assert calls == [], "Ctrl+V tidak boleh dikirim sebelum clipboard siap"
+    assert app._paste_pending is True
+
+    # The clipboard result releases it.
+    PastexApp._after_copy(app, ClipboardResultLike(True))
+
+    assert calls == ["_paste_sender"]
+    assert app._paste_pending is False
+
+
+def test_unmap_after_the_copy_sends_immediately(monkeypatch):
+    """Bila clipboard siap lebih dulu, unmap langsung mengirim Ctrl+V."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_pending = True
+    app._paste_clipboard_ready = True
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(target.__name__)
+    )
+
+    PastexApp._on_window_unmap(app, SimpleNamespace(widget=app))
+
+    assert calls == ["_paste_sender"]
+
+
+class ClipboardResultLike:
+    """Minimal stand-in for ClipboardResult in the paste-state tests."""
+
+    def __init__(self, ok):
+        self.ok = ok
+        self.tool = "wl-copy"
+        self.message = "Text copied."
+
+
+def test_paste_passes_the_prewarmed_plans(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    seen = []
+    app = PastexApp.__new__(PastexApp)
+    app._copy_plan = "COPY-PLAN"
+    app._paste_plan = "PASTE-PLAN"
+    app.after = lambda *_args: None
+    monkeypatch.setattr(
+        app_module,
+        "copy_text",
+        lambda text, plan=None: seen.append(("copy", text, plan)) or ClipboardResultLike(True),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "simulate_paste",
+        lambda plan=None: seen.append(("paste", plan)) or PasteResultLike(),
+    )
+
+    PastexApp._paste_worker(app, "isi")
+    PastexApp._paste_sender(app)
+
+    assert ("copy", "isi", "COPY-PLAN") in seen
+    assert ("paste", "PASTE-PLAN") in seen
+
+
+class PasteResultLike:
+    ok = True
+    tool = "ydotool"
+    message = "ok"
+    confident = True
+
+
+def test_failed_copy_drops_the_cached_plan(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = PastexApp.__new__(PastexApp)
+    app._copy_plan = "STALE"
+    app.after = lambda *_args: None
+    monkeypatch.setattr(
+        app_module,
+        "copy_text",
+        lambda text, plan=None: ClipboardResultLike(False),
+    )
+
+    PastexApp._paste_worker(app, "isi")
+
+    assert app._copy_plan is None
+
+
+def test_failed_paste_drops_the_cached_plan(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app = PastexApp.__new__(PastexApp)
+    app._paste_plan = "STALE"
+    app.after = lambda *_args: None
+    monkeypatch.setattr(
+        app_module,
+        "simulate_paste",
+        lambda plan=None: type("R", (), {"ok": False, "tool": "", "message": "no tool"})(),
+    )
+
+    PastexApp._paste_sender(app)
+
+    assert app._paste_plan is None
+
+
+def test_prewarm_runs_in_the_background_and_stores_the_plans(monkeypatch):
+    """Tool clipboard diresolusi lewat thread, bukan di jalur klik."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    started = []
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target, *args: started.append(target)
+    )
+    class FakePlan:
+        def __init__(self, names):
+            self.names = names
+
+        def tool_names(self):
+            return self.names
+
+    copy_plan = FakePlan(["wl-copy"])
+    paste_plan = FakePlan(["ydotool"])
+    monkeypatch.setattr(
+        app_module,
+        "prewarm_clipboard",
+        lambda: (copy_plan, paste_plan),
+    )
+
+    app = PastexApp.__new__(PastexApp)
+    app._copy_plan = None
+    app._paste_plan = None
+
+    PastexApp._prewarm_paste(app)
+
+    assert started == [app._prewarm_paste_worker]
+    assert app._copy_plan is None, "startup tidak boleh menunggu prewarm"
+
+    started[0]()
+
+    assert app._copy_plan is copy_plan
+    assert app._paste_plan is paste_plan
+
+
+def test_settings_migrate_the_previous_005_restore_delay(tmp_path, monkeypatch):
+    from pastex import app as app_module
+
+    config = tmp_path / "pastex"
+    config.mkdir()
+    (config / "settings.json").write_text('{"restore_delay": 0.05}', encoding="utf-8")
+    monkeypatch.setattr(app_module, "SETTINGS_FILE", config / "settings.json")
+
+    settings = app_module.load_settings()
+
+    assert settings["restore_delay"] == app_module.DEFAULT_SETTINGS["restore_delay"]
+    assert app_module.DEFAULT_SETTINGS["restore_delay"] < 0.05
+
+
+def test_startup_schedules_the_prewarm():
+    """Startup harus memanggil prewarm supaya klik pertama tidak lebih lambat."""
+    from pastex import app as app_module
+
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+
+    assert "def _prewarm_paste(" in source
+    assert "self._prewarm_paste()" in source
+    assert "prewarm as prewarm_clipboard" in source

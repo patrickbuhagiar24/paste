@@ -30,29 +30,25 @@ Verify [the signing-key fingerprint](https://patrickbuhagiar24.github.io/paste/a
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings
-```
-
-```bash
-curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg | sudo tee /etc/apt/keyrings/pastex.gpg > /dev/null
-```
-
-```bash
-sudo chmod 0644 /etc/apt/keyrings/pastex.gpg
-```
-
-```bash
-curl -fsSL https://patrickbuhagiar24.github.io/paste/pastex.sources | sudo tee /etc/apt/sources.list.d/pastex.sources > /dev/null
-```
-
-```bash
+curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt
+curl -fsSL --proto '=https' -o /tmp/pastex.gpg https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
+gpg --show-keys --with-fingerprint /tmp/pastex.gpg
+sudo install -m 0644 /tmp/pastex.gpg /etc/apt/keyrings/pastex.gpg
+curl -fsSL -o /tmp/pastex.sources https://patrickbuhagiar24.github.io/paste/pastex.sources
+sudo install -m 0644 /tmp/pastex.sources /etc/apt/sources.list.d/pastex.sources
 sudo apt update
-```
-
-```bash
 sudo apt install pastex
 ```
 
+Both fingerprints must match. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it), and `/etc/apt/trusted.gpg.d` would trust this key for every repository. APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`; a file only root can read makes `apt update` reject the repository. Downloading to `/tmp` first also keeps a failed `curl` from writing an empty keyring as root.
+
 `apt update` then reports `Hit:… https://patrickbuhagiar24.github.io/paste stonking InRelease`, which proves the metadata is signed and verified. If the archive is published without a signing key, install `pastex-unsigned.sources` instead (it sets `Trusted: yes`).
+
+Upgrading from the old flat `./` repository: delete `/etc/apt/sources.list.d/pastex.list` and the keyring it used, then follow the steps above.
+
+```bash
+sudo rm -f /etc/apt/sources.list.d/pastex.list /usr/share/keyrings/pastex.gpg
+```
 
 ## Use
 
@@ -63,7 +59,7 @@ sudo apt install pastex
 
 Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the selected item, and `Delete` to remove it. Folders are not pasted.
 
-Pasting hides Pastex by minimizing it, so the dock entry stays visible, and Ctrl+V is sent as soon as the window manager reports the window hidden instead of after a fixed delay. Lower `restore_delay` in `~/.config/pastex/settings.json` (seconds, default `0.05`) to bring the window back sooner.
+Pasting minimizes Pastex so the dock entry stays visible, and the two slow halves of the paste run in parallel: the window is minimized first (the window manager needs a few milliseconds to hand focus back) while the text is copied in a worker thread, and Ctrl+V is sent as soon as both are done — normally on the window manager's unmap signal rather than after a fixed delay. Clipboard and paste tools are resolved once at startup, and on Wayland `ydotoold` is started then too, so the first click is as fast as the rest. `restore_delay` in `~/.config/pastex/settings.json` (seconds, default `0.03`) only controls how long Pastex waits before its window comes back; lower it to return sooner, raise it if a target app loses the paste.
 Use the `Up` and `Down` arrow keys to move through the list without pasting, and `Ctrl+Up` / `Ctrl+Down` to move the current item up or down inside its folder.
 The darker highlight follows the row you last clicked, right-clicked, edited, or reached with the arrow keys; a right-click in Select mode leaves it unchanged.
 
