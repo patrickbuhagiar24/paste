@@ -79,7 +79,9 @@ Add these repository **secrets** in **Settings → Secrets and variables → Act
 | `GPG_PRIVATE_KEY` | Armored private key export with exactly one primary identity |
 | `GPG_PASSPHRASE` | Key passphrase (empty only for an unprotected key) |
 
-The workflow imports the key into an ephemeral keyring under `$RUNNER_TEMP`, derives the fingerprint itself, signs `Release` into `InRelease` and `Release.gpg`, verifies both signatures with `gpgv`, and exports only the public key. The private key is never printed or uploaded.
+The workflow imports the key into an ephemeral keyring under `$RUNNER_TEMP`, derives the fingerprint itself, exports it as `APT_SIGNING_KEY_ID` (the variable `scripts/sign-apt-repository.sh` requires), signs `Release` into `InRelease` and `Release.gpg`, verifies both signatures with `gpgv`, and exports only the public key. The private key is never printed or uploaded.
+
+If signing fails, the workflow prints the last `gpg` lines and adds an `APT signing failed: …` error annotation to the run, so the reason is visible without downloading logs. A passphrase is only passed to `gpg` when `GPG_PASSPHRASE` is set; otherwise the key must be unprotected.
 
 Without `GPG_PRIVATE_KEY` the workflow still publishes, but with a warning: the archive stays unsigned and users must install `pastex-unsigned.sources` (`Trusted: yes`).
 
@@ -95,7 +97,9 @@ The individual steps are:
 ```bash
 ./scripts/build-deb.sh
 ./scripts/build-apt-repository.sh dist apt-repo/dist stonking
-./scripts/sign-apt-repository.sh apt-repo/dist stonking
+APT_SIGNING_KEY_ID=<fingerprint> ./scripts/sign-apt-repository.sh apt-repo/dist stonking
 ```
+
+The signer prints the key algorithm, bit length, capabilities, and fingerprint (public metadata only) before signing, and aborts with a hint when `GPG_PASSPHRASE` is missing for a protected key.
 
 `PASSTEX_SIGNED=1 ./scripts/build-apt-repository.sh …` publishes `pastex.sources` (signed flow) instead of `pastex-unsigned.sources`.
