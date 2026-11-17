@@ -849,6 +849,33 @@ MUTATIONS = [
         " templates under /usr/lib/pastex, and only `pastex --enable-permissions`",
         ["tests/test_static.py::test_rendered_control_keeps_the_description_text"],
     ),
+    (
+        "the give-up path leaves a late-minimized window hidden",
+        "pastex/app.py",
+        "            # instead of leaving it minimized, as 1.10.x did.\n"
+        "            PastexApp._restore_window(self)",
+        "            # instead of leaving it minimized, as 1.10.x did.\n"
+        "            pass",
+        ["tests/test_app.py::test_the_window_is_restored_when_the_hide_check_gives_up"],
+    ),
+    (
+        "the restore request is never repeated",
+        "pastex/app.py",
+        "        try:\n"
+        "            self.deiconify()\n"
+        "        except TK_ERRORS:  # pragma: no cover - interpreter already gone\n"
+        "            return\n"
+        "        PastexApp._wait_for_the_restore(self)",
+        "        pass",
+        ["tests/test_app.py::test_the_restore_is_repeated_until_the_window_is_back"],
+    ),
+    (
+        "a late copy result overwrites a running paste",
+        "pastex/app.py",
+        '        if self.__dict__.get("_paste_started", False):',
+        "        if False:",
+        ["tests/test_app.py::test_a_late_copy_result_does_not_overwrite_a_running_paste"],
+    ),
 ]
 
 
