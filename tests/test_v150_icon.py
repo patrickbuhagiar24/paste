@@ -1,9 +1,9 @@
-"""Uji ikon: ikon jendela harus SAMA dengan ikon di menu aplikasi.
+"""Icon tests: the window icon must MATCH the application menu icon.
 
-Bug asli: `PastexApp` tidak pernah memanggil `iconphoto`, sehingga jendela
-memakai ikon generik bawaan Tk — berbeda dengan ikon di dash/menu GNOME.
-Ditambah WM_CLASS Tk ("Tk") tidak sama dengan StartupWMClass di
-pastex.desktop, jadi GNOME bahkan tidak memasangkan jendela ke entri menu.
+Original bug: `PastexApp` never called `iconphoto`, so the window used the
+generic Tk icon instead of the one in the menu. On top of that, Tk's WM_CLASS
+("Tk") did not match StartupWMClass in pastex.desktop, so the desktop did not
+even associate the window with its menu entry.
 """
 
 from __future__ import annotations
@@ -31,12 +31,12 @@ def _png_size(path: Path) -> tuple[int, int]:
 
 
 def _png_rgba(path: Path) -> tuple[int, int, bytearray]:
-    """Baca kembali PNG RGBA 8-bit (cukup untuk berkas buatan kita)."""
+    """Read back an 8-bit RGBA PNG (enough for the files we generate)."""
     import zlib
 
     data = path.read_bytes()
     width, height = struct.unpack(">II", data[16:24])
-    assert data[24] == 8 and data[25] == 6, "harus 8-bit RGBA"
+    assert data[24] == 8 and data[25] == 6, "must be 8-bit RGBA"
     pos, idat = 8, b""
     while pos < len(data):
         length = struct.unpack(">I", data[pos : pos + 4])[0]
@@ -50,12 +50,12 @@ def _png_rgba(path: Path) -> tuple[int, int, bytearray]:
     pixels = bytearray()
     for y in range(height):
         start = y * (stride + 1)
-        assert raw[start] == 0, "filter PNG harus None"
+        assert raw[start] == 0, "the PNG filter must be None"
         pixels += raw[start + 1 : start + 1 + stride]
     return width, height, pixels
 
 
-# --- berkas ikon ---------------------------------------------------------
+# --- icon files ----------------------------------------------------------
 
 
 def test_svg_exists_and_is_square():
@@ -67,15 +67,15 @@ def test_svg_exists_and_is_square():
 
 @pytest.mark.parametrize("size", PNG_SIZES)
 def test_png_exists_for_each_size(size):
-    """Tk hanya bisa memuat raster: PNG wajib ada di tema hicolor."""
+    """Tk can only load raster images: the PNG must exist in the hicolor theme."""
     path = ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
-    assert path.is_file(), f"ikon jendela {size}px tidak ada"
+    assert path.is_file(), f"the {size}px window icon is missing"
     assert _png_size(path) == (size, size)
 
 
 @pytest.mark.parametrize("size", (64, 128, 256))
 def test_png_actually_drawn_not_blank(size):
-    """PNG tidak boleh kanvas kosong (mis. render gagal tapi tetap ditulis)."""
+    """The PNG must not be a blank canvas (a failed render still writes a file)."""
     path = ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
     width, height, pixels = _png_rgba(path)
     opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] > 200)
@@ -84,7 +84,7 @@ def test_png_actually_drawn_not_blank(size):
 
 
 def test_png_matches_svg_colors():
-    """Warna PNG harus berasal dari SVG yang sama (bukan digambar ulang)."""
+    """PNG colours must come from the same SVG (not redrawn by hand)."""
     svg_text = SVG.read_text(encoding="utf-8").lower()
     _, _, pixels = _png_rgba(ICON_DIR / "64x64" / "apps" / "pastex.png")
     seen = {
@@ -99,12 +99,12 @@ def test_png_matches_svg_colors():
         ("oranye", (255, 152, 0)),
     ):
         hexa = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
-        assert hexa in svg_text, f"warna {name} tidak ada di SVG"
-        assert rgb in seen, f"warna {name} {hexa} tidak muncul di PNG"
+        assert hexa in svg_text, f"colour {name} is missing from the SVG"
+        assert rgb in seen, f"colour {name} {hexa} does not appear in the PNG"
 
 
 def test_png_is_what_the_generator_produces():
-    """PNG di repo harus hasil skrip, bukan berkas usang/manual."""
+    """The PNGs in the repository must come from the script, not from hand edits."""
     import importlib.util
     import sys
 
@@ -112,7 +112,7 @@ def test_png_is_what_the_generator_produces():
         "make_icon_png", ROOT / "scripts" / "make-icon-png.py"
     )
     module = importlib.util.module_from_spec(spec)
-    # @dataclass butuh modul terdaftar di sys.modules saat dibuat.
+    # @dataclass needs the module registered in sys.modules when it is created.
     sys.modules["make_icon_png"] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
 
@@ -123,14 +123,14 @@ def test_png_is_what_the_generator_produces():
             ICON_DIR / f"{size}x{size}" / "apps" / "pastex.png"
         )
         assert (width, height) == (size, size)
-        assert bytes(actual) == expected, f"PNG {size}px basi — jalankan ulang skrip"
+        assert bytes(actual) == expected, f"stale {size}px PNG — rerun the script"
 
 
-# --- identitas jendela ---------------------------------------------------
+# --- window identity -----------------------------------------------------
 
 
 def test_constants_agree_with_desktop_file():
-    """Icon=/StartupWMClass= di .desktop harus sama dengan yang dipakai app."""
+    """Icon=/StartupWMClass= in .desktop must match what the app uses."""
     # Only the [Desktop Entry] group: the file also carries a [Desktop Action]
     # section for the snippet picker.
     entries = {}
@@ -148,7 +148,7 @@ def test_constants_agree_with_desktop_file():
     assert entries["Icon"] == app_module.ICON_NAME
     assert entries["StartupWMClass"] == app_module.WM_CLASS
     assert entries["Exec"].endswith("/pastex")
-    assert "Pick" in entries.get("Actions", ""), "aksi picker harus terdaftar"
+    assert "Pick" in entries.get("Actions", ""), "the picker action must be registered"
 
 
 def test_desktop_action_opens_the_picker():
@@ -158,21 +158,21 @@ def test_desktop_action_opens_the_picker():
 
 
 def test_window_class_passed_to_tk():
-    """Tk harus diberi className agar WM_CLASS tidak jatuh ke "Tk"."""
+    """Tk must be given a className so WM_CLASS does not fall back to "Tk"."""
     src = Path(app_module.__file__).read_text(encoding="utf-8")
     assert "super().__init__(className=TK_CLASS_NAME)" in src
 
 
 def test_icon_files_prefers_installed_and_found():
     files = app_module.icon_files()
-    assert files, "PNG ikon tidak ditemukan dari kode"
+    assert files, "no icon PNG was found from the code"
     assert [f.name for f in files] == ["pastex.png"] * len(files)
     sizes = [int(f.parent.parent.name.split("x")[0]) for f in files]
-    assert sizes == sorted(sizes, reverse=True), "harus besar -> kecil"
+    assert sizes == sorted(sizes, reverse=True), "must be largest to smallest"
 
 
 def test_apply_window_icon_sets_photo_and_keeps_reference(monkeypatch):
-    """iconphoto dipanggil (True = semua Toplevel) dan gambar tidak di-GC."""
+    """iconphoto is called (True = every Toplevel) and the images are not garbage collected."""
     loaded = []
 
     class FakePhoto:
@@ -196,19 +196,19 @@ def test_apply_window_icon_sets_photo_and_keeps_reference(monkeypatch):
     window = FakeTk()
     used = app_module.apply_window_icon(window)
 
-    assert used, "tidak ada berkas ikon yang dipakai"
-    assert window.icon is not None, "iconphoto tidak dipanggil"
-    assert window.icon[0] is True, "ikon harus berlaku juga untuk Toplevel anak"
+    assert used, "no icon file was used"
+    assert window.icon is not None, "iconphoto was not called"
+    assert window.icon[0] is True, "the icon must also apply to child Toplevels"
     assert len(window.icon[1]) == len(used)
     assert window.iconname == app_module.ICON_NAME
-    assert window._icon_images, "referensi gambar harus disimpan"
+    assert window._icon_images, "the image references must be kept"
 
 
 def test_constructor_actually_applies_window_icon():
-    """__init__ WAJIB memanggil apply_window_icon(self).
+    """__init__ MUST call apply_window_icon(self).
 
-    Tanpa uji ini, `apply_window_icon` bisa ada dan benar tetapi tidak pernah
-    dipakai — persis bug awal (ikon jendela generik).
+    Without this test, `apply_window_icon` could exist and be correct yet never
+    be called — exactly the original bug (a generic window icon).
     """
     import ast
 
@@ -230,13 +230,13 @@ def test_constructor_actually_applies_window_icon():
         and isinstance(node.func, ast.Name)
         and node.func.id == "apply_window_icon"
     ]
-    assert calls, "apply_window_icon tidak dipanggil di __init__"
+    assert calls, "apply_window_icon is not called from __init__"
     assert calls[0].args and isinstance(calls[0].args[0], ast.Name)
     assert calls[0].args[0].id == "self"
 
 
 def test_apply_window_icon_survives_broken_png(monkeypatch, tmp_path):
-    """PNG rusak tidak boleh membuat aplikasi gagal start."""
+    """A corrupt PNG must not stop the application from starting."""
     bad = tmp_path / "256x256" / "apps"
     bad.mkdir(parents=True)
     (bad / "pastex.png").write_bytes(b"bukan png")
@@ -263,10 +263,10 @@ def test_check_reports_icon_status(capsys):
 
 
 def test_real_window_wm_class_matches_desktop(tmp_path):
-    """Jalankan launcher nyata di Xvfb lalu periksa WM_CLASS melalui xprop.
+    """Run the real launcher under Xvfb and check WM_CLASS through xprop.
 
-    Uji ini juga berjalan pada XWayland karena Tk menggunakan protokol X11;
-    pencocokan ikon oleh GNOME sendiri tetap perlu diverifikasi di desktop.
+    This test also runs on XWayland, because Tk speaks the X11 protocol; the
+    desktop's own icon matching still has to be verified on a real desktop.
     """
     import os
     import shutil
@@ -281,8 +281,8 @@ def test_real_window_wm_class_matches_desktop(tmp_path):
         missing.append("tkinter")
     if missing:
         if required:
-            pytest.fail("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
-        pytest.skip("Dependensi uji X11 tidak tersedia: " + ", ".join(missing))
+            pytest.fail("X11 test dependencies are missing: " + ", ".join(missing))
+        pytest.skip("X11 test dependencies are missing: " + ", ".join(missing))
 
     script = r"""
 import os, subprocess, sys, time
@@ -297,13 +297,13 @@ try:
         if result.returncode == 0 and "WM_CLASS(STRING)" in result.stdout:
             print(result.stdout.strip())
             if result.stdout.strip().split('"')[-2] != expected:
-                raise SystemExit("WM_CLASS aktual berbeda dari StartupWMClass")
+                raise SystemExit("the actual WM_CLASS differs from StartupWMClass")
             break
         if p.poll() is not None:
             raise SystemExit("Aplikasi berhenti: " + p.stderr.read())
         time.sleep(0.1)
     else:
-        raise SystemExit("Jendela tidak ditemukan oleh xprop")
+        raise SystemExit("xprop did not find the window")
 finally:
     p.terminate()
     p.wait(timeout=10)

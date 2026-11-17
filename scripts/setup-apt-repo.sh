@@ -7,12 +7,12 @@
 #   APT_SIGNING_KEY_ID=... GPG_PASSPHRASE=... ./scripts/setup-apt-repo.sh
 #
 # The archive is written to apt-repo/dist and contains:
-#   index.html, pool/main/p/pastex/*.deb, dists/stonking/{Release,Packages}
+#   index.html, pool/main/p/pastex/*.deb, dists/mint/{Release,Packages}
 # plus InRelease, Release.gpg and archive-keyring.* when signing is configured.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SUITE="${APT_SUITE:-stonking}"
+SUITE="${APT_SUITE:-mint}"
 
 ./scripts/build-deb.sh
 

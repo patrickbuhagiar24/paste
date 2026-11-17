@@ -5,9 +5,9 @@ list appears where the pointer is. Choosing a snippet copies it and sends
 Ctrl+V to the application that kept the focus, because the picker is a
 frameless popup:
 
-  * the main window is never minimized or unmapped, so the dock icon is not
+  * the main window is never minimized or unmapped, so the panel icon is not
     part of the paste at all;
-  * the popup carries no dock entry of its own, so hiding it cannot remove an
+  * the popup carries no panel entry of its own, so hiding it cannot remove an
     icon either;
   * the application behind the popup keeps the focus when the popup is
     destroyed, which is exactly where Ctrl+V should land.

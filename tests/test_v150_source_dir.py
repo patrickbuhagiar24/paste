@@ -1,10 +1,10 @@
-"""Uji v1.5.0 #4: satu folder sumber + tampilan kosong berpetunjuk.
+"""v1.5.0 #4: a single source folder plus a guided empty view.
 
-Aturan yang dijaga:
-  * "📁 Choose Source Folder" menyimpan SATU folder ke settings.json.
-  * Folder itu menjadi satu-satunya root DAN tempat penulisan.
-  * `--dir` selalu menang untuk sesi itu, dan TIDAK mengubah folder tersimpan.
-  * Bila folder sumber belum dipilih -> tampilan kosong berpetunjuk.
+Rules kept here:
+  * "📁 Choose Source Folder" stores ONE folder in settings.json.
+  * That folder is the only root AND the only write target.
+  * `--dir` always wins for that session and does NOT change the stored folder.
+  * With no source folder chosen, the empty view shows guidance.
 """
 
 from __future__ import annotations
@@ -37,11 +37,11 @@ def test_load_settings_ignores_broken_source_dir(tmp_path, monkeypatch):
 def test_load_settings_keeps_source_dir(tmp_path, monkeypatch):
     target = tmp_path / "settings.json"
     monkeypatch.setattr(app_module, "SETTINGS_FILE", target)
-    target.write_text('{"source_dir": "/data/teks"}', encoding="utf-8")
-    assert app_module.load_settings()["source_dir"] == "/data/teks"
+    target.write_text('{"source_dir": "/data/text"}', encoding="utf-8")
+    assert app_module.load_settings()["source_dir"] == "/data/text"
 
 
-# --- tombol & pemilihan folder -------------------------------------------
+# --- buttons and folder selection ----------------------------------------
 
 
 def test_choose_source_dir_button_exists():
@@ -51,33 +51,33 @@ def test_choose_source_dir_button_exists():
 
 
 def test_choose_source_dir_saves_and_refreshes(gui, dialogs, sample_root):
-    app = gui(roots=[Path("/tidak/dipakai")])
+    app = gui(roots=[Path("/not/used")])
     dialogs.answers["directory"] = str(sample_root)
     chosen = app.choose_source_dir()
 
     assert chosen == sample_root
     assert app.saved_settings[-1]["source_dir"] == _norm(sample_root)
-    # root aktif = hanya folder sumber
+    # the active root is the source folder only
     assert app.active_roots() == [sample_root]
     assert app.tree.row("Greeting") is not None
 
 
 def test_choose_source_dir_cancel_changes_nothing(gui, dialogs):
     app = gui(roots=[Path("/a")])
-    app.settings["source_dir"] = "/lama"
+    app.settings["source_dir"] = "/old"
     dialogs.answers["directory"] = ""
     assert app.choose_source_dir() is None
-    assert app.settings["source_dir"] == "/lama"
+    assert app.settings["source_dir"] == "/old"
     assert app.saved_settings == []
 
 
 def test_choose_source_dir_rejects_missing_folder(gui, dialogs, tmp_path):
     app = gui(roots=[Path("/a")])
-    dialogs.answers["directory"] = str(tmp_path / "hilang")
+    dialogs.answers["directory"] = str(tmp_path / "missing")
     assert app.choose_source_dir() is None
     assert any(call[0] == "askdirectory" for call in dialogs.asked)
     assert any(call[0] == "error" for call in dialogs.asked), (
-        "folder tidak valid harus dilaporkan"
+        "an invalid folder must be reported"
     )
     assert app.settings["source_dir"] is None
     assert app.settings["source_dir"] is None
@@ -86,38 +86,38 @@ def test_choose_source_dir_rejects_missing_folder(gui, dialogs, tmp_path):
 
 def test_source_dir_replaces_default_roots(gui, sample_root):
     app = gui(
-        roots=[Path("/sistem"), Path("/pengguna")],
+        roots=[Path("/system"), Path("/user")],
         settings={"source_dir": _norm(sample_root)},
     )
     app.refresh_tree()
     assert app.active_roots() == [sample_root]
     texts = [r["text"] for r in app.tree.rows]
-    assert not any("sistem" in t or "pengguna" in t for t in texts)
+    assert not any("system" in t or "user" in t for t in texts)
     assert not any("sumber" in t for t in texts)
     assert app.tree.by_iid(sample_root / "General")["parent"] == ""
     assert app.tree.by_iid(sample_root / "Email")["parent"] == ""
 
 
 def test_missing_source_dir_falls_back_to_roots(gui, tmp_path):
-    app = gui(roots=[tmp_path], settings={"source_dir": str(tmp_path / "hilang")})
+    app = gui(roots=[tmp_path], settings={"source_dir": str(tmp_path / "missing")})
     assert app.active_roots() == [tmp_path]
 
 
-# --- tampilan kosong berpetunjuk -----------------------------------------
+# --- guided empty view ---------------------------------------------------
 
 
 def test_empty_state_shown_when_no_source_selected(gui, tmp_path):
-    """Pemasangan baru: tidak ada folder -> petunjuk, bukan pohon kosong."""
-    app = gui(roots=[tmp_path / "belum-ada"])
+    """Fresh install: no folder -> guidance, not an empty tree."""
+    app = gui(roots=[tmp_path / "missing"])
     app.refresh_tree()
-    assert app.empty_frame.packed is not None, "tampilan kosong tidak muncul"
+    assert app.empty_frame.packed is not None, "the empty view did not appear"
     assert app.scroll.packed == "forgotten"
     assert app.tree.packed == "forgotten"
 
 
 def test_empty_folder_keeps_tree_visible(gui, tmp_path):
-    """Folder sumber kosong tetap ditampilkan agar bisa diisi kategori."""
-    root = tmp_path / "kosong"
+    """An empty source folder is still shown so categories can be added."""
+    root = tmp_path / "empty"
     root.mkdir()
     app = gui(roots=[root], settings={"source_dir": str(root)})
     app.refresh_tree()
@@ -159,13 +159,13 @@ def test_target_dir_inside_selected_folder(gui, sample_root):
 
 
 def test_target_dir_never_escapes_source(gui, tmp_path):
-    """Folder induk root sumber tidak boleh jadi tujuan penulisan."""
-    parent = tmp_path / "induk"
+    """The parent of the source root must never be a write target."""
+    parent = tmp_path / "parent"
     source = parent / "sumber"
     (source / "General").mkdir(parents=True)
     app = gui(roots=[source], settings={"source_dir": _norm(source)})
     app.refresh_tree()
-    # pilih berkas langsung di akar folder sumber
+    # select a file directly in the source folder root
     (source / "Lepas.txt").write_text("x", encoding="utf-8")
     app.refresh_tree()
     app.tree.selection_set(str(source / "Lepas.txt"))
@@ -193,27 +193,27 @@ def test_add_text_writes_into_source(gui, dialogs, sample_root, monkeypatch):
     assert (sample_root / "Catatan.txt").exists()
 
 
-# --- --dir selalu menang, tanpa mengubah folder tersimpan ----------------
+# --- --dir always wins, without changing the stored folder ---------------
 
 
 def test_dir_argument_wins_over_saved_source(gui, sample_root, tmp_path, monkeypatch):
-    """--dir mengalahkan source_dir untuk sesi itu."""
-    lain = tmp_path / "lain"
-    lain.mkdir()
-    (lain / "Catatan.txt").write_text("isi", encoding="utf-8")
+    """--dir overrides source_dir for that session."""
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "Notes.txt").write_text("body", encoding="utf-8")
     app = gui(
-        roots=[lain], settings={"source_dir": _norm(sample_root)}, transient_roots=True
+        roots=[other], settings={"source_dir": _norm(sample_root)}, transient_roots=True
     )
     app.refresh_tree()
-    assert app.active_roots() == [lain]
-    assert [r["text"] for r in app.tree.rows] == ["📄 Catatan"]
+    assert app.active_roots() == [other]
+    assert [r["text"] for r in app.tree.rows] == ["📄 Notes"]
     assert app.tree.rows[0]["parent"] == ""
 
 
 def test_dir_argument_does_not_touch_saved_source(
     gui, sample_root, tmp_path, monkeypatch
 ):
-    """Argumen --dir tidak boleh menulis/mengubah folder tersimpan."""
+    """--dir must not write to or change the stored folder."""
     monkeypatch.setattr(
         app_module.PastexApp,
         "__init__",
@@ -226,11 +226,11 @@ def test_dir_argument_does_not_touch_saved_source(
     )
     app.refresh_tree()
     assert app.settings["source_dir"] == _norm(sample_root)
-    assert app.saved_settings == [], "sesi --dir menulis settings.json"
+    assert app.saved_settings == [], "a --dir session wrote settings.json"
 
 
 def test_dir_argument_transient_flag_from_cli(monkeypatch, tmp_path):
-    """run_cli meneruskan transient_roots=True saat --dir dipakai."""
+    """run_cli passes transient_roots=True when --dir is used."""
     seen = {}
 
     class FakeApp:
@@ -265,10 +265,10 @@ def test_without_dir_not_transient(monkeypatch):
 
 
 def test_cli_list_explains_when_nothing_found(tmp_path, capsys):
-    """--list tanpa teks tidak boleh diam membingungkan."""
+    """--list with no text must not fail silently."""
     from pastex.app import run_cli
 
-    empty = tmp_path / "kosong"
+    empty = tmp_path / "empty"
     empty.mkdir()
     assert run_cli(["--dir", str(empty), "--list"]) == 0
     err = capsys.readouterr().err
@@ -276,31 +276,31 @@ def test_cli_list_explains_when_nothing_found(tmp_path, capsys):
     assert "--dir FOLDER" in err
 
 
-# --- pemasangan baru: benar-benar kosong, contoh hanya atas permintaan ----
+# --- fresh install: really empty, samples only on request ----------------
 
 
 def test_nothing_written_into_user_root_automatically(gui, tmp_path, monkeypatch):
-    """Start GUI tidak boleh menanam contoh di folder pengguna."""
+    """Starting the GUI must not plant samples in the user folder."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     target = user_root()
     app = gui(roots=[target])
     app.refresh_tree()
-    assert not target.exists(), "folder pengguna diisi otomatis"
+    assert not target.exists(), "the user folder is filled automatically"
 
 
 def test_source_dir_selection_does_not_get_samples(
     gui, sample_root, tmp_path, monkeypatch
 ):
-    """Folder sumber pilihan pengguna tidak diisi contoh otomatis."""
+    """A chosen source folder is not filled with samples automatically."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     app = gui(roots=[sample_root], settings={"source_dir": _norm(sample_root)})
     app.refresh_tree()
     names = sorted(p.name for p in sample_root.rglob("*.txt"))
-    assert names == ["Balas.txt", "Greeting.txt"]
+    assert names == ["Greeting.txt", "Reply.txt"]
 
 
 def test_dir_writes_to_transient_root_not_saved_source(gui, sample_root, tmp_path):
-    other = tmp_path / "lain"
+    other = tmp_path / "other"
     (other / "folders").mkdir(parents=True)
     app = gui(
         roots=[other], settings={"source_dir": _norm(sample_root)}, transient_roots=True

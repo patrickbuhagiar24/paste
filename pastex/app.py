@@ -54,7 +54,7 @@ from .snippets import (
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
-except ImportError:  # pragma: no cover - ditangani saat runtime
+except ImportError:  # pragma: no cover - handled at runtime
     tk = None  # type: ignore[assignment]
     filedialog = messagebox = simpledialog = ttk = None  # type: ignore[assignment]
 
@@ -77,7 +77,7 @@ SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 ERROR_LOG = SETTINGS_DIR / "error.log"
 
 # Tk may normalize className when creating the X11 WM_CLASS. The observed value
-# for Ubuntu Tk (verified with xprop) is "Pastex", not the supplied className.
+# on Linux Mint (verified with xprop) is "Pastex", not the supplied className.
 # The desktop StartupWMClass must match the actual value.
 APP_ID = "pastex"
 TK_CLASS_NAME = "Pastex"
@@ -87,9 +87,9 @@ ICON_NAME = APP_ID
 # after Pastex hides itself, before Ctrl+V is sent.
 FOCUS_SETTLE_MS = 80
 
-# iconify() only *asks* the compositor to minimize; on GNOME the window is
-# still reported as "normal" for a while (see the 1.8.1 log line "did not
-# minimize (state=normal)"), so the check is retried instead of taken once.
+# iconify() only *asks* the window manager to minimize; the window is still
+# reported as "normal" for a while (see the 1.8.1 log line "did not minimize
+# (state=normal)"), so the check is retried instead of taken once.
 MINIMIZE_WAIT_MS = 300
 MINIMIZE_RETRY_MS = 20
 # Some compositors need a second request before they hide the window.
@@ -171,7 +171,7 @@ def apply_window_icon(window) -> list[Path]:
     Without this, the window uses Tk's generic icon instead of the application
     menu icon. Load PNGs rendered from the same SVG as the theme icon so they match.
     """
-    if tk is None:  # pragma: no cover - CLI tanpa tkinter
+    if tk is None:  # pragma: no cover - CLI without tkinter
         return []
     images = []
     used: list[Path] = []
@@ -186,7 +186,7 @@ def apply_window_icon(window) -> list[Path]:
         window.iconphoto(True, *images)  # True also applies to child Toplevels.
         window._icon_images = images  # cegah garbage-collect
     try:
-        window.wm_iconname(ICON_NAME)  # cadangan: nama ikon tema
+        window.wm_iconname(ICON_NAME)  # fallback: the themed icon name
     except (tk.TclError, AttributeError):  # pragma: no cover - optional WM icon name
         return used
     return used
@@ -425,13 +425,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._copy_plan = copy_plan
         self._paste_plan = paste_plan
         try:
-            daemon = "jalan" if uinput.ydotoold_running() else "tidak-jalan"
+            daemon = "running" if uinput.ydotoold_running() else "not running"
         except Exception:  # noqa: BLE001 - diagnostics must never break startup
             daemon = "?"
         log_error(
-            "[paste] siap: "
-            f"salin={','.join(copy_plan.tool_names()) or '-'} "
-            f"tempel={','.join(paste_plan.tool_names()) or '-'} "
+            "[paste] ready: "
+            f"copy={','.join(copy_plan.tool_names()) or '-'} "
+            f"paste={','.join(paste_plan.tool_names()) or '-'} "
             f"ydotoold={daemon}"
         )
         if self.__dict__.get("settings", {}).get("clipboard_owner"):
@@ -1691,7 +1691,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
         The two slow halves overlap instead of running one after the other:
 
-          1. Minimize the window right away; minimizing keeps the dock entry,
+          1. Minimize the window right away; minimizing keeps the panel entry,
              and the window manager then needs a few milliseconds to hand
              focus back to the previous application. The window is never
              unmapped, so the icon cannot disappear.
@@ -1724,7 +1724,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ``hide`` is the window to get out of the way: ``None`` means the main
         window, which is minimized (never unmapped) and restored afterwards.
         The picker passes its own popup, which is destroyed instead, leaving
-        the main window and the dock entry untouched.
+        the main window and the panel entry untouched.
         """
         self._pasting = True
         self._paste_finished = False
@@ -1735,7 +1735,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # Ctrl+V may only be sent once the clipboard owns the text, so the
         # send stays armed until _after_copy() reports success. When the
         # window manager refuses to minimize nothing is armed: keeping the
-        # dock icon matters more than pasting, and Ctrl+V would land in Pastex.
+        # panel icon matters more than pasting, and Ctrl+V would land in Pastex.
         self._paste_clipboard_ready = False
         self._paste_hide_widget = hide
         # Only restore the window that was actually hidden.
@@ -1744,7 +1744,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             # A previous click (or startup) already showed that Ctrl+V cannot
             # be sent here, so there is nothing to minimize for: copy the text
             # and leave the window alone instead of hiding and bouncing back.
-            log_error("[paste] Ctrl+V tidak tersedia; teks hanya disalin")
+            log_error("[paste] Ctrl+V is unavailable here; copying the text only")
             self._paste_restore_window = False
             _run_in_thread(self._paste_worker, text)
             return
@@ -1805,15 +1805,15 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if self.__dict__.get("_paste_finished", True):
             return
         self._paste_aborted = True
-        log_error("[paste] batas waktu kirim Ctrl+V terlampaui; jendela dipulihkan")
+        log_error("[paste] Ctrl+V deadline exceeded; restoring the window")
         PastexApp._finish_paste(
             self,
             PasteResult(
                 ok=False,
                 tool="",
                 message=(
-                    "Ctrl+V tidak terkirim dalam batas waktu, jadi jendela "
-                    "dipulihkan dan teks tetap ada di clipboard."
+                    "Ctrl+V was not delivered before the deadline, so the "
+                    "window was restored and the text is still on the clipboard."
                 ),
             ),
         )
@@ -1821,7 +1821,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _hide_widget(self, widget) -> bool:
         """Destroy a helper window so focus returns to the target application.
 
-        Only popups use this: they carry no dock entry, so unmapping them
+        Only popups use this: they carry no panel entry, so unmapping them
         cannot remove the Pastex icon, and the main window stays visible.
         """
         try:
@@ -1835,11 +1835,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         try:
             result = copy_text(text, plan=getattr(self, "_copy_plan", None))
         except Exception as exc:  # noqa: BLE001 - always report back to the GUI
-            log_error(f"[paste] penyalinan gagal: {exc}")
+            log_error(f"[paste] copy failed: {exc}")
             result = ClipboardResult(ok=False, message=f"copy error: {exc}")
         elapsed_ms = (time.monotonic() - started) * 1000
         log_error(
-            f"[paste] salin: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
+            f"[paste] copy: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
         )
         if not result.ok:
             # Resolve the tools again next time: a missing tool may have been
@@ -1865,12 +1865,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._send_paste_now()
 
     def _hide_for_paste(self) -> bool:
-        """Minimize Pastex, keeping its dock entry, and report whether it worked.
+        """Minimize Pastex, keeping its panel entry, and report whether it worked.
 
-        ``withdraw()`` unmaps the only window, so GNOME drops an unpinned app
-        from the dock and only shows it again once a click makes the window
+        ``withdraw()`` unmaps the only window, so the window list drops an
+        unpinned app and only shows it again once a click makes the window
         active — the icon appeared to vanish on one click and come back on the
-        next. Minimizing keeps the window mapped, so the dock entry survives
+        next. Minimizing keeps the window mapped, so the panel entry survives
         while focus returns to the previous application, and it is the only
         thing done here: when the window manager refuses to minimize, the
         window simply stays visible and the caller skips the synthetic Ctrl+V
@@ -1901,7 +1901,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if state in {"iconic", "withdrawn"}:
             if not self.__dict__.get("_hide_logged", False):
                 self._hide_logged = True
-                log_error("[paste] window minimized before Ctrl+V; dock entry kept")
+                log_error("[paste] window minimized before Ctrl+V; panel entry kept")
             return True
         return False
 
@@ -1974,7 +1974,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if not PastexApp._paste_window_hidden(self):
             if PastexApp._wait_for_the_window_hiding(self):
                 return
-            # The window manager never hid the window: keep it (the dock icon
+            # The window manager never hid the window: keep it (the panel icon
             # matters more than pasting), leave the text on the clipboard and
             # ask the user to press Ctrl+V instead of typing into Pastex.
             self._paste_pending = False
@@ -1983,8 +1983,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             PastexApp._cancel_paste_watchdog(self)
             self.status_var.set(PASTE_MANUAL_HINT)
             log_error(
-                f"[paste] jendela tetap tampil setelah {MINIMIZE_WAIT_MS} ms; "
-                "Ctrl+V tidak dikirim"
+                f"[paste] the window was still visible after {MINIMIZE_WAIT_MS} ms;"
+                " Ctrl+V was not sent"
             )
             return
         self._paste_pending = False
@@ -2010,10 +2010,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 should_stop=lambda: bool(self.__dict__.get("_paste_aborted", False)),
             )
         except Exception as exc:  # noqa: BLE001 - always report back to the GUI
-            log_error(f"[paste] pengirim gagal: {exc}")
+            log_error(f"[paste] sender failed: {exc}")
             result = PasteResult(ok=False, tool="", message=f"paste error: {exc}")
         log_error(
-            f"[paste] hasil: ok={result.ok} tool={result.tool} pesan={result.message}"
+            f"[paste] result: ok={result.ok} tool={result.tool} message={result.message}"
         )
         if not result.ok:
             # Resolve the tools again next time: a missing tool may have been
@@ -2034,7 +2034,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if self.__dict__.get("_paste_finished", False):
             # A late result from an attempt the watchdog already abandoned:
             # report it, but do not move the window or open a second dialog.
-            log_error(f"[paste] hasil terlambat: ok={result.ok} pesan={result.message}")
+            log_error(f"[paste] late result: ok={result.ok} message={result.message}")
             if result.ok:
                 self._paste_ready = True
             return
@@ -2492,7 +2492,7 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     # One instance per user: a later launch asks the running one to show its
     # window (or picker) and exits, so it costs no startup time and cannot
-    # leave a second dock entry. --dir sessions stay separate on purpose.
+    # leave a second panel entry. --dir sessions stay separate on purpose.
     if args.wayland_clipboard and not load_settings().get("clipboard_owner"):
         settings = dict(load_settings())
         settings["clipboard_owner"] = True

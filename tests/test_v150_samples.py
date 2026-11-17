@@ -1,9 +1,9 @@
-"""Contoh bawaan tidak disertakan repo / .deb dan tidak bisa diminta.
+"""Bundled samples are not shipped in the repo or the .deb, nor on request.
 
-Regresi yang dijaga: `data/snippets/` muncul kembali di repo,
-`build-deb.sh` / `debian/rules` menyalinnya ke dalam paket, atau opsi
-`--export-data` (dihapus di 1.7.2) muncul lagi. Keputusannya tetap sama
-sejak 1.5.0: biarkan contoh yang sudah terpasang, jangan bawa contoh baru.
+Guarded regressions: `data/snippets/` reappearing in the repo,
+`build-deb.sh` / `debian/rules` copying it into the package, or the
+`--export-data` option (removed in 1.7.2) coming back. The decision stands
+since 1.5.0: leave installed samples alone, ship no new ones.
 """
 
 from __future__ import annotations
@@ -14,20 +14,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_no_bundled_sample_tree_in_repo():
-    """data/snippets/ tidak boleh ada lagi di repo."""
+    """data/snippets/ must not exist in the repo any more."""
     assert not (ROOT / "data" / "snippets").exists()
     assert not list(ROOT.glob("data/snippets/**/*.txt"))
 
 
 def test_build_deb_does_not_copy_samples():
-    """build-deb.sh tidak boleh menyalin data/snippets ke staging .deb."""
+    """build-deb.sh must not copy data/snippets into the .deb staging area."""
     script = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
     copies = [
         ln
         for ln in script.splitlines()
         if "data/snippets" in ln and not ln.strip().startswith("#")
     ]
-    assert copies == [], f"masih menyalin contoh bawaan: {copies}"
+    assert copies == [], f"still copying bundled samples: {copies}"
 
 
 def test_debian_rules_does_not_copy_samples():
@@ -37,14 +37,14 @@ def test_debian_rules_does_not_copy_samples():
         for ln in rules.splitlines()
         if "data/snippets" in ln and not ln.strip().startswith("#")
     ]
-    assert copies == [], f"masih menyalin contoh bawaan: {copies}"
+    assert copies == [], f"still copying bundled samples: {copies}"
 
 
 def test_samples_never_deleted_from_installed_location():
-    """Contoh yang SUDAH terpasang tidak boleh dihapus siapa pun.
+    """Samples that are ALREADY installed must not be deleted by anyone.
 
-    postinst/postrm tidak boleh menyentuh /usr/share/pastex/snippets:
-    pengguna lama memakai folder itu sebagai root baca-saja.
+    postinst/postrm must not touch /usr/share/pastex/snippets: existing users
+    rely on that folder as a read-only root.
     """
     for name in ("debian/postinst", "debian/postrm"):
         text = (ROOT / name).read_text(encoding="utf-8")
@@ -54,11 +54,11 @@ def test_samples_never_deleted_from_installed_location():
             if "snippets" in ln
             and any(word in ln for word in ("rm ", "rm -", "unlink"))
         ]
-        assert offending == [], f"{name} menghapus contoh: {offending}"
+        assert offending == [], f"{name} deletes samples: {offending}"
 
 
 def test_samples_are_gone_from_the_codebase():
-    """`--export-data` dihapus di 1.7.2: tidak ada lagi contoh di kode."""
+    """`--export-data` was removed in 1.7.2: no sample handling is left in the code."""
     import pastex.app as app
     import pastex.snippets as snippets
 
@@ -67,7 +67,7 @@ def test_samples_are_gone_from_the_codebase():
 
 
 def test_export_data_option_is_rejected():
-    """Argparse harus menolak opsi yang sudah dihapus, bukan diam-diam jalan."""
+    """Argparse must reject removed options instead of silently accepting them."""
     import pytest
 
     from pastex.app import run_cli
@@ -80,7 +80,7 @@ def test_export_data_option_is_rejected():
 def test_list_hint_never_points_at_the_removed_option(tmp_path, capsys):
     from pastex.app import run_cli
 
-    empty = tmp_path / "kosong"
+    empty = tmp_path / "empty"
     empty.mkdir()
     assert run_cli(["--dir", str(empty), "--list"]) == 0
     err = capsys.readouterr().err
@@ -91,4 +91,4 @@ def test_list_hint_never_points_at_the_removed_option(tmp_path, capsys):
 def test_docs_and_packaging_do_not_promise_the_removed_option():
     for name in ("README.md", "debian/control", "scripts/build-deb.sh"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "--export-data" not in text, f"{name} masih menyebut --export-data"
+        assert "--export-data" not in text, f"{name} still mentions --export-data"

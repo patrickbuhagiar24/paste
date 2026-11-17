@@ -34,7 +34,7 @@ def write_release(distribution: Path, suite: str, *, origin: str = "Pastex") -> 
         f"Date: {format_datetime(datetime.now(timezone.utc), usegmt=True)}",
         "Architectures: all",
         "Components: main",
-        f"Description: {origin} packages for Ubuntu 26.10 ({suite})",
+        f"Description: {origin} packages for Linux Mint ({suite})",
         "Acquire-By-Hash: no",
     ]
     for label, algorithm in (

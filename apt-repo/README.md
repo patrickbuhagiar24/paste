@@ -11,17 +11,17 @@ archive-keyring.asc
 archive-keyring.gpg
 archive-keyring.fingerprint.txt
 pool/main/p/pastex/pastex_<version>_all.deb
-dists/stonking/Release
-dists/stonking/InRelease
-dists/stonking/Release.gpg
-dists/stonking/main/binary-all/Packages
-dists/stonking/main/binary-all/Packages.gz
+dists/mint/Release
+dists/mint/InRelease
+dists/mint/Release.gpg
+dists/mint/main/binary-all/Packages
+dists/mint/main/binary-all/Packages.gz
 ```
 
-The suite is **`stonking`**, the Ubuntu 26.10 codename, because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
+The suite is **`mint`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
 
 ```text
-Hit:6 https://patrickbuhagiar24.github.io/paste stonking InRelease
+Hit:6 https://patrickbuhagiar24.github.io/paste mint InRelease
 ```
 
 ## Use the published archive
@@ -96,8 +96,8 @@ The individual steps are:
 
 ```bash
 ./scripts/build-deb.sh
-./scripts/build-apt-repository.sh dist apt-repo/dist stonking
-APT_SIGNING_KEY_ID=<fingerprint> ./scripts/sign-apt-repository.sh apt-repo/dist stonking
+./scripts/build-apt-repository.sh dist apt-repo/dist mint
+APT_SIGNING_KEY_ID=<fingerprint> ./scripts/sign-apt-repository.sh apt-repo/dist mint
 ```
 
 The signer prints the key algorithm, bit length, capabilities, and fingerprint (public metadata only) before signing, and aborts with a hint when `GPG_PASSPHRASE` is missing for a protected key.

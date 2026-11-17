@@ -1,4 +1,4 @@
-"""Uji logika picker (tanpa Tk): filter, navigasi, dan label."""
+"""Picker logic tests (no Tk): filtering, navigation and labels."""
 
 import sys
 from pathlib import Path

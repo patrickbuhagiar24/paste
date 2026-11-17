@@ -1,9 +1,9 @@
-"""Uji v1.5.0 #2: izin paste otomatis pindah dari GUI ke CLI.
+"""v1.5.0 #2: automatic-paste permissions moved from the GUI to the CLI.
 
-Tombol "Izin Paste Otomatis" dihapus dari GUI. Alurnya kini:
-  * `--permissions`            -> menampilkan status (sama seperti bagian --check)
+The "Automatic Paste Permissions" button was removed from the GUI. The flow:
+  * `--permissions`            -> prints the status (same as the --check section)
   * `--enable-permissions`   -> meminta akses /dev/uinput (pkexec + helper)
-Informasi tetap muncul di `--check` dan pada dialog kegagalan paste.
+The information still appears in `--check` and in the paste failure dialog.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class FakeStatus:
 
 
 class FakeBox:
-    """Pengganti tkinter.messagebox (CI tidak punya tkinter)."""
+    """Stand-in for tkinter.messagebox (CI has no tkinter)."""
 
     def __init__(self, shown):
         self.shown = shown
@@ -61,14 +61,14 @@ class FakeBox:
         self.shown.append(("error", title, text))
 
     def askyesno(self, *a, **kw):
-        pytest.fail("GUI tidak boleh menawarkan aktivasi izin lagi")
+        pytest.fail("the GUI must not offer permission activation any more")
 
 
-# --- GUI tidak lagi punya tombol ------------------------------------------
+# --- the GUI has no such button any more ---------------------------------
 
 
 def _code_without_comments(source: str) -> str:
-    """Source app.py tanpa komentar/docstring (komentar boleh menyebut sejarah)."""
+    """app.py source without comments/docstrings (comments may mention history)."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(
@@ -86,14 +86,14 @@ def _code_without_comments(source: str) -> str:
 
 
 def test_permission_button_removed_from_gui_source():
-    """Tidak boleh ada lagi tombol/label 'Izin Paste Otomatis' di GUI."""
+    """No 'Automatic Paste Permissions' button or label may remain in the GUI."""
     code = _code_without_comments(APP_SRC)
     assert "Izin Paste Otomatis" not in code
     assert "show_permission_info" not in code
 
 
 def test_gui_has_no_permission_widgets():
-    """Metode GUI pembuka izin sudah hilang, bukan hanya tombolnya."""
+    """The GUI methods that opened the permission dialog are gone, not just the button."""
     for gone in (
         "enable_auto_paste",
         "_enable_worker",
@@ -110,27 +110,27 @@ def test_gui_has_no_permission_widgets():
 
 def test_izin_flag_reports_status(capsys, monkeypatch):
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
-    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
+    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. do X")
     assert app_module.run_cli(["--permissions"]) == 0
     out = capsys.readouterr().out
     assert "Automatic-paste permissions" in out
     assert "write access to /dev/uinput" in out
-    assert "lakukan X" in out
+    assert "do X" in out
 
 
 def test_izin_flag_points_to_activation_command(capsys, monkeypatch):
-    """Bila belum siap, --permissions harus menyebut perintah aktivasi."""
+    """When not ready, --permissions must name the activation command."""
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
-    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
+    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. do X")
     app_module.run_cli(["--permissions"])
     out = capsys.readouterr().out
     assert "--enable-permissions" in out
 
 
 def test_check_still_reports_permission_and_cli_hint(capsys, monkeypatch):
-    """Info izin TETAP ada di --check, kini plus petunjuk CLI."""
+    """The permission info STAYS in --check, now with CLI guidance."""
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
-    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
+    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. do X")
     assert app_module.run_cli(["--check"]) == 0
     out = capsys.readouterr().out
     assert "Automatic-paste permissions" in out
@@ -186,23 +186,23 @@ def test_aktifkan_izin_cancelled_password(monkeypatch, capsys):
     assert "cancelled" in capsys.readouterr().out
 
 
-# --- Dialog kegagalan paste ----------------------------------------------
+# --- paste failure dialog ------------------------------------------------
 
 
 def test_paste_failure_dialog_mentions_cli(monkeypatch):
-    """Kegagalan paste tetap menjelaskan izin + menyebut perintah CLI."""
+    """A paste failure still explains permissions and names the CLI command."""
     from pastex.app import PastexApp
 
     shown = []
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus())
-    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. lakukan X")
+    monkeypatch.setattr(uinput, "explain", lambda st=None: "1. do X")
     monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
 
     fake = type("F", (), {})()
-    PastexApp._show_paste_failure(fake, "ydotool tidak tersedia")
-    assert shown, "dialog kegagalan harus muncul"
+    PastexApp._show_paste_failure(fake, "ydotool is not available")
+    assert shown, "the failure dialog must appear"
     text = shown[-1][2]
-    assert "ydotool tidak tersedia" in text
+    assert "ydotool is not available" in text
     assert "Ctrl+V" in text
     assert "--enable-permissions" in text
 
@@ -213,8 +213,8 @@ def test_paste_failure_dialog_ready_case_stays_simple(monkeypatch):
     shown = []
     monkeypatch.setattr(uinput, "status", lambda *a, **k: FakeStatus(writable=True))
     monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
-    PastexApp._show_paste_failure(type("F", (), {})(), "clipboard kosong")
-    assert "clipboard kosong" in shown[-1][2]
+    PastexApp._show_paste_failure(type("F", (), {})(), "the clipboard is empty")
+    assert "the clipboard is empty" in shown[-1][2]
 
 
 def test_cli_hint_mentions_both_flags():
@@ -223,7 +223,7 @@ def test_cli_hint_mentions_both_flags():
 
 
 def test_no_gui_dependency_left_in_permission_paths():
-    """Fungsi CLI izin tidak boleh memakai tkinter (harus jalan tanpa display)."""
+    """The permission CLI must not use tkinter (it has to run without a display)."""
     tree = ast.parse(APP_SRC)
     wanted = {"run_permission_info", "run_enable_permission", "permission_report"}
     found = {
@@ -234,4 +234,4 @@ def test_no_gui_dependency_left_in_permission_paths():
     assert set(found) == wanted
     for name, node in found.items():
         body = ast.dump(node)
-        assert "messagebox" not in body, f"{name} memakai dialog GUI"
+        assert "messagebox" not in body, f"{name} uses a GUI dialog"

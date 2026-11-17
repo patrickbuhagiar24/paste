@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Ubuntu 26.10 codename; the published archive uses it as its suite.
-  APT_SUITE: stonking
+  # Suite name of the published archive (Linux Mint; see apt-repo/README.md).
+  APT_SUITE: mint
 
 jobs:
   build:

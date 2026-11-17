@@ -1,4 +1,4 @@
-"""Uji CLI Pastex (tanpa GUI/display)."""
+"""Pastex CLI tests (no GUI or display)."""
 
 import sys
 from pathlib import Path
@@ -25,14 +25,14 @@ def test_check(capsys):
 
 def test_list(tmp_path, capsys):
     (tmp_path / "General").mkdir()
-    (tmp_path / "General" / "Greeting.txt").write_text("halo", encoding="utf-8")
+    (tmp_path / "General" / "Greeting.txt").write_text("hello", encoding="utf-8")
     assert run_cli(["--dir", str(tmp_path), "--list"]) == 0
     out = capsys.readouterr().out
     assert "General" in out and "Greeting" in out
 
 
 class _FakeTree:
-    """Treeview palsu: memvalidasi signature insert(parent, index, iid=...)."""
+    """Fake Treeview: validates the insert(parent, index, iid=...) signature."""
 
     def __init__(self):
         self.calls = []
@@ -42,8 +42,8 @@ class _FakeTree:
         return iid in self._exists
 
     def insert(self, parent, index, iid=None, **kw):
-        assert index == "end" or isinstance(index, int), f"index salah: {index!r}"
-        assert iid is not None, "iid harus di-pass sebagai keyword"
+        assert index == "end" or isinstance(index, int), f"wrong index: {index!r}"
+        assert iid is not None, "iid must be passed as a keyword"
         self.calls.append((parent, index, iid, kw))
         self._exists.add(iid)
         return iid
@@ -54,10 +54,10 @@ def test_insert_node_uses_end_index(tmp_path):
     from pastex.app import PastexApp
     from pastex.snippets import Node
 
-    app = PastexApp.__new__(PastexApp)  # tanpa __init__ (tanpa display)
+    app = PastexApp.__new__(PastexApp)  # no __init__ (no display)
     app.tree = _FakeTree()
-    # Tk.__getattr__ memerlukan interpreter yang tidak dibuat oleh __new__;
-    # inisialisasi atribut yang dibaca _insert_node secara eksplisit.
+    # Tk.__getattr__ needs an interpreter, which __new__ does not create;
+    # initialise the attributes _insert_node reads, explicitly.
     app.collapsed = set()
     root = Node(name="snippets", path=tmp_path, is_dir=True)
     child = Node(name="Sapaan", path=tmp_path / "Greeting.txt", is_dir=False)
@@ -111,7 +111,7 @@ def test_startup_setup_reports_wayland_permission_and_daemon_gaps():
 
 
 def test_check_reports_clipboard(capsys):
-    """--check harus memeriksa clipboard, bukan hanya tool yang ada."""
+    """--check must exercise the clipboard, not just list the tools."""
     assert run_cli(["--check"]) == 0
     out = capsys.readouterr().out
     assert "Clipboard:" in out
@@ -159,7 +159,7 @@ def _snippet(tmp_path, text="Halo"):
 
 
 def test_paste_text_hides_before_copying(monkeypatch):
-    """Hide dimulai lebih dulu, jadi compositor dan tool clipboard jalan paralel."""
+    """Hiding starts first, so the compositor and the clipboard tool run in parallel."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -187,17 +187,17 @@ def test_paste_text_hides_before_copying(monkeypatch):
         lambda target, *args: calls.append(("start", target.__name__, *args)),
     )
 
-    PastexApp._paste_text(app, "isi")
+    PastexApp._paste_text(app, "body")
 
     # Hide and arm happen on the click path; the copy runs in the worker.
-    assert calls == [("hide",), ("arm",), ("start", "_paste_worker", "isi")]
+    assert calls == [("hide",), ("arm",), ("start", "_paste_worker", "body")]
     # Ctrl+V must not be released before the clipboard owns the text.
     assert app._paste_clipboard_ready is False
     assert app._paste_restore_window is True
 
 
 def test_do_paste_uses_the_preview_text(monkeypatch):
-    """Klik memakai teks yang sudah dibaca preview, tanpa menyentuh disk lagi."""
+    """A click reuses the text the preview already read, without touching the disk."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -218,7 +218,7 @@ def test_do_paste_uses_the_preview_text(monkeypatch):
 
         def preview_text(self, path):
             calls.append(("cached", path.name))
-            return "isi"
+            return "body"
 
         def _paste_text(self, text, hide=None):
             calls.append(("paste", text, hide))
@@ -226,12 +226,12 @@ def test_do_paste_uses_the_preview_text(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "read_text",
-        lambda _path: (_ for _ in ()).throw(AssertionError("disk dibaca ulang")),
+        lambda _path: (_ for _ in ()).throw(AssertionError("the disk was read again")),
     )
 
     PastexApp.do_paste(FakeApp())
 
-    assert calls == [("cached", "Greeting.txt"), ("paste", "isi", None)]
+    assert calls == [("cached", "Greeting.txt"), ("paste", "body", None)]
 
 
 def test_after_copy_releases_the_armed_paste():
@@ -321,7 +321,7 @@ def test_paste_done_waits_30ms_after_sending_before_restoring():
 
 
 def test_copy_failure_restores_window():
-    """Saat copy gagal, pastikan jendela terlihat untuk membaca pesan."""
+    """When the copy fails, the window must be visible so the message can be read."""
     from pastex.app import PastexApp
 
     calls = []
@@ -343,7 +343,7 @@ def test_copy_failure_restores_window():
             calls.append(("dialog", message))
 
     app = FakeApp()
-    PastexApp._paste_failed(app, "tidak ada tool clipboard")
+    PastexApp._paste_failed(app, "no clipboard tool available")
     assert ("deiconify", None) in calls
     assert app._pasting is False
 
@@ -372,7 +372,7 @@ def test_paste_done_restores_window():
 
     app = FakeApp()
     PastexApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
-    assert ("deiconify", None) in calls  # jendela kembali
+    assert ("deiconify", None) in calls  # the window is back
     assert app._pasting is False
 
 
@@ -399,13 +399,13 @@ def test_paste_done_failure_raises_window(monkeypatch):
             calls.append(("dialog", message))
 
     app = FakeApp()
-    PastexApp._paste_done(app, PasteResult(False, "", "gagal"))
-    assert ("lift", None) in calls  # kegagalan harus terlihat
-    assert ("dialog", "gagal") in calls
+    PastexApp._paste_done(app, PasteResult(False, "", "failed"))
+    assert ("lift", None) in calls  # the failure must be visible
+    assert ("dialog", "failed") in calls
 
 
 def test_activate_always_pastes():
-    """Klik/Enter = satu tindakan: paste. Tidak ada mode 'salin saja'."""
+    """Click/Enter is one action: paste. There is no copy-only mode."""
     from pastex.app import PastexApp
 
     calls = []
@@ -414,14 +414,14 @@ def test_activate_always_pastes():
         def do_paste(self):
             calls.append("paste")
 
-    # atribut do_copy sudah tidak ada di versi ini
+    # the do_copy attribute no longer exists in this version
     assert not hasattr(PastexApp, "do_copy")
     PastexApp.on_activate(FakeApp())
     assert calls == ["paste"]
 
 
 def test_no_legacy_controls_in_source():
-    """Tombol Salin / pintasan / hitung mundur sudah dihapus."""
+    """The Copy button, its shortcut and the countdown were removed."""
     src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     for gone in (
         "do_copy",
@@ -431,16 +431,16 @@ def test_no_legacy_controls_in_source():
         "install-shortcut",
         "paste-foreground",
     ):
-        assert gone not in src, f"masih ada sisa: {gone}"
+        assert gone not in src, f"leftover: {gone}"
 
 
 # --- Debounce pencarian ---------------------------------------------------
 
 
 def test_search_debounces_instead_of_scanning_every_keystroke():
-    """Regresi: _on_search_changed() didefinisikan tetapi TIDAK pernah
-    tersambung ke trace_add, dan _search_after_id tidak pernah diinisialisasi.
-    Akibatnya setiap huruf memicu pemindaian penuh folder.
+    """Regression: _on_search_changed() existed but was never bound to
+    trace_add, and _search_after_id was never initialised, so every keystroke
+    triggered a full folder scan.
     """
     from pastex.app import PastexApp
 
@@ -464,15 +464,15 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
     PastexApp._on_search_changed(app)  # ketikan ke-2
     PastexApp._on_search_changed(app)  # ketikan ke-3
     scans = [c for c in calls if c[0] == "scan"]
-    assert scans == [], "refresh_tree dipanggil langsung, bukan lewat debounce"
+    assert scans == [], "refresh_tree was called directly instead of through the debounce"
     timers = [c for c in calls if c[0] == "after"]
     assert len(timers) == 3 and all(ms == 180 for _, ms in timers)
     cancels = [c for c in calls if c[0] == "cancel"]
-    assert len(cancels) == 2, "timer sebelumnya harus dibatalkan"
+    assert len(cancels) == 2, "the previous timer must be cancelled"
 
 
 def test_search_var_connected_to_debounce_handler():
-    """trace_add harus memanggil _on_search_changed, bukan refresh_tree."""
+    """trace_add must call _on_search_changed, not refresh_tree."""
     src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     line = next(ln for ln in src.splitlines() if "trace_add" in ln)
     assert "_on_search_changed" in line, line
@@ -480,16 +480,16 @@ def test_search_var_connected_to_debounce_handler():
 
 
 def test_search_after_id_initialised():
-    """_search_after_id harus dibuat sebelum handler dipakai."""
+    """_search_after_id must exist before the handler can use it."""
     src = (Path(__file__).resolve().parent.parent / "pastex" / "app.py").read_text()
     assert "_search_after_id: str | None = None" in src
 
 
-# --- Hasil paste yang belum pasti ----------------------------------------
+# --- Paste results that cannot be confirmed -----------------------------
 
 
 def test_paste_done_does_not_claim_success_when_not_confident():
-    """xdotool di Wayland bisa lolos dengan kode 0 tanpa menempelkan apa pun."""
+    """On Wayland xdotool can exit 0 without pasting anything."""
     from pastex.app import PastexApp
     from pastex.clipboard import PasteResult
 
@@ -512,12 +512,12 @@ def test_paste_done_does_not_claim_success_when_not_confident():
             calls.append(("dialog", message))
 
     result = PasteResult(
-        True, "xdotool", "Paste otomatis terkirim via xdotool.", confident=False
+        True, "xdotool", "Paste sent via xdotool.", confident=False
     )
     PastexApp._paste_done(FakeApp(), result)
     status = next(v for k, v in calls if k == "status")
-    assert "Ctrl+V" in status, "pengguna harus diberi langkah lanjutan"
-    assert ("lift", None) in calls, "jendela harus terlihat agar pesan terbaca"
+    assert "Ctrl+V" in status, "the user must be told the next step"
+    assert ("lift", None) in calls, "the window must be visible so the message can be read"
 
 
 # --- Helper thread -------------------------------------------------------
@@ -536,7 +536,7 @@ def test_thread_helper_runs_target_with_args():
         done.set()
 
     _run_in_thread(work, 1, 2)
-    assert done.wait(5), "target tidak dijalankan"
+    assert done.wait(5), "the target did not run"
     assert seen == [(1, 2)]
 
 
@@ -544,7 +544,7 @@ def test_thread_helper_runs_target_with_args():
 
 
 def test_hide_for_paste_minimizes_instead_of_unmapping():
-    """Minimizing keeps the window mapped so the dock entry survives."""
+    """Minimizing keeps the window mapped so the panel entry survives."""
     from pastex.app import PastexApp
 
     calls = []
@@ -565,7 +565,7 @@ def test_hide_for_paste_minimizes_instead_of_unmapping():
 
 
 def test_hide_for_paste_arms_the_paste_before_the_compositor_answers():
-    """GNOME menjawab minimize secara asinkron: state=normal belum berarti gagal."""
+    """The compositor answers the minimize asynchronously: state=normal is not a failure yet."""
     from pastex.app import PastexApp
 
     calls = []
@@ -585,7 +585,7 @@ def test_hide_for_paste_arms_the_paste_before_the_compositor_answers():
 
 
 def _polling_app(states, *, tk_ready=True):
-    """App tiruan yang menjawab state() berurutan dan mencatat penjadwalan."""
+    """Test double that answers state() from a list and records scheduling."""
     from pastex.app import PastexApp
 
     scheduled = []
@@ -625,7 +625,7 @@ def _polling_app(states, *, tk_ready=True):
 
 
 def test_the_hide_check_is_polled_until_the_compositor_answers(monkeypatch):
-    """Jendela yang baru benar-benar minimize beberapa ms kemudian tetap dipaste."""
+    """A window that only hides a few milliseconds later still gets the paste."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -641,16 +641,16 @@ def test_the_hide_check_is_polled_until_the_compositor_answers(monkeypatch):
 
     delay, callback = app.scheduled.pop(0)
     assert delay == app_module.MINIMIZE_RETRY_MS
-    callback()  # masih normal -> tunggu lagi
+    callback()  # still normal -> wait again
     assert app.sends == []
 
     delay, callback = app.scheduled.pop(0)
-    callback()  # iconic -> kirim
+    callback()  # iconic -> send
     assert app.sends == ["_paste_sender"]
 
 
 def test_a_window_that_never_hides_keeps_ctrl_v_unsent(monkeypatch):
-    """Kalau WM benar-benar menolak minimize: teks disalin, Ctrl+V tidak dikirim."""
+    """When the WM really refuses: the text is copied, Ctrl+V is not sent."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -670,7 +670,7 @@ def test_a_window_that_never_hides_keeps_ctrl_v_unsent(monkeypatch):
 
 
 def test_the_minimize_request_is_repeated_when_the_first_one_is_ignored(monkeypatch):
-    """Sebagian compositor mengabaikan permintaan pertama; kita minta sekali lagi."""
+    """Some compositors ignore the first request; ask once more."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -687,7 +687,7 @@ def test_the_minimize_request_is_repeated_when_the_first_one_is_ignored(monkeypa
             break
 
     assert steps * app_module.MINIMIZE_RETRY_MS >= app_module.MINIMIZE_WAIT_MS
-    assert app.iconify_calls == ["iconify"], "satu permintaan ulang saja"
+    assert app.iconify_calls == ["iconify"], "only one retry was requested"
     assert app._paste_finished is True
 
 
@@ -705,7 +705,7 @@ def test_hide_for_paste_keeps_the_window_when_iconify_fails():
 
 
 def test_the_window_is_never_unmapped():
-    """The dock icon must never disappear, so withdraw() is gone for good."""
+    """The panel icon must never disappear, so withdraw() is gone for good."""
     from pastex import app as app_module
 
     source = Path(app_module.__file__).read_text(encoding="utf-8")
@@ -877,7 +877,7 @@ def test_window_unmap_is_bound_to_the_paste_sender():
 
 
 def test_ctrl_v_waits_until_the_clipboard_is_ready(monkeypatch):
-    """Unmap boleh datang lebih dulu, tapi Ctrl+V menunggu clipboard siap."""
+    """The unmap may arrive first, but Ctrl+V waits for the clipboard."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -893,7 +893,7 @@ def test_ctrl_v_waits_until_the_clipboard_is_ready(monkeypatch):
     # The window manager hides the window while wl-copy is still running.
     PastexApp._send_paste_now(app)
 
-    assert calls == [], "Ctrl+V tidak boleh dikirim sebelum clipboard siap"
+    assert calls == [], "Ctrl+V must not be sent before the clipboard is ready"
     assert app._paste_pending is True
 
     # The clipboard result releases it.
@@ -904,7 +904,7 @@ def test_ctrl_v_waits_until_the_clipboard_is_ready(monkeypatch):
 
 
 def test_unmap_after_the_copy_sends_immediately(monkeypatch):
-    """Bila clipboard siap lebih dulu, unmap langsung mengirim Ctrl+V."""
+    """When the clipboard is ready first, the unmap sends Ctrl+V immediately."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -952,10 +952,10 @@ def test_paste_passes_the_prewarmed_plans(monkeypatch):
         ),
     )
 
-    PastexApp._paste_worker(app, "isi")
+    PastexApp._paste_worker(app, "body")
     PastexApp._paste_sender(app)
 
-    assert ("copy", "isi", "COPY-PLAN") in seen
+    assert ("copy", "body", "COPY-PLAN") in seen
     paste_calls = [entry for entry in seen if entry[0] == "paste"]
     assert paste_calls[0][1] == "PASTE-PLAN"
     # The sender must hand the abort flag to simulate_paste so a paste that
@@ -983,7 +983,7 @@ def test_failed_copy_drops_the_cached_plan(monkeypatch):
         lambda text, plan=None: ClipboardResultLike(False),
     )
 
-    PastexApp._paste_worker(app, "isi")
+    PastexApp._paste_worker(app, "body")
 
     assert app._copy_plan is None
 
@@ -1007,7 +1007,7 @@ def test_failed_paste_drops_the_cached_plan(monkeypatch):
 
 
 def test_prewarm_runs_in_the_background_and_stores_the_plans(monkeypatch):
-    """Tool clipboard diresolusi lewat thread, bukan di jalur klik."""
+    """Clipboard tools are resolved on a thread, not on the click path."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -1037,7 +1037,7 @@ def test_prewarm_runs_in_the_background_and_stores_the_plans(monkeypatch):
     PastexApp._prewarm_paste(app)
 
     assert started == [app._prewarm_paste_worker]
-    assert app._copy_plan is None, "startup tidak boleh menunggu prewarm"
+    assert app._copy_plan is None, "startup must not wait for prewarm"
 
     started[0]()
 
@@ -1060,7 +1060,7 @@ def test_settings_migrate_the_previous_005_restore_delay(tmp_path, monkeypatch):
 
 
 def test_startup_schedules_the_prewarm():
-    """Startup harus memanggil prewarm supaya klik pertama tidak lebih lambat."""
+    """Startup must call prewarm so the first click is not slower."""
     from pastex import app as app_module
 
     source = Path(app_module.__file__).read_text(encoding="utf-8")
@@ -1071,7 +1071,7 @@ def test_startup_schedules_the_prewarm():
 
 
 def test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized(monkeypatch):
-    """Minimize gagal: ikon dipertahankan, Ctrl+V tidak dikirim, ada petunjuk."""
+    """Minimize refused: the icon is kept, Ctrl+V is not sent, a hint is shown."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -1101,10 +1101,10 @@ def test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized(monkeypatch):
         lambda target, *args: calls.append(("start", target.__name__, *args)),
     )
 
-    PastexApp._paste_text(app, "isi")
+    PastexApp._paste_text(app, "body")
 
-    assert calls == [("hide",), ("start", "_paste_worker", "isi")]
-    assert "arm" not in calls, "Ctrl+V tidak boleh diarm bila window masih tampil"
+    assert calls == [("hide",), ("start", "_paste_worker", "body")]
+    assert "arm" not in calls, "Ctrl+V must not be armed while the window is visible"
     assert app._paste_clipboard_ready is False
 
 
@@ -1123,10 +1123,10 @@ def test_finished_copy_without_an_armed_send_shows_the_manual_hint():
             )()
 
         def _send_paste_now(self):  # pragma: no cover - must not be reached
-            raise AssertionError("Ctrl+V tidak boleh dikirim")
+            raise AssertionError("Ctrl+V must not be sent")
 
         def _paste_failed(self, message):  # pragma: no cover
-            raise AssertionError("copy berhasil")
+            raise AssertionError("the copy succeeded")
 
     app = FakeApp()
     PastexApp._after_copy(app, ClipboardResultLike(True))
@@ -1140,7 +1140,7 @@ def test_finished_copy_without_an_armed_send_shows_the_manual_hint():
 
 
 def test_refresh_tree_reuses_the_cached_index(gui, tmp_path):
-    """Repaint dengan force=False tidak menelusuri disk; force=True memindai ulang."""
+    """A repaint with force=False does not walk the disk; force=True rescans."""
     root = tmp_path / "snippets"
     root.mkdir()
     (root / "A.txt").write_text("a", encoding="utf-8")
@@ -1150,7 +1150,7 @@ def test_refresh_tree_reuses_the_cached_index(gui, tmp_path):
     assert scans >= 1
 
     app.refresh_tree(force=False)
-    assert app.index.scans == scans, "repaint tidak boleh memindai disk"
+    assert app.index.scans == scans, "a repaint must not scan the disk"
 
     app.refresh_tree(force=True)
     assert app.index.scans == scans + 1
@@ -1159,8 +1159,8 @@ def test_refresh_tree_reuses_the_cached_index(gui, tmp_path):
 def test_search_filters_the_cache_instead_of_rescanning(gui, tmp_path):
     root = tmp_path / "snippets"
     root.mkdir()
-    (root / "Greeting.txt").write_text("halo", encoding="utf-8")
-    (root / "Other.txt").write_text("lain", encoding="utf-8")
+    (root / "Greeting.txt").write_text("hello", encoding="utf-8")
+    (root / "Other.txt").write_text("other", encoding="utf-8")
     app = gui(roots=[root])
     app.refresh_tree()
     scan_count = app.index.scans
@@ -1239,7 +1239,7 @@ def test_refresh_from_disk_waits_while_pasting():
             pass
 
         def refresh_tree(self, force=True):  # pragma: no cover - must not run
-            raise AssertionError("pohon tidak boleh dibangun ulang saat paste")
+            raise AssertionError("the tree must not be rebuilt during a paste")
 
     PastexApp._refresh_from_disk(FakeApp())
 
@@ -1286,7 +1286,7 @@ def test_instance_command_is_marshalled_from_the_socket_thread():
 
 
 def test_picker_paste_does_not_touch_the_main_window(monkeypatch):
-    """Pemilihan dari popup: window utama tidak disembunyikan/di-deiconify."""
+    """Picking from the popup: the main window is neither hidden nor deiconified."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -1306,10 +1306,10 @@ def test_picker_paste_does_not_touch_the_main_window(monkeypatch):
         _finish_paste = PastexApp._finish_paste
 
         def preview_text(self, path):
-            return "isi"
+            return "body"
 
         def _hide_for_paste(self):  # pragma: no cover - must not be used
-            raise AssertionError("window utama tidak boleh diminimize")
+            raise AssertionError("the main window must not be minimised")
 
         def _send_paste(self):
             calls.append("arm")
@@ -1372,7 +1372,7 @@ def test_finishing_a_picker_paste_leaves_the_target_app_focused():
     app = FakeApp()
     PastexApp._finish_paste(app, PasteResult(True, "ydotool", "ok"))
 
-    assert calls == [], "jangan mencuri fokus dari aplikasi target"
+    assert calls == [], "do not steal focus from the target application"
     assert app._paste_hide_widget is None
 
 
@@ -1526,7 +1526,7 @@ def test_cli_dir_sessions_are_never_forwarded(monkeypatch, tmp_path):
 
 
 def test_search_repaints_from_the_cache_after_the_debounce():
-    """Ketikan memakai pohon yang sudah di-cache, bukan memindai ulang disk."""
+    """Typing uses the cached tree instead of walking the disk again."""
     from pastex.app import PastexApp
 
     timers = []
@@ -1556,7 +1556,7 @@ def test_search_repaints_from_the_cache_after_the_debounce():
 
 
 def test_refresh_reuses_rows_instead_of_rebuilding(gui, tmp_path):
-    """Repaint menambal baris yang ada, tidak menghapus lalu membangun ulang."""
+    """A repaint patches existing rows instead of deleting and rebuilding them."""
     root = tmp_path / "snippets"
     (root / "Folder").mkdir(parents=True)
     (root / "Folder" / "A.txt").write_text("a", encoding="utf-8")
@@ -1570,10 +1570,10 @@ def test_refresh_reuses_rows_instead_of_rebuilding(gui, tmp_path):
     app.refresh_tree(force=False)
 
     assert [(row["iid"], row["parent"]) for row in app.tree.rows] == rows_before
-    assert app.tree.deleted == deleted_before, "tidak boleh ada baris yang dihapus"
-    assert app.tree.inserts == 3, "baris lama tidak boleh disisipkan ulang"
+    assert app.tree.deleted == deleted_before, "no row may be deleted"
+    assert app.tree.inserts == 3, "existing rows must not be inserted again"
     assert app.tree.moves == 0
-    assert app.tree.item_updates == 0, "tidak ada nilai yang berubah"
+    assert app.tree.item_updates == 0, "no value changed"
 
 
 def test_refresh_adds_only_the_new_row(gui, tmp_path):
@@ -1587,7 +1587,7 @@ def test_refresh_adds_only_the_new_row(gui, tmp_path):
     (root / "B.txt").write_text("b", encoding="utf-8")
     app.refresh_tree()
 
-    assert app.tree.by_iid(root / "A.txt") is first, "baris lama dipakai ulang"
+    assert app.tree.by_iid(root / "A.txt") is first, "the existing row is reused"
     assert app.tree.by_iid(root / "B.txt")["text"].endswith("B")
     assert len(app.tree.rows) == 2
 
@@ -1619,8 +1619,8 @@ def test_refresh_updates_the_open_state_in_place(gui, sample_root):
     app.settings["collapsed"] = [app_module._norm_path(sample_root / "Email")]
     app.refresh_tree(force=False)
 
-    assert app.tree.by_iid(sample_root / "Email") is folder, "baris yang sama"
-    assert folder["open"] is False, "status ciut harus menimpa baris lama"
+    assert app.tree.by_iid(sample_root / "Email") is folder, "the same row"
+    assert folder["open"] is False, "the collapsed state must overwrite the existing row"
 
 
 def test_refresh_keeps_the_selection(gui, tmp_path):
@@ -1660,7 +1660,7 @@ def test_refresh_reorders_rows_without_rebuilding(gui, tmp_path):
 
 
 def test_two_roots_with_the_same_path_keep_stable_ids(gui, tmp_path):
-    """Root ganda (checkout + salinan sistem) tidak boleh bertabrakan iid."""
+    """Two roots (checkout + system copy) must not collide on iid."""
     root = tmp_path / "snippets"
     root.mkdir()
     (root / "A.txt").write_text("a", encoding="utf-8")
@@ -1677,7 +1677,7 @@ def test_two_roots_with_the_same_path_keep_stable_ids(gui, tmp_path):
 
 
 def test_row_update_accepts_tcl_string_options(gui, tmp_path):
-    """Tk mengembalikan "1"/"dir" untuk opsi; itu bukan perubahan."""
+    """Tk returns "1"/"dir" for options; that is not a change."""
     root = tmp_path / "snippets"
     (root / "Folder").mkdir(parents=True)
     (root / "Folder" / "A.txt").write_text("a", encoding="utf-8")
@@ -1688,7 +1688,7 @@ def test_row_update_accepts_tcl_string_options(gui, tmp_path):
     app.tree.item_updates = 0
     app.refresh_tree(force=False)
 
-    assert app.tree.item_updates == 0, "nilai Tcl yang setara tidak boleh ditulis ulang"
+    assert app.tree.item_updates == 0, "equivalent Tcl values must not be rewritten"
 
 
 # --- pemilik clipboard Wayland (opt-in) ----------------------------------
@@ -1712,7 +1712,7 @@ class _FakeWlOwner:
     def stop(self):
         type(self).stopped += 1
 
-    def copy(self, text, mimes=None):  # pragma: no cover - lewat verify tiruan
+    def copy(self, text, mimes=None):  # pragma: no cover - reached via the fake verify
         self.copies += 1
         return True
 
@@ -1765,7 +1765,7 @@ def test_clipboard_owner_that_fails_its_self_test_is_stopped(gui, monkeypatch):
 
     assert app._start_clipboard_owner() is False
     assert owner.stopped == 1
-    assert installed == [], "owner yang gagal tidak boleh dipasang"
+    assert installed == [], "a failing owner must not be installed"
 
 
 def test_verified_owner_becomes_the_copy_path(gui, monkeypatch):
@@ -1794,7 +1794,7 @@ def test_releasing_the_owner_restores_the_tools(gui, monkeypatch):
     app._release_clipboard_owner()
 
     assert owner.stopped == 1
-    assert installed == [None], "copy harus kembali ke wl-copy"
+    assert installed == [None], "copies must fall back to wl-copy"
     assert app._clipboard_owner is None
 
 
@@ -1859,7 +1859,7 @@ def test_check_reports_the_clipboard_owner(capsys):
 
 
 def test_closing_the_main_loop_releases_the_owner(monkeypatch):
-    """Keluar lewat jalur mana pun harus melepas pemilik clipboard."""
+    """Every exit path must release the clipboard owner."""
     from pastex import app as app_module
 
     released = []
@@ -1952,7 +1952,7 @@ def _stalled_app(**extra):
 
 
 def test_the_watchdog_restores_the_window_when_the_sender_stalls():
-    """Kalau pengirim macet, jendela tetap dipulihkan dan alasannya dilaporkan."""
+    """If the sender stalls, the window is still restored and the reason reported."""
     from pastex.app import PastexApp
 
     app, calls = _stalled_app()
@@ -1960,7 +1960,7 @@ def test_the_watchdog_restores_the_window_when_the_sender_stalls():
     PastexApp._paste_watchdog(app)
 
     assert "deiconify" in calls
-    assert app._paste_aborted is True, "percobaan berikutnya harus dibatalkan"
+    assert app._paste_aborted is True, "the remaining attempts must be abandoned"
     assert app._paste_finished is True
     assert app._pasting is False
     assert app._paste_ready is False
@@ -1986,11 +1986,11 @@ def test_a_late_result_after_the_watchdog_does_not_move_the_window_again():
     PastexApp._finish_paste(app, PasteResult(ok=True, tool="ydotool", message="ok"))
 
     assert "deiconify" not in calls
-    assert app._paste_ready is True, "hasil yang datang terlambat tetap dicatat"
+    assert app._paste_ready is True, "a late result is still recorded"
 
 
 def test_arming_the_watchdog_needs_a_real_interpreter():
-    """Objek uji tanpa tk tidak boleh menyentuh after(); itu rekursi Tk."""
+    """A test double without tk must not touch after(): that recurses through Tk."""
     from pastex.app import PastexApp
 
     app = PastexApp.__new__(PastexApp)
@@ -2002,7 +2002,7 @@ def test_arming_the_watchdog_needs_a_real_interpreter():
 
 
 def test_a_failed_paste_stops_hiding_the_window_on_the_next_click(monkeypatch):
-    """Kegagalan diingat: klik berikutnya hanya menyalin, jendela tetap tampil."""
+    """The failure is remembered: the next click only copies and keeps the window."""
     from pastex import app as app_module
     from pastex.app import PastexApp
     from pastex.clipboard import PasteResult
@@ -2020,10 +2020,10 @@ def test_a_failed_paste_stops_hiding_the_window_on_the_next_click(monkeypatch):
         _cancel_paste_watchdog = PastexApp._cancel_paste_watchdog
 
         def _hide_for_paste(self):  # pragma: no cover - must not be used
-            raise AssertionError("jendela tidak boleh diminimize")
+            raise AssertionError("the window must not be minimised")
 
         def _send_paste(self):  # pragma: no cover - must not be used
-            raise AssertionError("Ctrl+V tidak boleh diarm")
+            raise AssertionError("Ctrl+V must not be armed")
 
         def deiconify(self):
             calls.append("deiconify")
@@ -2042,13 +2042,13 @@ def test_a_failed_paste_stops_hiding_the_window_on_the_next_click(monkeypatch):
         lambda target, *args: calls.append(("start", target.__name__, *args)),
     )
 
-    PastexApp._finish_paste(app, PasteResult(ok=False, tool="", message="gagal"))
+    PastexApp._finish_paste(app, PasteResult(ok=False, tool="", message="failed"))
     assert app._paste_ready is False
     calls.clear()
 
-    PastexApp._paste_text(app, "isi")
+    PastexApp._paste_text(app, "body")
 
-    assert calls == [("start", "_paste_worker", "isi")]
+    assert calls == [("start", "_paste_worker", "body")]
     assert app._paste_restore_window is False
 
 
@@ -2057,7 +2057,7 @@ def test_an_empty_paste_plan_means_ctrl_v_cannot_be_sent():
     from pastex.clipboard import ToolPlan
 
     app = PastexApp.__new__(PastexApp)
-    assert PastexApp._paste_tools_ready(app) is True  # belum diketahui
+    assert PastexApp._paste_tools_ready(app) is True  # not known yet
 
     app._paste_plan = ToolPlan("wayland", [])
     assert PastexApp._paste_tools_ready(app) is False
@@ -2067,7 +2067,7 @@ def test_an_empty_paste_plan_means_ctrl_v_cannot_be_sent():
 
 
 def test_a_click_with_a_hidden_window_arms_the_watchdog(monkeypatch):
-    """Setiap kali jendela disembunyikan, pengaman waktu harus dipasang."""
+    """Whenever the window is hidden, the watchdog must be armed."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -2099,6 +2099,6 @@ def test_a_click_with_a_hidden_window_arms_the_watchdog(monkeypatch):
     app = FakeApp()
     monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
 
-    PastexApp._paste_text(app, "isi")
+    PastexApp._paste_text(app, "body")
 
     assert scheduled == [app_module.PASTE_DEADLINE_MS]

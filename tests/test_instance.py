@@ -1,4 +1,4 @@
-"""Uji single instance: lock, socket command, dan client yang aman."""
+"""Single-instance tests: the lock, socket commands, and a safe client."""
 
 import sys
 from pathlib import Path
@@ -69,19 +69,19 @@ def test_invalid_payload_is_rejected(tmp_path):
     server = SingleInstance(lambda command: None, directory=tmp_path)
 
     assert server.process(b"not json") == {"ok": False, "error": "invalid request"}
-    assert server.process(b'{"command": "hapus-semua"}') == {
+    assert server.process(b'{"command": "delete-all"}') == {
         "ok": False,
-        "error": "unknown command: hapus-semua",
+        "error": "unknown command: delete-all",
     }
 
 
 def test_callback_error_is_reported_not_raised(tmp_path):
     def boom(command):
-        raise RuntimeError("gagal")
+        raise RuntimeError("failed")
 
     server = SingleInstance(boom, directory=tmp_path)
 
-    assert server.process(b'{"command": "show"}') == {"ok": False, "error": "gagal"}
+    assert server.process(b'{"command": "show"}') == {"ok": False, "error": "failed"}
 
 
 def test_send_command_validates_the_command():

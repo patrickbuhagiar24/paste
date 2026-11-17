@@ -1,4 +1,4 @@
-"""Uji logika hierarki snippets (tanpa GUI)."""
+"""Snippet hierarchy logic tests (no GUI)."""
 
 import sys
 from pathlib import Path
@@ -25,9 +25,9 @@ def _make_tree(tmp: Path) -> Path:
     (root / "General").mkdir(parents=True)
     (root / "Email").mkdir(parents=True)
     write_text(root / "General" / "Greeting.txt", "Hello, how are you?")
-    write_text(root / "Email" / "Balas.txt", "Thank you for your application.")
-    write_text(root / "Email" / "abaikan.md", "bukan txt")
-    write_text(root / ".tersembunyi.txt", "jangan tampil")
+    write_text(root / "Email" / "Reply.txt", "Thank you for your application.")
+    write_text(root / "Email" / "ignore.md", "not txt")
+    write_text(root / ".hidden.txt", "must not show")
     return root
 
 
@@ -36,26 +36,26 @@ def test_scan_hierarchy(tmp_path):
     tree = scan_dir(root)
     assert tree.is_dir and tree.name == "snippets"
     names = [c.name for c in tree.children]
-    assert names == ["Email", "General"]  # folder dulu, alfabetis
+    assert names == ["Email", "General"]  # folders first, alphabetical
     email = next(c for c in tree.children if c.name == "Email")
-    assert [c.name for c in email.children] == ["Balas"]
+    assert [c.name for c in email.children] == ["Reply"]
     assert email.children[0].is_text
-    assert tree.count_texts() == 2  # .md dan dotfile dilewati
+    assert tree.count_texts() == 2  # .md and dotfiles are skipped
 
 
 def test_scan_roots_and_flatten(tmp_path):
     root = _make_tree(tmp_path)
     nodes = scan_roots([root])
     texts = flatten_texts(nodes)
-    assert {t.name for t in texts} == {"Greeting", "Balas"}
+    assert {t.name for t in texts} == {"Greeting", "Reply"}
 
 
 def test_search_by_name_and_content(tmp_path):
     root = _make_tree(tmp_path)
     nodes = scan_roots([root])
     assert [n.name for n in search(nodes, "greeting")] == ["Greeting"]
-    assert [n.name for n in search(nodes, "application")] == ["Balas"]
-    assert search(nodes, "tidak-ada") == []
+    assert [n.name for n in search(nodes, "application")] == ["Reply"]
+    assert search(nodes, "not-there") == []
 
 
 def test_legacy_category_helper_remains_compatible(tmp_path):
@@ -65,14 +65,14 @@ def test_legacy_category_helper_remains_compatible(tmp_path):
 
 def test_crud(tmp_path):
     root = _make_tree(tmp_path)
-    folder = create_folder(root, "Kerja")
+    folder = create_folder(root, "Work")
     assert folder.is_dir()
-    snippet = create_snippet(folder, "Laporan", "isi laporan")
+    snippet = create_snippet(folder, "Report", "report body")
     assert snippet.suffix == ".txt"
-    assert read_text(snippet) == "isi laporan"
+    assert read_text(snippet) == "report body"
     try:
-        create_snippet(folder, "Laporan.txt", "duplikat")
-        raise AssertionError("seharusnya FileExistsError")
+        create_snippet(folder, "Report.txt", "duplicate")
+        raise AssertionError("expected FileExistsError")
     except FileExistsError:
         pass
     delete_path(snippet)
@@ -95,9 +95,9 @@ def test_new_names_cannot_escape_parent(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     for name in (
-        "../keluar",
-        "../keluar.txt",
-        "/tmp/keluar",
+        "../escape",
+        "../escape.txt",
+        "/tmp/escape",
         "a/b",
         r"a\b",
         ".",
@@ -107,7 +107,7 @@ def test_new_names_cannot_escape_parent(tmp_path):
         with pytest.raises(ValueError):
             create_folder(root, name)
         with pytest.raises(ValueError):
-            create_snippet(root, name, "isi")
+            create_snippet(root, name, "body")
     assert sorted(tmp_path.iterdir()) == [root]
 
 
@@ -122,7 +122,7 @@ def test_scan_ignores_links_inside_root_including_cycles(tmp_path):
     (root / "cycle").symlink_to(root, target_is_directory=True)
     (root / "normal.txt").write_text("inside", encoding="utf-8")
     assert [node.name for node in scan_dir(root).children] == ["normal"]
-    # Pengguna tetap dapat memilih folder sumber yang merupakan symlink.
+    # A user may still pick a source folder that is itself a symlink.
     alias = tmp_path / "alias"
     alias.symlink_to(root, target_is_directory=True)
     assert [node.name for node in scan_dir(alias).children] == ["normal"]
@@ -140,7 +140,7 @@ def test_creation_never_follows_existing_symlink(tmp_path):
     with pytest.raises(ValueError):
         create_folder(root, "link")
     with pytest.raises(FileExistsError):
-        create_snippet(root, "broken", "isi")
+        create_snippet(root, "broken", "body")
     assert not (outside / "new.txt").exists()
 
 
@@ -154,11 +154,11 @@ def test_filter_tree_keeps_only_matching_branches_without_resolving(
     hits = search(nodes, "application")
 
     def unexpected_resolve(*args, **kwargs):
-        raise AssertionError("pemfilteran tidak perlu resolve path")
+        raise AssertionError("filtering does not need to resolve paths")
 
     monkeypatch.setattr(Path, "resolve", unexpected_resolve)
     filtered = filter_tree(nodes, hits)
     assert len(filtered) == 1
     assert [child.name for child in filtered[0].children] == ["Email"]
-    assert [child.name for child in filtered[0].children[0].children] == ["Balas"]
+    assert [child.name for child in filtered[0].children[0].children] == ["Reply"]
     assert filter_tree(nodes, []) == []

@@ -1,4 +1,4 @@
-"""Uji logika izin /dev/uinput (grup pastex) — tanpa menyentuh sistem."""
+"""/dev/uinput permission logic (pastex group) — without touching the system."""
 
 import os
 import sys
@@ -134,7 +134,7 @@ def test_summary_marks_missing_permission():
     rows = _status().summary()
     labels = " ".join(label for _m, label, _d in rows)
     assert "pastex" in labels
-    # Belum jadi anggota & perangkat tak bisa ditulis => keduanya ❌.
+    # Not a member and the device is not writable => both ❌.
     assert all(mark != "✅" for mark, _l, _d in rows)
 
     ok = _status(in_group=True, device_writable=True).summary()
@@ -142,7 +142,7 @@ def test_summary_marks_missing_permission():
 
 
 def test_summary_reports_stale_session_after_group_add():
-    """Kasus nyata: anggota di sistem, sesi berjalan belum memuat grup."""
+    """Real case: a member on disk, but the running session has not loaded the group."""
     st = _status(in_group=True, session={"budi"})
     assert st.needs_relogin is True
     assert st.in_session is False
@@ -158,12 +158,12 @@ def test_session_groups_active_when_loaded():
 
 
 def test_ready_requires_daemon_when_ydotool_installed():
-    # Izin perangkat ada tetapi ydotool butuh ydotoold → belum siap.
+    # The device is writable but ydotool needs ydotoold → not ready yet.
     assert _status(device_writable=True, ydotoold_binary=True).ready is False
     assert (
         _status(device_writable=True, ydotoold_binary=True, daemon=True).ready is True
     )
-    # Tanpa ydotool (mis. X11 + xdotool) izin perangkat sudah cukup.
+    # Without ydotool (X11 + xdotool, say) the device permission is enough.
     assert _status(device_writable=True).ready is True
 
 
@@ -264,7 +264,7 @@ def test_enable_for_user_cancelled():
 
 def test_enable_for_user_handles_exception():
     def boom(cmd, **kw):
-        raise OSError("pkexec tidak ditemukan")
+        raise OSError("pkexec not found")
 
     code, _out, err = uinput.enable_for_user("budi", runner=boom)
     assert code == -1 and "pkexec" in err
@@ -320,7 +320,7 @@ def test_acl_granted_read_only(monkeypatch):
 
 def test_acl_granted_without_getfacl(monkeypatch):
     def boom(cmd, **kw):
-        raise OSError("getfacl tidak ada")
+        raise OSError("no getfacl")
 
     import subprocess as sp
 

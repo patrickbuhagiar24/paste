@@ -1,6 +1,6 @@
 Types: deb
 URIs: https://patrickbuhagiar24.github.io/paste/
-Suites: stonking
+Suites: mint
 Components: main
 Architectures: all
 Trusted: yes

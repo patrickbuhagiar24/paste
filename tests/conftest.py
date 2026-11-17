@@ -1,8 +1,8 @@
-"""Perkakas uji bersama: GUI tiruan tanpa display.
+"""Shared test tools: a fake GUI with no display.
 
-Baris-baris GUI diuji dengan objek tiruan (bukan Tk sungguhan) karena CI
-tidak punya X/Wayland. Yang diuji adalah *logika* metode: argumen yang
-dikirim ke Treeview, isi settings.json, dan folder tujuan penulisan.
+The GUI paths are tested with stand-in objects (not real Tk) because CI has
+no X or Wayland. What is tested is the *logic* of each method: the arguments
+sent to the Treeview, the contents of settings.json, and the write targets.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pastex.app import PastexApp
 
 
 class FakeTree:
-    """Treeview tiruan: merekam setiap baris yang disisipkan."""
+    """Fake Treeview: records every inserted row."""
 
     def __init__(self):
         self.rows: list[dict] = []
@@ -27,16 +27,16 @@ class FakeTree:
         self.inserts = 0
         self.moves = 0
         self.item_updates = 0
-        # Bila True, opsi dibaca sebagai string seperti Tcl/Tk asli ("1", "dir").
+        # When True, options are read back as strings, like real Tcl/Tk ("1", "dir").
         self.string_options = False
         self._selection: tuple[str, ...] = ()
         self._focus = ""
         self._child_order: dict[str, list[str]] = {}
         self.packed = None
 
-    # -- API yang dipakai app.py --
+    # -- the API app.py uses --
     def delete(self, *items):
-        """Hapus baris yang disebut (beserta turunannya), seperti Tk."""
+        """Delete the given row and its descendants, like Tk."""
         self.deleted += 1
         if not items:
             self.rows.clear()
@@ -45,7 +45,7 @@ class FakeTree:
             return
         doomed = set(items)
         changed = True
-        while changed:  # ikut hapus semua keturunan
+        while changed:  # also delete every descendant
             changed = False
             for row in self.rows:
                 if row["parent"] in doomed and row["iid"] not in doomed:
@@ -78,8 +78,8 @@ class FakeTree:
         return any(r["iid"] == iid for r in self.rows)
 
     def insert(self, parent, index, iid=None, **kw):
-        assert index == "end", f"index salah: {index!r}"
-        assert iid is not None, "iid harus keyword"
+        assert index == "end", f"wrong index: {index!r}"
+        assert iid is not None, "iid must be a keyword"
         self.inserts += 1
         self.rows.append(
             {
@@ -135,27 +135,27 @@ class FakeTree:
     def pack_forget(self):
         self.packed = "forgotten"
 
-    # -- pembantu uji --
+    # -- test helpers --
     def row(self, name_contains: str) -> dict:
         for row in self.rows:
             if row["text"] and name_contains in row["text"]:
                 return row
         raise AssertionError(
-            f"baris {name_contains!r} tidak ada: {[r['text'] for r in self.rows]}"
+            f"no row matching {name_contains!r}: {[r['text'] for r in self.rows]}"
         )
 
     def by_iid(self, iid) -> dict:
         for row in self.rows:
             if row["iid"] == str(iid):
                 return row
-        raise AssertionError(f"iid {iid!r} tidak ada")
+        raise AssertionError(f"no iid {iid!r}")
 
 
 class FakeWidget:
     """Widget tiruan minimal (frame/scrollbar).
 
-    ``packed`` = None (belum pernah di-pack), "forgotten" (disembunyikan),
-    atau dict opsi pack (sedang tampil).
+    ``packed`` = None (never packed), "forgotten" (hidden),
+    or a dict of pack options (currently shown).
     """
 
     def __init__(self):
@@ -182,7 +182,7 @@ class FakeVar:
 
 
 def make_app(roots=None, settings=None, *, transient_roots=False):
-    """Buat PastexApp tiruan (tanpa __init__, tanpa display)."""
+    """Build a fake PastexApp (no __init__, no display)."""
     app = PastexApp.__new__(PastexApp)
     app.tree = FakeTree()
     app.tree_area = FakeWidget()
@@ -206,7 +206,7 @@ def make_app(roots=None, settings=None, *, transient_roots=False):
 
 
 class FakeDialogs:
-    """Pengganti tkinter.filedialog/simpledialog (tanpa Tk)."""
+    """Stand-in for tkinter.filedialog/simpledialog (no Tk)."""
 
     def __init__(self, **answers):
         self.answers = answers
@@ -236,7 +236,7 @@ class FakeDialogs:
 
 @pytest.fixture(autouse=True)
 def _no_clipboard_owner_between_tests():
-    """Jangan biarkan pemilik clipboard dari satu uji bocor ke uji lain."""
+    """Do not let a clipboard owner leak from one test into another."""
     from pastex import clipboard
 
     clipboard.set_clipboard_owner(None)
@@ -246,7 +246,7 @@ def _no_clipboard_owner_between_tests():
 
 @pytest.fixture
 def dialogs(monkeypatch):
-    """Ganti filedialog + simpledialog + messagebox dengan tiruan."""
+    """Replace filedialog + simpledialog + messagebox with stand-ins."""
     box = FakeDialogs()
     monkeypatch.setattr(app_module, "filedialog", box)
     monkeypatch.setattr(app_module, "simpledialog", box)
@@ -275,10 +275,10 @@ def gui(monkeypatch):
 
 @pytest.fixture
 def sample_root(tmp_path):
-    """Folder sumber berisi dua kategori + dua berkas .txt."""
-    root = tmp_path / "sumber"
+    """A source folder with two categories and two .txt files."""
+    root = tmp_path / "source"
     (root / "General").mkdir(parents=True)
     (root / "Email").mkdir(parents=True)
-    (root / "General" / "Greeting.txt").write_text("halo", encoding="utf-8")
-    (root / "Email" / "Balas.txt").write_text("terima kasih", encoding="utf-8")
+    (root / "General" / "Greeting.txt").write_text("hello", encoding="utf-8")
+    (root / "Email" / "Reply.txt").write_text("thank you", encoding="utf-8")
     return root

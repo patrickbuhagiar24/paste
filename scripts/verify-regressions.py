@@ -159,7 +159,7 @@ MUTATIONS = [
         r"""        self.tree.bind(
             "<<TreeviewOpen>>", lambda e: self._toggle_collapsed(self._event_iid(e))
         )""",
-        "        pass  # binding hilang",
+        "        pass  # binding missing",
         ["tests/test_v150_collapsed.py::test_treeview_open_close_bound_to_handler"],
     ),
     (
@@ -758,12 +758,12 @@ MUTATIONS = [
         ["tests/test_apt_repository.py::test_signer_creates_inrelease_keyrings_and_source"],
     ),
     (
-        "APT archive no longer uses the stonking suite",
+        "APT archive no longer uses the mint suite",
         "scripts/build-apt-repository.sh",
-        "suite=${3:-stonking}",
+        "suite=${3:-mint}",
         "suite=${3:-stable}",
         [
-            "tests/test_apt_repository.py::test_builder_defaults_to_the_stonking_suite_and_pool_layout"
+            "tests/test_apt_repository.py::test_builder_defaults_to_the_mint_suite_and_pool_layout"
         ],
     ),
     (
