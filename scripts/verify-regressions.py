@@ -324,6 +324,20 @@ MUTATIONS = [
         ["tests/test_app.py::test_window_unmap_is_bound_to_the_paste_sender"],
     ),
     (
+        "signed index links the missing unsigned sources file",
+        "scripts/build-apt-repository.sh",
+        "  sed -i '/<!--uns:start-->/,/<!--uns:end-->/d' \"$staging/index.html\"",
+        "  true",
+        ["tests/test_apt_repository.py::test_signed_archive_links_the_signed_sources_only"],
+    ),
+    (
+        "unsigned index links the missing signed keyring",
+        "scripts/build-apt-repository.sh",
+        "  sed -i '/<!--sgn:start-->/,/<!--sgn:end-->/d' \"$staging/index.html\"",
+        "  true",
+        ["tests/test_apt_repository.py::test_unsigned_archive_links_only_files_it_publishes"],
+    ),
+    (
         "workflow forgets to export the signing fingerprint",
         ".github/workflows/build-deb.yml",
         '          export APT_SIGNING_KEY_ID="$fingerprint"',

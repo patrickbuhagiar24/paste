@@ -84,6 +84,14 @@ else
   install -m 0644 "$script_dir/../packaging/pastex-unsigned.sources" "$staging/pastex-unsigned.sources"
 fi
 install -m 0644 "$script_dir/../packaging/apt-index.html" "$staging/index.html"
+# Keep the index truthful: only document files this archive actually publishes.
+if [[ "${PASSTEX_SIGNED:-0}" == "1" ]]; then
+  sed -i '/<!--uns:start-->/,/<!--uns:end-->/d' "$staging/index.html"
+else
+  sed -i '/<!--sgn:start-->/,/<!--sgn:end-->/d' "$staging/index.html"
+fi
+# Marker comments are build instructions, not published content.
+sed -i -E '/<!--(sgn|uns):(start|end)-->/d' "$staging/index.html"
 touch "$staging/.nojekyll"
 
 if [[ -e "$output_dir/dists" || -e "$output_dir/pool" ]]; then
