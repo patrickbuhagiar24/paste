@@ -131,14 +131,30 @@ def test_png_is_what_the_generator_produces():
 
 def test_constants_agree_with_desktop_file():
     """Icon=/StartupWMClass= di .desktop harus sama dengan yang dipakai app."""
+    # Only the [Desktop Entry] group: the file also carries a [Desktop Action]
+    # section for the snippet picker.
     entries = {}
+    group = ""
     for line in DESKTOP.read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.strip().startswith("#"):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            group = stripped
+            continue
+        if group != "[Desktop Entry]":
+            continue
+        if "=" in line and not stripped.startswith("#"):
             key, value = line.split("=", 1)
             entries[key.strip()] = value.strip()
     assert entries["Icon"] == app_module.ICON_NAME
     assert entries["StartupWMClass"] == app_module.WM_CLASS
     assert entries["Exec"].endswith("/pastex")
+    assert "Pick" in entries.get("Actions", ""), "aksi picker harus terdaftar"
+
+
+def test_desktop_action_opens_the_picker():
+    text = DESKTOP.read_text(encoding="utf-8")
+    action = text.split("[Desktop Action Pick]", 1)[1]
+    assert "Exec=/usr/bin/pastex --pick" in action
 
 
 def test_window_class_passed_to_tk():

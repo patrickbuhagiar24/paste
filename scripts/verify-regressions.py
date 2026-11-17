@@ -319,10 +319,10 @@ MUTATIONS = [
         "Ctrl+V is armed even when the window stays visible",
         "pastex/app.py",
         (
-            "        if self._hide_for_paste():\n"
+            "        if hidden:\n"
             "            self._send_paste()\n"
         ),
-        "        self._hide_for_paste()\n        self._send_paste()\n",
+        "        self._send_paste()\n",
         [
             "tests/test_app.py::test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized"
         ],
@@ -343,6 +343,115 @@ MUTATIONS = [
         [
             "tests/test_app.py::test_finished_copy_without_an_armed_send_shows_the_manual_hint"
         ],
+    ),
+    (
+        "search rescans the folders on every keystroke",
+        "pastex/app.py",
+        '''        self._search_after_id = self.after(
+            180, lambda: self.refresh_tree(force=False)
+        )
+''',
+        '        self._search_after_id = self.after(180, self.refresh_tree)',
+        [
+            "tests/test_app.py::test_search_repaints_from_the_cache_after_the_debounce"
+        ],
+    ),
+    (
+        "the tree ignores the in-memory index",
+        "pastex/app.py",
+        "        nodes = self.index.nodes(force=force)",
+        "        nodes = scan_roots(roots)",
+        ["tests/test_app.py::test_refresh_tree_reuses_the_cached_index"],
+    ),
+    (
+        "inotify events never reach the tree",
+        "pastex/app.py",
+        '''        try:
+            self.after(0, self._refresh_from_disk)
+        except TK_ERRORS:  # pragma: no cover - shutting down
+            pass
+''',
+        "        pass  # watcher diabaikan\n",
+        ["tests/test_app.py::test_watcher_callback_marshals_to_the_gui_thread"],
+    ),
+    (
+        "the tree is rebuilt in the middle of a paste",
+        "pastex/app.py",
+        '''        if getattr(self, "_pasting", False):
+            self.after(150, self._refresh_from_disk)
+            return
+''',
+        "",
+        ["tests/test_app.py::test_refresh_from_disk_waits_while_pasting"],
+    ),
+    (
+        "the picker minimizes the main window",
+        "pastex/app.py",
+        "            hidden = self._hide_widget(hide)",
+        "            hidden = self._hide_for_paste()",
+        ["tests/test_app.py::test_picker_paste_does_not_touch_the_main_window"],
+    ),
+    (
+        "a picker paste steals the focus back",
+        "pastex/app.py",
+        "        self._paste_restore_window = hide is None",
+        "        self._paste_restore_window = True",
+        ["tests/test_app.py::test_picker_paste_does_not_touch_the_main_window"],
+    ),
+    (
+        "every launch starts a second window",
+        "pastex/app.py",
+        '''    if not args.dir:
+        answer = send_command("pick" if args.pick else "show")
+        if answer is not None and answer.get("ok"):
+            return 0
+''',
+        '''    if False:
+        answer = send_command("pick" if args.pick else "show")
+        if answer is not None and answer.get("ok"):
+            return 0
+''',
+        ["tests/test_app.py::test_cli_forwards_show_to_a_running_instance"],
+    ),
+    (
+        "the instance lock is not taken",
+        "pastex/instance.py",
+        "            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        "            pass  # lock diabaikan",
+        ["tests/test_instance.py::test_only_one_instance_claims_the_slot"],
+    ),
+    (
+        "the portal is never consulted",
+        "pastex/clipboard.py",
+        "    portal = _try_portal()",
+        "    portal = None",
+        ["tests/test_clipboard.py::test_simulate_paste_falls_back_to_the_portal"],
+    ),
+    (
+        "the portal presses the keys in the wrong order",
+        "pastex/portal.py",
+        '''_sequence = [
+    (CTRL, PRESSED),
+    (V, PRESSED),
+    (V, RELEASED),
+    (CTRL, RELEASED),
+]''',
+        '''_sequence = [
+    (CTRL, PRESSED),
+    (V, RELEASED),
+    (V, PRESSED),
+    (CTRL, RELEASED),
+]''',
+        ["tests/test_portal.py::test_full_sequence_presses_ctrl_v"],
+    ),
+    (
+        "the portal asks for a session on every paste",
+        "pastex/portal.py",
+        '''    if _session_handle is not None:
+        return _session_handle
+''',
+        "",
+        ["tests/test_portal.py::test_session_is_reused_so_the_prompt_appears_once"],
     ),
     (
         "Ctrl+Down reorder shortcut is not bound",
@@ -381,12 +490,16 @@ MUTATIONS = [
         "the window is only hidden after the copy finishes",
         "pastex/app.py",
         (
-            "        if self._hide_for_paste():\n"
+            "        if hide is None:\n"
+            "            hidden = self._hide_for_paste()\n"
+            "        else:\n"
+            "            hidden = self._hide_widget(hide)\n"
+            "        if hidden:\n"
             "            self._send_paste()\n"
             "        _run_in_thread(self._paste_worker, text)"
         ),
         "        _run_in_thread(self._paste_worker, text)",
-        ["tests/test_app.py::test_paste_hides_the_window_before_copying"],
+        ["tests/test_app.py::test_paste_text_hides_before_copying"],
     ),
     (
         "startup no longer prewarms the clipboard tools",

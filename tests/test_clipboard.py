@@ -463,3 +463,68 @@ def test_prewarm_never_starts_ydotoold_on_x11(monkeypatch):
     assert started == []
     assert copy_plan.tool_names()[0] == "xclip"
     assert paste_plan.tool_names() == ["xdotool", "ydotool"]
+
+
+# --- Portal fallback -------------------------------------------------------
+
+
+def test_try_portal_is_skipped_when_the_portal_is_unavailable(monkeypatch):
+    from pastex import clipboard, portal
+
+    monkeypatch.setattr(portal, "available", lambda: False)
+
+    assert clipboard._try_portal() is None
+
+
+def test_simulate_paste_falls_back_to_the_portal(monkeypatch):
+    """Tanpa ydotool/uinput, portal tetap bisa mengirim Ctrl+V tanpa root."""
+    from pastex import clipboard, portal
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    monkeypatch.setattr(portal, "available", lambda: True)
+    monkeypatch.setattr(
+        portal, "send_ctrl_v", lambda: (True, "Automatic paste sent through the desktop portal.")
+    )
+
+    result = clipboard.simulate_paste(runner=_fake_runner([]))
+
+    assert result.ok is True
+    assert result.tool == "portal"
+    assert result.confident is True
+
+
+def test_portal_failure_is_part_of_the_error_message(monkeypatch):
+    from pastex import clipboard, portal
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    monkeypatch.setattr(portal, "available", lambda: True)
+    monkeypatch.setattr(portal, "send_ctrl_v", lambda: (False, "user dismissed the prompt"))
+
+    result = clipboard.simulate_paste(runner=_fake_runner([]))
+
+    assert result.ok is False
+    assert "portal: user dismissed the prompt" in result.message
+
+
+def test_a_broken_portal_never_breaks_the_paste(monkeypatch):
+    from pastex import clipboard, portal
+
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotool")
+    monkeypatch.setattr(portal, "available", lambda: True)
+
+    def boom():
+        raise RuntimeError("portal rusak")
+
+    monkeypatch.setattr(portal, "send_ctrl_v", boom)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+
+    # ydotool succeeds, so the portal is never consulted.
+    result = clipboard.simulate_paste(runner=_fake_runner([]))
+    assert result.ok is True
+
+    # With ydotool failing, the portal error is reported instead of raising.
+    failing = clipboard.simulate_paste(runner=_fake_runner([], returncode=1))
+    assert failing.ok is False
+    assert "portal error" in failing.message

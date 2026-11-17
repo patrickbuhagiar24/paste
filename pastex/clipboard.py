@@ -363,6 +363,25 @@ def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
         return PasteResult(ok=False, tool="", message=str(exc))
 
 
+def _try_portal() -> tuple[bool, str] | None:
+    """Ask the desktop portal to press Ctrl+V; None when it is unavailable.
+
+    The portal needs no /dev/uinput access, so it rescues automatic paste on a
+    machine where the udev rule was never installed. It is consulted only after
+    every tool in the plan failed, so the normal path is unchanged.
+    """
+    try:
+        from . import portal  # noqa: PLC0415 - optional dependency
+    except Exception:  # noqa: BLE001 - never break a paste on an import error
+        return None
+    try:
+        if not portal.available():
+            return None
+        return portal.send_ctrl_v()
+    except Exception as exc:  # noqa: BLE001 - the portal is best-effort
+        return False, f"portal error: {exc}"
+
+
 def simulate_paste(
     runner: Runner = _default_runner,
     plan: ToolPlan | None = None,
@@ -403,6 +422,14 @@ def simulate_paste(
             errors.append(f"{name}: {detail or proc.returncode}")
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append(f"{name}: {exc}")
+    # Last resort: the desktop portal injects the keystroke without
+    # /dev/uinput, so a missing udev rule or group no longer blocks paste.
+    portal = _try_portal()
+    if portal is not None:
+        ok, detail = portal
+        if ok:
+            return PasteResult(ok=True, tool="portal", message=detail, confident=True)
+        errors.append(f"portal: {detail}")
     if errors:
         detail = "; ".join(errors)
     elif session == "wayland":

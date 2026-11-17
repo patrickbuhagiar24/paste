@@ -58,7 +58,7 @@ Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Conflicts: paste-teks
 Replaces: paste-teks
-Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool
+Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool, python3-dbus
 Description: One-click desktop text snippet manager for Ubuntu 26.10
  Pastex displays .txt files in a hierarchy of folders.
  Click a text file once to copy its contents and send Ctrl+V to the previously

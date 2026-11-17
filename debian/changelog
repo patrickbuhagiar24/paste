@@ -1,3 +1,21 @@
+pastex (1.7.0-1) unstable; urgency=medium
+
+  * Add a frameless snippet picker: "pastex --pick" (also a desktop action)
+    shows a list at the pointer; choosing a snippet pastes without minimizing
+    or unmapping the main window, because the popup never owned a dock entry.
+  * Run a single instance: the first process holds a lock in
+    $XDG_RUNTIME_DIR/pastex and listens on a socket, so a later launch shows
+    the window or the picker instead of starting a second Tk process.
+  * Cache the snippet tree and file contents in memory and watch the folders
+    with inotify, so searches stop re-walking the disk and external edits show
+    up without pressing F5.
+  * Reuse the text already read for the preview when pasting a snippet.
+  * Fall back to the RemoteDesktop portal for Ctrl+V when ydotool fails, so
+    automatic paste can work without /dev/uinput access (recommends
+    python3-dbus). "--check" reports the portal and the running instance.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 15:00:00 +0000
+
 pastex (1.6.12-1) unstable; urgency=medium
 
   * Remove the last withdraw() fallbacks, so the window is never unmapped and
