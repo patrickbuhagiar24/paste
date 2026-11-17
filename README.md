@@ -48,6 +48,8 @@ This setup uses the repository's GPG key to verify signed APT metadata. The GitH
 4. Click the displayed source-folder name to open that location in the file manager.
 
 Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the selected item, and `Delete` to remove it. Folders are not pasted.
+Use the `Up` and `Down` arrow keys to move through the list without pasting, and `Ctrl+Up` / `Ctrl+Down` to move the current item up or down inside its folder.
+The darker highlight follows the row you last clicked, right-clicked, edited, or reached with the arrow keys; a right-click in Select mode leaves it unchanged.
 
 ## Features
 
