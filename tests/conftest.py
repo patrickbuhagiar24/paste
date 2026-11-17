@@ -152,7 +152,7 @@ class FakeTree:
 
 
 class FakeWidget:
-    """Widget tiruan minimal (frame/scrollbar).
+    """Minimal stand-in widget (frame/scrollbar).
 
     ``packed`` = None (never packed), "forgotten" (hidden),
     or a dict of pack options (currently shown).

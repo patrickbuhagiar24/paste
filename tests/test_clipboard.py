@@ -57,7 +57,7 @@ def test_simulate_paste_uses_ydotool_on_wayland(monkeypatch):
     result = clipboard.simulate_paste(runner=_fake_runner(captured))
     assert result.ok and result.tool == "ydotool"
     assert captured[0][0][0] == "ydotool"
-    # ydotool >= 1.0: `key` HANYA menerima keycode (<kode>:<1|0>).
+    # ydotool >= 1.0: `key` ONLY accepts keycodes (<code>:<1|0>).
     # 29=LeftCtrl, 47=V — not 42 (Shift) as in the v1.0.2 bug, and not
     # "ctrl+v" (key names are rejected) as in the v1.2.0 bug.
     assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]

@@ -1,180 +1,32 @@
 #!/bin/sh
-# Pastex post-installation: enable automatic paste with no manual setup.
-
+# Pastex post-installation note.
 #
-# Setup:
-#   1. A udev TAG+="uaccess" rule grants active sessions rw access to /dev/uinput.
-#      It takes effect immediately without logging out.
-#   2. A fallback pastex group for systems without ACL support.
-
-#   3. Enable the per-user ydotoold service to send Ctrl+V.
+# Installing Pastex changes nothing on the system. Linux Mint's default X11
+# session needs no setup at all: xclip/xsel own the clipboard and xdotool types
+# Ctrl+V through XTEST, so there is no /dev/uinput access, no 'pastex' group and
+# no ydotoold daemon.
 #
-# Note: postinst runs as root, so $USER is unavailable. Detect the account
-# using SUDO_USER, PKEXEC_UID, the active graphical session, or
-# the only regular account. If uncertain, print instructions only.
+# The Wayland helpers (udev rule, 'pastex' group, per-user ydotool unit) ship as
+# templates under /usr/lib/pastex and are only installed by
+# `pastex --enable-permissions`, which the user runs in a Wayland session.
 set -eu
 
-GROUP="pastex"
-RULE="/usr/lib/udev/rules.d/70-pastex-uinput.rules"
-# These paths can be overridden for tests or unusual systems.
-DEV="${PASTE_TEKS_UINPUT_DEV:-/dev/uinput}"
+NOTE_DIR="/var/lib/pastex"
+NOTE_MARKER="$NOTE_DIR/install-note-shown"
 
 say() { echo "pastex: $*"; }
 
-# ---------- account detection ----------
-
-is_real_user() {
-    _uid="$(id -u "$1" 2>/dev/null || echo 0)"
-    [ "$_uid" -ge 1000 ] && [ "$_uid" -lt 60000 ]
-}
-
-detect_users() {
-    # Print candidate account names (more than one may be logged in).
-    # Never return root.
-    found=""
-    for candidate in "${SUDO_USER:-}" "${PKEXEC_UID:-}"; do
-        [ -n "$candidate" ] || continue
-        case "$candidate" in
-            [0-9]*) _u="$(getent passwd "$candidate" 2>/dev/null | cut -d: -f1)" ;;
-            *) _u="$candidate" ;;
-        esac
-        if [ -n "${_u:-}" ] && is_real_user "$_u"; then
-            echo "$_u"
-            return 0
-        fi
-    done
-
-    if command -v loginctl >/dev/null 2>&1; then
-        found="$(loginctl list-sessions --no-legend 2>/dev/null \
-            | awk '{print $3}' | while read -r u; do
-                [ -n "$u" ] && is_real_user "$u" && echo "$u"
-              done | sort -u)"
-        if [ -n "$found" ]; then
-            echo "$found"
-            return 0
-        fi
-    fi
-
-    _list="$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1}' /etc/passwd \
-        | grep -vx nobody || true)"
-    if [ "$(printf '%s\n' "$_list" | grep -c .)" -eq 1 ]; then
-        printf '%s\n' "$_list"
-        return 0
-    fi
-
-    return 1
-}
-
-# ---------- /dev/uinput permissions ----------
-
-apply_permissions() {
-    if [ ! -e "$DEV" ]; then
-        say "$DEV does not exist yet (uinput module is not loaded) — permissions will be applied at boot."
-        return 0
-    fi
-    # 1) uaccess ACL for the active session (takes effect immediately).
-    if command -v udevadm >/dev/null 2>&1; then
-        udevadm control --reload-rules >/dev/null 2>&1 || true
-        udevadm trigger --sysname-match=uinput >/dev/null 2>&1 || true
-    fi
-    # 2) Fallback group permissions: 0660 root:pastex.
-    chgrp "$GROUP" "$DEV" >/dev/null 2>&1 || true
-    chmod 0660 "$DEV" >/dev/null 2>&1 || true
-}
-
-# ---------- ydotoold service ----------
-
-enable_daemon() {
-    _user="$1"
-    _home="$(getent passwd "$_user" | cut -d: -f6)"
-    if [ -z "${_home:-}" ] || [ ! -d "$_home" ]; then
-        say "home directory for '$_user' was not found — skipping ydotoold."
-        return 0
-    fi
-    _uid="$(id -u "$_user")"
-    _runtime="${PASTE_TEKS_RUNTIME_BASE:-/run/user}/$_uid"
-
-    # Do not enable the service unless ydotool is installed (it is recommended, not required).
-    if ! command -v ydotoold >/dev/null 2>&1; then
-        say "ydotool is not installed — automatic paste will use xdotool or a fallback."
-        return 0
-    fi
-
-    if [ -d "$_runtime" ]; then
-        # Active session: start and enable it now.
-        runuser -u "$_user" -- env XDG_RUNTIME_DIR="$_runtime" \
-            systemctl --user enable --now ydotoold.service >/dev/null 2>&1 \
-            || say "could not start ydotoold for '$_user' — try from the app."
-    else
-        # User is not logged in: enable it for their next login.
-        install -d -o "$_user" -g "$_user" -m 755 "$_home/.config/systemd/user" \
-            >/dev/null 2>&1 || true
-        ln -sf /usr/lib/systemd/user/ydotoold.service \
-            "$_home/.config/systemd/user/ydotoold.service" 2>/dev/null || true
-        chown -h "$_user":"$_user" "$_home/.config/systemd/user/ydotoold.service" \
-            >/dev/null 2>&1 || true
-    fi
-}
-
-# ---------- actions ----------
-
 case "${1:-}" in
-    configure|abort-upgrade|abort-remove|abort-deconfigure)
-        if ! getent group "$GROUP" >/dev/null 2>&1; then
-            groupadd --system "$GROUP" 2>/dev/null \
-                || say "warning: could not create group $GROUP"
-        fi
-
-        if [ -e "$RULE" ]; then
-            apply_permissions
-        fi
-
-        USERS="$(detect_users || true)"
-        if [ -z "${USERS:-}" ]; then
-            say "could not detect a user account automatically."
-            say "Automatic paste may still work through the session ACL."
-            say "If needed, run `pastex --enable-permissions`, or run:"
-            say "  sudo usermod -aG $GROUP <your-username>"
-            exit 0
-        fi
-
-        NEW_MEMBER=0
-        for USER_NAME in $USERS; do
-            if id -nG "$USER_NAME" 2>/dev/null | tr ' ' '\n' | grep -qx "$GROUP"; then
-                say "account '$USER_NAME' is already a member of group '$GROUP'."
-            else
-                if usermod -aG "$GROUP" "$USER_NAME" 2>/dev/null; then
-                    say "account '$USER_NAME' was added to group '$GROUP'."
-                    NEW_MEMBER=1
-                else
-                    say "warning: could not add '$USER_NAME' to group $GROUP."
-                fi
-            fi
-            enable_daemon "$USER_NAME"
-        done
-
-        if ! id -nG "$(echo "$USERS" | head -n1)" 2>/dev/null \
-                | tr ' ' '\n' | grep -qx "$GROUP" \
-           && [ "$NEW_MEMBER" -eq 0 ]; then
-            say "warning: the group is not active for this account — run"
-            say "`pastex --enable-permissions` if automatic paste fails."
-        fi
-
-        # Check whether the account can actually write to the device now.
-        FIRST="$(echo "$USERS" | head -n1)"
-        if [ -n "$FIRST" ]; then
-            if [ -e "$DEV" ] && runuser -u "$FIRST" -- test -w "$DEV" 2>/dev/null; then
-                say "ready: '$FIRST' can write to $DEV — automatic paste is enabled."
-            elif [ ! -e "$DEV" ]; then
-                say "$DEV does not exist — it will be created when the uinput module loads."
-            else
-                say "permissions for $DEV are not active for '$FIRST'."
-                say "Run `pastex --enable-permissions`, or run:"
-                say "  sudo udevadm control --reload-rules && sudo udevadm trigger --sysname-match=uinput"
-            fi
+    configure)
+        # One-time only: apt passes "configure" on every upgrade as well.
+        if [ ! -e "$NOTE_MARKER" ]; then
+            say "nothing to configure: the X11 clipboard and xdotool need no permissions."
+            say "a Wayland session can add the optional helpers later with:"
+            say "  pastex --enable-permissions"
+            install -d -m 0755 "$NOTE_DIR" >/dev/null 2>&1 || true
+            : > "$NOTE_MARKER" 2>/dev/null || true
         fi
         ;;
-
     *)
         :
         ;;

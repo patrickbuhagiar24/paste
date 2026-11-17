@@ -90,26 +90,32 @@ def test_modules_import_cleanly_without_display(monkeypatch):
 ROOT = PKG.parent
 
 
-def _control_recommends(text: str) -> list[str]:
+def _control_field(text: str, field: str) -> list[str]:
     for line in text.splitlines():
-        if line.startswith("Recommends:"):
+        if line.startswith(f"{field}:"):
             return [p.strip() for p in line.split(":", 1)[1].split(",") if p.strip()]
     return []
 
 
+def _control_recommends(text: str) -> list[str]:
+    return _control_field(text, "Recommends")
+
+
 def test_build_deb_recommends_matches_debian_control():
-    """The two Recommends sources (control & build-deb.sh) must not diverge."""
-    control = _control_recommends((ROOT / "debian" / "control").read_text())
-    script = _control_recommends((ROOT / "scripts" / "build-deb.sh").read_text())
-    assert control == script, f"control={control} build-deb={script}"
+    """The two metadata sources (control & build-deb.sh) must not diverge."""
+    for field in ("Recommends", "Suggests"):
+        control = _control_field((ROOT / "debian" / "control").read_text(), field)
+        script = _control_field((ROOT / "scripts" / "build-deb.sh").read_text(), field)
+        assert control == script, f"{field}: control={control} build-deb={script}"
 
 
-def test_reader_tools_declared_in_recommends():
+def test_reader_tools_declared_in_package_metadata():
     """Every clipboard tool the code calls must be suggested as a package, so
     users do not hit a dead feature without any hint."""
     from pastex.clipboard import READER_TOOLS
 
-    recommends = _control_recommends((ROOT / "debian" / "control").read_text())
+    control = (ROOT / "debian" / "control").read_text()
+    declared = set(_control_recommends(control)) | set(_control_field(control, "Suggests"))
     # command name -> Debian package
     package_of = {
         "wl-paste": "wl-clipboard",
@@ -121,8 +127,19 @@ def test_reader_tools_declared_in_recommends():
     }
     needed = {package_of[t] for t in READER_TOOLS if t in package_of}
     needed |= {"wl-clipboard", "ydotool"}  # copy + paste on Wayland
-    missing = needed - set(recommends)
-    assert not missing, f"packages missing from Recommends: {sorted(missing)}"
+    missing = needed - declared
+    assert not missing, f"packages missing from Recommends/Suggests: {sorted(missing)}"
+
+
+def test_x11_tools_are_recommended_and_wayland_tools_only_suggested():
+    """Linux Mint's default session is X11: `apt install pastex` must not pull
+    the Wayland-only helpers, which are inert until the user opts in."""
+    control = (ROOT / "debian" / "control").read_text()
+    recommends = set(_control_recommends(control))
+    suggests = set(_control_field(control, "Suggests"))
+    assert {"xclip", "xsel", "xdotool"} <= recommends
+    assert not ({"wl-clipboard", "ydotool", "python3-dbus"} & recommends)
+    assert {"wl-clipboard", "ydotool", "python3-dbus"} <= suggests
 
 
 def test_docs_do_not_promise_removed_tk_clipboard():
@@ -160,3 +177,46 @@ def test_package_description_matches_between_sources():
         "the description in the .deb (build-deb.sh) differs from debian/control:\n"
         f"control   = {control}\nbuild-deb = {script}"
     )
+
+
+# --- the package changes nothing on the system ----------------------------
+
+
+def test_postinst_does_not_touch_accounts_or_services():
+    """Mint's X11 session needs no group, udev rule or daemon, so installing
+    the package must not add accounts, reload udev or enable services."""
+    text = (ROOT / "debian" / "postinst").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    for forbidden in ("usermod", "groupadd", "udevadm", "systemctl", "chgrp", "chmod"):
+        assert forbidden not in code, f"postinst still runs {forbidden}"
+    assert "--enable-permissions" in text  # it points at the opt-in instead
+
+
+def test_wayland_helpers_are_shipped_as_inert_templates():
+    """The udev rule and the ydotool unit must not land in the active
+    directories; only `pastex --enable-permissions` copies them there."""
+    rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
+    # Only the comment may mention the active directories.
+    code = "\n".join(
+        line for line in rules.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "/usr/lib/udev" not in code
+    assert "/usr/lib/systemd" not in code
+    for template in ("70-pastex-uinput.rules", "ydotoold.service"):
+        assert (ROOT / "usr" / "lib" / "pastex" / template).is_file()
+        assert f"usr/lib/pastex/{template}" in rules
+
+
+def test_helper_activates_the_templates_only_when_called():
+    from pastex import uinput
+
+    helper = (ROOT / "usr" / "lib" / "pastex" / "pastex-uinput-group").read_text(
+        encoding="utf-8"
+    )
+    assert uinput.RULE_TEMPLATE == "/usr/lib/pastex/70-pastex-uinput.rules"
+    assert uinput.UNIT_TEMPLATE == "/usr/lib/pastex/ydotoold.service"
+    assert helper.count(uinput.RULE_TEMPLATE) >= 1
+    assert uinput.UDEV_RULE in helper  # the template is copied to the active path
+    assert uinput.GROUP in helper

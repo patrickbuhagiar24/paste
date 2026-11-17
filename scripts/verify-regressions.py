@@ -123,12 +123,14 @@ MUTATIONS = [
         "CLI hint is missing from --check",
         "pastex/app.py",
         (
-            "            # Keep permission information in --check even though the GUI button was removed.\n"
-            '            print(f"\\n{uinput.CLI_HINT}")'
+            "                # Keep permission information in --check even though the GUI\n"
+            "                # button was removed.\n"
+            '                print(f"\\n{uinput.CLI_HINT}")'
         ),
         (
-            "            # Keep permission information in --check even though the GUI button was removed.\n"
-            "            pass"
+            "                # Keep permission information in --check even though the GUI\n"
+            "                # button was removed.\n"
+            "                pass"
         ),
         [
             "tests/test_v150_permissions.py::test_check_still_reports_permission_and_cli_hint"
@@ -793,6 +795,45 @@ MUTATIONS = [
         "        if previous_highlight:\n            self._set_context_highlight(previous_highlight)",
         "        if previous_highlight:\n            pass",
         ["tests/test_folder_controls.py::test_context_highlight_survives_refresh"],
+    ),
+    (
+        "X11 sessions demand /dev/uinput permissions again",
+        "pastex/uinput.py",
+        '        return self.session_kind != "x11"',
+        "        return True",
+        ["tests/test_uinput.py::test_x11_session_does_not_need_uinput_permissions"],
+    ),
+    (
+        "the X11 report offers the Wayland permission setup",
+        "pastex/app.py",
+        "    if not st.needed:\n        return X11_PERMISSION_NOTE",
+        "    if False:\n        return X11_PERMISSION_NOTE",
+        ["tests/test_v150_permissions.py::test_permissions_report_on_x11_says_not_needed"],
+    ),
+    (
+        "postinst configures the group and the ydotool unit again",
+        "debian/postinst",
+        '            say "nothing to configure: the X11 clipboard and xdotool need no permissions."',
+        '            usermod -aG pastex "$(id -un)"\n'
+        '            say "nothing to configure: the X11 clipboard and xdotool need no permissions."',
+        ["tests/test_static.py::test_postinst_does_not_touch_accounts_or_services"],
+    ),
+    (
+        "the udev rule is installed in the active directory again",
+        "debian/rules",
+        "\tinstall -m 644 usr/lib/pastex/70-pastex-uinput.rules debian/pastex/usr/lib/pastex/",
+        "\tinstall -m 644 usr/lib/pastex/70-pastex-uinput.rules "
+        "debian/pastex/usr/lib/udev/rules.d/",
+        ["tests/test_static.py::test_wayland_helpers_are_shipped_as_inert_templates"],
+    ),
+    (
+        "Wayland-only tools are recommended on an X11-first package",
+        "debian/control",
+        "Recommends: xclip, xsel, xdotool",
+        "Recommends: xclip, xsel, xdotool, wl-clipboard",
+        [
+            "tests/test_static.py::test_x11_tools_are_recommended_and_wayland_tools_only_suggested"
+        ],
     ),
 ]
 

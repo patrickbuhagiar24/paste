@@ -24,16 +24,16 @@ def test_user_groups_reads_nss(monkeypatch):
     monkeypatch.setattr(
         grp,
         "getgrgid",
-        lambda gid: _FakeGrpEntry({1000: "budi", 999: "pastex"}.get(gid, "x")),
+        lambda gid: _FakeGrpEntry({1000: "tester", 999: "pastex"}.get(gid, "x")),
     )
-    assert uinput.user_groups("budi") == {"budi", "pastex"}
+    assert uinput.user_groups("tester") == {"tester", "pastex"}
 
 
 def test_user_groups_unknown_user(monkeypatch):
     monkeypatch.setattr(
         uinput.pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name))
     )
-    assert uinput.user_groups("hantu") == set()
+    assert uinput.user_groups("ghost") == set()
 
 
 def test_device_writable_uses_access():
@@ -81,7 +81,7 @@ def test_helper_missing(tmp_path, monkeypatch):
 
 def _status(**kw):
     base = {
-        "user": "budi",
+        "user": "tester",
         "group_exists": True,
         "in_group": False,
         "device_writable": False,
@@ -89,8 +89,8 @@ def _status(**kw):
         "pkexec": True,
         "ydotoold_binary": False,
         "socket": None,
-        "groups": {"budi"},
-        "session": {"budi"},
+        "groups": {"tester"},
+        "session": {"tester"},
         "daemon": False,
         "rule": True,
     }
@@ -143,7 +143,7 @@ def test_summary_marks_missing_permission():
 
 def test_summary_reports_stale_session_after_group_add():
     """Real case: a member on disk, but the running session has not loaded the group."""
-    st = _status(in_group=True, session={"budi"})
+    st = _status(in_group=True, session={"tester"})
     assert st.needs_relogin is True
     assert st.in_session is False
     row = next(r for r in st.summary() if "group" in r[1])
@@ -152,7 +152,7 @@ def test_summary_reports_stale_session_after_group_add():
 
 
 def test_session_groups_active_when_loaded():
-    st = _status(in_group=True, session={"budi", "pastex"}, device_writable=True)
+    st = _status(in_group=True, session={"tester", "pastex"}, device_writable=True)
     assert st.in_session is True
     assert st.needs_relogin is False
 
@@ -175,7 +175,7 @@ def test_daemon_missing_flag():
 
 def test_explain_orders_relogin_before_daemon():
     text = uinput.explain(
-        _status(in_group=True, session={"budi"}, ydotoold_binary=True)
+        _status(in_group=True, session={"tester"}, ydotoold_binary=True)
     )
     assert "Log out and back in" in text
     assert "ydotoold" in text
@@ -184,14 +184,50 @@ def test_explain_orders_relogin_before_daemon():
 
 def test_explain_mentions_udev_when_rule_missing():
     text = uinput.explain(
-        _status(in_group=True, session={"budi", "pastex"}, rule=False)
+        _status(in_group=True, session={"tester", "pastex"}, rule=False)
     )
-    assert "reinstall" in text
+    # The rule ships as a template, so activation is `--enable-permissions`,
+    # never "reinstall the package".
+    assert "--enable-permissions" in text
+    assert "reinstall" not in text
+
+
+def test_x11_session_does_not_need_uinput_permissions():
+    """Linux Mint's default X11 session types through xdotool XTEST."""
+    st = _status(session_kind="x11")
+    assert st.needed is False
+    assert st.ready is True
+    rows = st.summary()
+    assert len(rows) == 1
+    assert rows[0][0] == "✅"
+    assert "not needed" in rows[0][2]
+    assert uinput.GROUP not in rows[0][1]
+
+
+def test_x11_explain_points_at_xdotool_not_permissions():
+    text = uinput.explain(_status(session_kind="x11"))
+    assert "X11" in text and "xdotool" in text
+    assert "--enable-permissions" not in text
+
+
+def test_wayland_session_still_needs_uinput_permissions():
+    st = _status(session_kind="wayland")
+    assert st.needed is True
+    labels = " ".join(label for _m, label, _d in st.summary())
+    assert uinput.GROUP in labels
+    assert uinput.DEVICE in labels
+
+
+def test_unknown_session_keeps_the_wayland_behaviour():
+    """No display at all (CI, ssh): keep reporting the permission rows."""
+    st = _status(session_kind="unknown")
+    assert st.needed is True
+    assert len(st.summary()) >= 2
 
 
 def _proc_file(tmp_path, groups_line):
     f = tmp_path / "status"
-    f.write_text(f"Name:\tbudi\nGroups:\t{groups_line}\n", encoding="utf-8")
+    f.write_text(f"Name:\ttester\nGroups:\t{groups_line}\n", encoding="utf-8")
     return str(f)
 
 
@@ -235,7 +271,7 @@ def test_manual_command_is_complete():
 
 
 def test_enable_command_builds_pkexec_call():
-    assert uinput.enable_command("budi") == ["pkexec", uinput.HELPER, "budi"]
+    assert uinput.enable_command("tester") == ["pkexec", uinput.HELPER, "tester"]
 
 
 class _Proc:
@@ -248,16 +284,16 @@ def test_enable_for_user_success():
 
     def runner(cmd, **kw):
         seen.append(cmd)
-        return _Proc(0, "Akun 'budi' ditambahkan ke grup 'pastex'.", "")
+        return _Proc(0, "Account 'tester' was added to group 'pastex'.", "")
 
-    code, out, err = uinput.enable_for_user("budi", runner=runner)
-    assert code == 0 and "ditambahkan" in out and err == ""
-    assert seen == [["pkexec", uinput.HELPER, "budi"]]
+    code, out, err = uinput.enable_for_user("tester", runner=runner)
+    assert code == 0 and "was added" in out and err == ""
+    assert seen == [["pkexec", uinput.HELPER, "tester"]]
 
 
 def test_enable_for_user_cancelled():
     code, out, _err = uinput.enable_for_user(
-        "budi", runner=lambda cmd, **kw: _Proc(126, "", "dismissed")
+        "tester", runner=lambda cmd, **kw: _Proc(126, "", "dismissed")
     )
     assert code == 126 and out == ""
 
@@ -266,7 +302,7 @@ def test_enable_for_user_handles_exception():
     def boom(cmd, **kw):
         raise OSError("pkexec not found")
 
-    code, _out, err = uinput.enable_for_user("budi", runner=boom)
+    code, _out, err = uinput.enable_for_user("tester", runner=boom)
     assert code == -1 and "pkexec" in err
 
 
@@ -330,7 +366,7 @@ def test_acl_granted_without_getfacl(monkeypatch):
 
 def test_summary_reports_acl_without_group():
     st = uinput.UinputStatus(
-        user="budi",
+        user="tester",
         group_exists=True,
         in_group=False,
         device_writable=True,
@@ -338,8 +374,8 @@ def test_summary_reports_acl_without_group():
         pkexec=True,
         ydotoold_binary=False,
         socket=None,
-        groups={"budi"},
-        session={"budi"},
+        groups={"tester"},
+        session={"tester"},
         daemon=False,
         rule=True,
         acl=True,

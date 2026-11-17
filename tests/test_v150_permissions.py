@@ -2,7 +2,7 @@
 
 The "Automatic Paste Permissions" button was removed from the GUI. The flow:
   * `--permissions`            -> prints the status (same as the --check section)
-  * `--enable-permissions`   -> meminta akses /dev/uinput (pkexec + helper)
+  * `--enable-permissions`   -> requests /dev/uinput access (pkexec + helper)
 The information still appears in `--check` and in the paste failure dialog.
 """
 
@@ -21,17 +21,27 @@ APP_SRC = (ROOT / "pastex" / "app.py").read_text(encoding="utf-8")
 
 
 class FakeStatus:
-    """UinputStatus tiruan."""
+    """Stand-in UinputStatus."""
 
     def __init__(
-        self, *, writable=False, helper=True, pkexec=True, daemon=False, user="tester"
+        self,
+        *,
+        writable=False,
+        helper=True,
+        pkexec=True,
+        daemon=False,
+        user="tester",
+        needed=True,
+        session_kind="wayland",
     ):
         self.user = user
         self.device_writable = writable
         self.helper = helper
         self.pkexec = pkexec
         self.daemon = daemon
-        self.ready = writable
+        self.needed = needed
+        self.session_kind = session_kind
+        self.ready = writable or not needed
         self.daemon_missing = not daemon
 
     def summary(self, prefix: str = ""):
@@ -235,3 +245,62 @@ def test_no_gui_dependency_left_in_permission_paths():
     for name, node in found.items():
         body = ast.dump(node)
         assert "messagebox" not in body, f"{name} uses a GUI dialog"
+
+# --- Linux Mint default session: X11 needs nothing ------------------------
+
+
+def test_permissions_report_on_x11_says_not_needed(capsys, monkeypatch):
+    """On X11 the report must not list the group or /dev/uinput at all."""
+    monkeypatch.setattr(
+        uinput,
+        "status",
+        lambda *a, **k: FakeStatus(needed=False, session_kind="x11"),
+    )
+    assert app_module.run_cli(["--permissions"]) == 0
+    out = capsys.readouterr().out
+    assert "not needed on X11" in out
+    assert "write access to /dev/uinput" not in out
+    assert "--enable-permissions" not in out
+
+
+def test_check_on_x11_reports_no_permission_setup(capsys, monkeypatch):
+    monkeypatch.setattr(
+        uinput,
+        "status",
+        lambda *a, **k: FakeStatus(needed=False, session_kind="x11"),
+    )
+    assert app_module.run_cli(["--check"]) == 0
+    out = capsys.readouterr().out
+    assert "not needed on X11" in out
+    assert "Automatic-paste permissions (group" not in out
+
+
+def test_paste_failure_on_x11_does_not_blame_uinput(monkeypatch):
+    """An X11 paste failure is a focus problem, not a missing permission."""
+    from pastex.app import PastexApp
+
+    shown = []
+    monkeypatch.setattr(
+        uinput,
+        "status",
+        lambda *a, **k: FakeStatus(needed=False, session_kind="x11"),
+    )
+    monkeypatch.setattr(app_module, "messagebox", FakeBox(shown))
+
+    PastexApp._show_paste_failure(type("F", (), {})(), "Ctrl+V failed")
+    text = shown[-1][2]
+    assert "does not need" not in text
+    assert "--enable-permissions" not in text
+    assert "xdotool could not deliver Ctrl+V" in text
+
+
+def test_enable_permissions_notes_that_x11_needs_nothing(capsys, monkeypatch):
+    monkeypatch.setattr(
+        uinput,
+        "status",
+        lambda *a, **k: FakeStatus(needed=False, session_kind="x11"),
+    )
+    monkeypatch.setattr(uinput, "can_self_enable", lambda st=None: False)
+    app_module.run_cli(["--enable-permissions"])
+    out = capsys.readouterr().out
+    assert "does not need /dev/uinput permissions" in out
