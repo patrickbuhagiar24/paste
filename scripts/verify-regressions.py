@@ -310,6 +310,43 @@ MUTATIONS = [
         ["tests/test_folder_controls.py::test_tree_binds_arrow_navigation_and_ctrl_reorder"],
     ),
     (
+        "paste waits for the old slow restore delay",
+        "pastex/app.py",
+        '    "restore_delay": 0.05,',
+        '    "restore_delay": 0.1,',
+        ["tests/test_app.py::test_paste_done_waits_50ms_after_sending_before_restoring"],
+    ),
+    (
+        "unmap no longer triggers the paste",
+        "pastex/app.py",
+        '        self.bind("<Unmap>", self._on_window_unmap, add="+")',
+        "        pass",
+        ["tests/test_app.py::test_window_unmap_is_bound_to_the_paste_sender"],
+    ),
+    (
+        "APT archive no longer uses the stonking suite",
+        "scripts/build-apt-repository.sh",
+        "suite=${3:-stonking}",
+        "suite=${3:-stable}",
+        [
+            "tests/test_apt_repository.py::test_builder_defaults_to_the_stonking_suite_and_pool_layout"
+        ],
+    ),
+    (
+        "Release metadata no longer declares the suite",
+        "scripts/write-apt-release.py",
+        '        f"Suite: {suite}",',
+        '        "Suite: stable",',
+        ["tests/test_apt_repository.py::test_release_writer_emits_suite_checksums"],
+    ),
+    (
+        "workflow publishes without signing the archive",
+        ".github/workflows/build-deb.yml",
+        './scripts/sign-apt-repository.sh site "$APT_SUITE"',
+        "true",
+        ["tests/test_apt_repository.py::test_workflow_signs_and_verifies_before_deploying"],
+    ),
+    (
         "test doubles report a ready Tcl interpreter",
         "pastex/app.py",
         '        return self.__dict__.get("tk") is not None',

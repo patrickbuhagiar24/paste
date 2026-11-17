@@ -5,3 +5,4 @@ __pycache__/
 build/
 dist/
 apt-repo/dist/
+site/

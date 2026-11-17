@@ -24,10 +24,24 @@ PPA uploads are started manually by a maintainer when requested; pushing ordinar
 
 ### GitHub Pages APT repository
 
-After the GitHub Pages APT repository has been published, add it to your APT sources and install Pastex:
+The published archive is a standard APT repository at `https://patrickbuhagiar24.github.io/paste/` with the suite **`stonking`** (the Ubuntu 26.10 codename), a signed `dists/stonking/InRelease`, and packages under `pool/main/p/pastex/`.
+
+Verify [the signing-key fingerprint](https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt) against the fingerprint published by the maintainer before installing the key:
 
 ```bash
-curl -fsSL https://patrickbuhagiar24.github.io/paste/apt/pastex.gpg | sudo gpg --dearmor -o /usr/share/keyrings/pastex.gpg && echo 'deb [signed-by=/usr/share/keyrings/pastex.gpg] https://patrickbuhagiar24.github.io/paste/apt/ ./' | sudo tee /etc/apt/sources.list.d/pastex.list
+sudo install -d -m 0755 /etc/apt/keyrings
+```
+
+```bash
+curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg | sudo tee /etc/apt/keyrings/pastex.gpg > /dev/null
+```
+
+```bash
+sudo chmod 0644 /etc/apt/keyrings/pastex.gpg
+```
+
+```bash
+curl -fsSL https://patrickbuhagiar24.github.io/paste/pastex.sources | sudo tee /etc/apt/sources.list.d/pastex.sources > /dev/null
 ```
 
 ```bash
@@ -38,7 +52,7 @@ sudo apt update
 sudo apt install pastex
 ```
 
-This setup uses the repository's GPG key to verify signed APT metadata. The GitHub Pages repository must have been published with GPG signing enabled for these commands to work.
+`apt update` then reports `Hit:… https://patrickbuhagiar24.github.io/paste stonking InRelease`, which proves the metadata is signed and verified. If the archive is published without a signing key, install `pastex-unsigned.sources` instead (it sets `Trusted: yes`).
 
 ## Use
 
@@ -48,6 +62,8 @@ This setup uses the repository's GPG key to verify signed APT metadata. The GitH
 4. Click the displayed source-folder name to open that location in the file manager.
 
 Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the selected item, and `Delete` to remove it. Folders are not pasted.
+
+Pasting hides Pastex by minimizing it, so the dock entry stays visible, and Ctrl+V is sent as soon as the window manager reports the window hidden instead of after a fixed delay. Lower `restore_delay` in `~/.config/pastex/settings.json` (seconds, default `0.05`) to bring the window back sooner.
 Use the `Up` and `Down` arrow keys to move through the list without pasting, and `Ctrl+Up` / `Ctrl+Down` to move the current item up or down inside its folder.
 The darker highlight follows the row you last clicked, right-clicked, edited, or reached with the arrow keys; a right-click in Select mode leaves it unchanged.
 
