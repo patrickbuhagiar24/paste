@@ -674,7 +674,7 @@ def test_the_minimize_request_is_repeated_when_the_first_one_is_ignored(monkeypa
     from pastex import app as app_module
     from pastex.app import PastexApp
 
-    app = _polling_app(["normal"] * 40)
+    app = _polling_app(["normal"] * 80)
     monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
 
     PastexApp._send_paste_now(app)
@@ -683,7 +683,7 @@ def test_the_minimize_request_is_repeated_when_the_first_one_is_ignored(monkeypa
         _delay, callback = app.scheduled.pop(0)
         callback()
         steps += 1
-        if steps > 40:  # pragma: no cover - safety net
+        if steps > 80:  # pragma: no cover - safety net
             break
 
     assert steps * app_module.MINIMIZE_RETRY_MS >= app_module.MINIMIZE_WAIT_MS
@@ -2279,3 +2279,212 @@ def test_a_late_copy_result_does_not_overwrite_a_running_paste():
     assert app._pasting is True
     assert app.statuses == []
     assert app._paste_clipboard_ready is True
+
+
+def test_a_picker_paste_does_not_wait_for_the_hidden_main_window():
+    """The popup is destroyed, the main window stays up: that is hidden enough."""
+    from pastex.app import PastexApp
+
+    class FakeApp:
+        def state(self):
+            return "normal"
+
+    app = FakeApp()
+    app._paste_hide_widget = object()  # the popup, not the main window
+
+    assert PastexApp._paste_window_hidden(app) is True
+
+
+def test_an_x11_verdict_of_unmapped_sends_the_paste(monkeypatch):
+    """A window manager that forgets to update WM_STATE must not block Ctrl+V."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+
+    class FakeApp:
+        def state(self):
+            return "normal"  # Tk never noticed the minimize
+
+        def after(self, delay, callback=None):
+            scheduled.append((delay, callback))
+            return "id"
+
+    app = FakeApp()
+    app._window_unmapped = True
+
+    assert PastexApp._paste_window_hidden(app) is True
+    assert scheduled == []  # nothing was sent by the check itself
+
+
+def test_the_x_server_can_end_the_minimize_wait_early(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    monkeypatch.setattr(app_module, "x11_window_unmapped", lambda window_id: True)
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    PastexApp._x11_confirm_hidden_worker(app, "0x2800007")
+
+    assert app._window_unmapped is True
+    assert scheduled == [(0, PastexApp._send_paste_now, (app,))]
+
+
+def test_a_mapped_window_is_not_declared_hidden_by_the_x_server(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    monkeypatch.setattr(app_module, "x11_window_unmapped", lambda window_id: False)
+
+    class FakeApp:
+        def after(self, delay, callback=None, *args):
+            scheduled.append((delay, callback, args))
+            return "id"
+
+    app = FakeApp()
+    PastexApp._x11_confirm_hidden_worker(app, "0x2800007")
+
+    assert app.__dict__.get("_window_unmapped", False) is False
+    assert scheduled == []
+
+
+def test_a_zoomed_window_is_unzoomed_before_the_minimize(monkeypatch):
+    """Tk/X11 drops iconify() for a maximized window, so unzoom first."""
+    from pastex.app import PastexApp
+
+    calls = []
+    states = ["zoomed", "normal"]
+
+    class FakeApp:
+        def state(self, new=None):
+            if new is not None:
+                calls.append(("state", new))
+                return None
+            return states.pop(0) if states else "normal"
+
+        def iconify(self):
+            calls.append("iconify")
+
+        def update_idletasks(self):
+            return None
+
+    app = FakeApp()
+
+    assert PastexApp._hide_for_paste(app) is True
+    assert calls == [("state", "normal"), "iconify"]
+    assert app._paste_was_zoomed is True
+
+
+def test_a_normal_window_is_not_touched_by_the_unzoom(monkeypatch):
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def state(self, new=None):
+            if new is not None:
+                calls.append(("state", new))
+                return None
+            return "normal"
+
+        def iconify(self):
+            calls.append("iconify")
+
+        def update_idletasks(self):
+            return None
+
+    app = FakeApp()
+
+    assert PastexApp._hide_for_paste(app) is True
+    assert calls == ["iconify"]
+    assert app._paste_was_zoomed is False
+
+
+def test_the_zoom_comes_back_with_the_window(monkeypatch):
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def state(self, new=None):
+            if new is not None:
+                calls.append(("state", new))
+            return "normal"
+
+        def after(self, delay, callback=None):
+            return "id"
+
+    app = FakeApp()
+    app._paste_was_zoomed = True
+    monkeypatch.setattr(PastexApp, "_wait_for_the_restore", lambda self: None)
+
+    PastexApp._restore_window(app)
+
+    assert calls == ["deiconify", ("state", "zoomed")]
+    assert app.__dict__.get("_paste_was_zoomed") is None
+
+
+def test_the_window_manager_is_asked_when_iconify_is_ignored(monkeypatch):
+    """A WM that ignores iconify() still has to answer xdotool's request."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    threads = []
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda fn, *a, **k: threads.append((fn, a))
+    )
+    app = _polling_app(["normal"] * 80)
+
+    def winfo_id():
+        return 41943043  # 0x2800003
+
+    app.winfo_id = winfo_id
+
+    PastexApp._send_paste_now(app)
+    steps = 0
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 80:  # pragma: no cover - safety net
+            break
+
+    forced = [c for c in threads if c[0] is app_module.force_minimize_window]
+    # Asked exactly once, with the real X11 window id.
+    assert forced == [(app_module.force_minimize_window, ("0x2800003",))]
+    # And the X server is asked as well, once.
+    checked = [c for c in threads if c[0] is PastexApp._x11_confirm_hidden_worker]
+    assert checked == [(PastexApp._x11_confirm_hidden_worker, (app, "0x2800003"))]
+
+
+def test_a_window_without_an_x11_id_still_gives_up_quietly(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    threads = []
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda fn, *a, **k: threads.append((fn, a))
+    )
+    app = _polling_app(["normal"] * 80)  # no winfo_id at all
+
+    PastexApp._send_paste_now(app)
+    steps = 0
+    while app.scheduled:
+        _delay, callback = app.scheduled.pop(0)
+        callback()
+        steps += 1
+        if steps > 80:  # pragma: no cover - safety net
+            break
+
+    assert threads == []
+    assert app._paste_finished is True

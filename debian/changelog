@@ -1,3 +1,30 @@
+pastex (1.10.3-1) unstable; urgency=medium
+
+  * Make the paste work on a machine whose window manager ignores the
+    minimize request. 1.10.2 restored the window but never sent Ctrl+V,
+    because iconify() did nothing at all: the state stayed "normal" for the
+    whole 600 ms budget. The hide step now unmaximizes first (Tk/X11 drops
+    iconify() for a zoomed window and puts the zoom back on restore), then, if
+    the state still says normal, asks the window manager to minimize through
+    xdotool's EWMH request, and finally asks the X server itself (xwininfo)
+    whether the window is really unmapped -- a window manager that lags or
+    skips WM_STATE then no longer costs the paste. The budget is 900 ms and
+    the give-up line logs the Tk state, the X verdict, whether the WM was
+    asked and whether the window was zoomed.
+  * Name the window manager. The ready: line logs the window manager (or
+    "none"), XDG_SESSION_TYPE and XDG_CURRENT_DESKTOP, and pastex --check
+    prints the same, because without a window manager nothing can minimize
+    the window and automatic paste is not available at all.
+  * Stop a picker paste from waiting for the main window. A popup paste
+    destroys the popup and leaves the main window visible on purpose, but the
+    hide check read the main window's state and gave up after 900 ms without
+    sending Ctrl+V. The check skips the state for a popup paste.
+  * Refresh the tree without inotify. When inotify cannot be opened the
+    watcher falls back to polling the folders every 2 s instead of switching
+    to manual refresh only, and the log names the errno.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Mon, 17 Nov 2026 20:40:00 +0700
+
 pastex (1.10.2-1) unstable; urgency=medium
 
   * Never leave the window minimized, and stop skipping Ctrl+V on a slow

@@ -51,6 +51,9 @@ READ_TIMEOUT = 0.3
 PASTE_KEY_TIMEOUT = 2.0
 # `systemctl --user start ydotoold.service` must answer immediately.
 DAEMON_START_TIMEOUT = 3.0
+# X11 helpers used by the hide step: one short query, one EWMH request.
+X11_QUERY_TIMEOUT = 2.0
+FORCE_MINIMIZE_TIMEOUT = 2.0
 # Total portal budget. The portal is a fallback; a consent dialog the user
 # never answers must not keep the window minimized.
 PORTAL_TIMEOUT = 6.0
@@ -139,6 +142,89 @@ def detect_session() -> str:
     if os.environ.get("DISPLAY"):
         return "x11"
     return "unknown"
+
+
+def x11_window_unmapped(
+    window_id: str, runner: Runner = _default_runner
+) -> bool | None:
+    """Ask the X server whether ``window_id`` is off screen.
+
+    Tk reports ``wm state`` from the WM_STATE property, which some window
+    managers update late (or not at all while they animate a minimize). The
+    X server itself knows whether the window is mapped, so this is the
+    authoritative answer: True = unmapped, False = still viewable, None =
+    the query failed (no xwininfo, bad id, no display).
+    """
+    try:
+        proc = _run_with_timeout(
+            runner, ["xwininfo", "-id", str(window_id)], X11_QUERY_TIMEOUT
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    out = f"{getattr(proc, 'stdout', '') or ''}"
+    if "Map State: IsUnMapped" in out:
+        return True
+    if "Map State: IsViewable" in out or "Map State: IsUnviewable" in out:
+        return False
+    return None
+
+
+def force_minimize_window(window_id: str, runner: Runner = _default_runner) -> bool:
+    """Minimize through EWMH with xdotool, for a WM that ignores ``iconify()``.
+
+    Tk's ``iconify()`` is silently dropped for a maximized window on X11, and
+    some window managers ignore it in other states too. This asks the window
+    manager directly and waits (``--sync``) until it really unmaps the window.
+    """
+    if shutil.which("xdotool") is None:
+        return False
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xdotool", "windowminimize", "--sync", str(window_id)],
+            FORCE_MINIMIZE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return getattr(proc, "returncode", 1) == 0
+
+
+def window_manager(runner: Runner = _default_runner) -> str | None:
+    """Return the window manager's name, or None when X has no EWMH WM.
+
+    Without a window manager nothing can minimize Pastex: Tk's ``iconify()``
+    is a request to the WM. Naming the WM in the log and in ``--check`` makes
+    that visible instead of looking like a mystery.
+    """
+    if shutil.which("wmctrl") is not None:
+        try:
+            proc = _run_with_timeout(runner, ["wmctrl", "-m"], X11_QUERY_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        if proc is not None and getattr(proc, "returncode", 1) == 0:
+            for line in f"{getattr(proc, 'stdout', '') or ''}".splitlines():
+                if line.startswith("Name:"):
+                    name = line.split(":", 1)[1].strip()
+                    return name or "unnamed"
+            return None
+    if shutil.which("xprop") is None:
+        return None
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xprop", "-root", "-notype", "_NET_SUPPORTING_WM_CHECK"],
+            X11_QUERY_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    out = f"{getattr(proc, 'stdout', '') or ''}"
+    if "not found" in out or "no such atom" in out.lower():
+        return None
+    return "unnamed"
 
 
 def available_tools() -> dict[str, bool]:
