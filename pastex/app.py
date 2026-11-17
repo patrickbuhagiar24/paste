@@ -20,6 +20,8 @@ from pathlib import Path
 
 from . import __version__, uinput
 from .clipboard import (
+    ClipboardResult,
+    PasteResult,
     available_tools,
     copy_text,
     detect_session,
@@ -84,6 +86,12 @@ ICON_NAME = APP_ID
 # Time given to the window manager to move focus to the previous application
 # after Pastex hides itself, before Ctrl+V is sent.
 FOCUS_SETTLE_MS = 80
+
+# Hard deadline for the "send Ctrl+V" half of a click. Every tool call has its
+# own timeout, but a wedged daemon or an unanswered portal consent dialog could
+# still keep the window minimized for a minute; when this fires the window is
+# restored and the remaining tools are abandoned.
+PASTE_DEADLINE_MS = 9000
 
 # Shown when the window could not be minimized: the text is on the
 # clipboard, but Pastex keeps focus so the synthetic Ctrl+V is skipped.
@@ -983,7 +991,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _cancel_menu_focus_watch(self) -> None:
         after_id = self.__dict__.get("_menu_focus_watch_id")
         self._menu_focus_watch_id = None
-        if after_id is None or not self._tk_ready():
+        if after_id is None or not PastexApp._tk_ready(self):
             return
         try:
             self.after_cancel(after_id)
@@ -1706,6 +1714,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         the main window and the dock entry untouched.
         """
         self._pasting = True
+        self._paste_finished = False
+        # Cleared so the watchdog can abandon a paste that stalls; the sender
+        # checks it between tools and before the portal.
+        self._paste_aborted = False
         self.status_var.set("Preparing to paste...")
         # Ctrl+V may only be sent once the clipboard owns the text, so the
         # send stays armed until _after_copy() reports success. When the
@@ -1715,13 +1727,83 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._paste_hide_widget = hide
         # Only restore the window that was actually hidden.
         self._paste_restore_window = hide is None
+        if hide is None and not PastexApp._paste_tools_ready(self):
+            # A previous click (or startup) already showed that Ctrl+V cannot
+            # be sent here, so there is nothing to minimize for: copy the text
+            # and leave the window alone instead of hiding and bouncing back.
+            log_error("[paste] Ctrl+V tidak tersedia; teks hanya disalin")
+            self._paste_restore_window = False
+            _run_in_thread(self._paste_worker, text)
+            return
         if hide is None:
             hidden = self._hide_for_paste()
         else:
             hidden = self._hide_widget(hide)
         if hidden:
             self._send_paste()
+            PastexApp._arm_paste_watchdog(self)
         _run_in_thread(self._paste_worker, text)
+
+    def _paste_tools_ready(self) -> bool:
+        """False only when Ctrl+V is known to be impossible on this machine.
+
+        Unknown counts as ready: a plan that has not been resolved yet must not
+        stop the first click from trying. Once a paste fails the flag is
+        cleared, so later clicks copy the text without minimizing the window.
+        """
+        if self.__dict__.get("_paste_ready") is False:
+            return False
+        plan = self.__dict__.get("_paste_plan")
+        if plan is not None and not getattr(plan, "candidates", None):
+            return False
+        return True
+
+    def _arm_paste_watchdog(self) -> None:
+        """Guarantee the window comes back even if the sender never finishes."""
+        if not PastexApp._tk_ready(self):
+            return
+        PastexApp._cancel_paste_watchdog(self)
+        try:
+            self._paste_watchdog_id = self.after(
+                PASTE_DEADLINE_MS, PastexApp._paste_watchdog
+            )
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            self._paste_watchdog_id = None
+
+    def _cancel_paste_watchdog(self) -> None:
+        after_id = self.__dict__.get("_paste_watchdog_id")
+        self._paste_watchdog_id = None
+        if after_id is None or not self._tk_ready():
+            return
+        try:
+            self.after_cancel(after_id)
+        except TK_ERRORS:  # pragma: no cover - already fired
+            pass
+
+    def _paste_watchdog(self) -> None:
+        """Restore the window when the send stage overruns its deadline.
+
+        The sender runs in a thread; when it is stuck inside a tool that never
+        answers, no result would ever arrive and the window would stay
+        minimized forever. Abandoning the rest of the plan keeps later keys
+        from being pressed after the window is back.
+        """
+        self._paste_watchdog_id = None
+        if self.__dict__.get("_paste_finished", True):
+            return
+        self._paste_aborted = True
+        log_error("[paste] batas waktu kirim Ctrl+V terlampaui; jendela dipulihkan")
+        PastexApp._finish_paste(
+            self,
+            PasteResult(
+                ok=False,
+                tool="",
+                message=(
+                    "Ctrl+V tidak terkirim dalam batas waktu, jadi jendela "
+                    "dipulihkan dan teks tetap ada di clipboard."
+                ),
+            ),
+        )
 
     def _hide_widget(self, widget) -> bool:
         """Destroy a helper window so focus returns to the target application.
@@ -1737,7 +1819,11 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_worker(self, text: str) -> None:
         started = time.monotonic()
-        result = copy_text(text, plan=getattr(self, "_copy_plan", None))
+        try:
+            result = copy_text(text, plan=getattr(self, "_copy_plan", None))
+        except Exception as exc:  # noqa: BLE001 - always report back to the GUI
+            log_error(f"[paste] penyalinan gagal: {exc}")
+            result = ClipboardResult(ok=False, message=f"copy error: {exc}")
         elapsed_ms = (time.monotonic() - started) * 1000
         log_error(
             f"[paste] salin: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
@@ -1856,7 +1942,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_sender(self) -> None:
         log_error("[paste] sending Ctrl+V")
-        result = simulate_paste(plan=getattr(self, "_paste_plan", None))
+        try:
+            result = simulate_paste(
+                plan=getattr(self, "_paste_plan", None),
+                should_stop=lambda: bool(self.__dict__.get("_paste_aborted", False)),
+            )
+        except Exception as exc:  # noqa: BLE001 - always report back to the GUI
+            log_error(f"[paste] pengirim gagal: {exc}")
+            result = PasteResult(ok=False, tool="", message=f"paste error: {exc}")
         log_error(
             f"[paste] hasil: ok={result.ok} tool={result.tool} pesan={result.message}"
         )
@@ -1876,11 +1969,23 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             PastexApp._finish_paste(self, result)
 
     def _finish_paste(self, result) -> None:
+        if self.__dict__.get("_paste_finished", False):
+            # A late result from an attempt the watchdog already abandoned:
+            # report it, but do not move the window or open a second dialog.
+            log_error(f"[paste] hasil terlambat: ok={result.ok} pesan={result.message}")
+            if result.ok:
+                self._paste_ready = True
+            return
+        self._paste_finished = True
         self._pasting = False
         self._paste_pending = False
         self._paste_clipboard_ready = False
+        # Remember whether Ctrl+V can be sent here: a failed paste makes the
+        # next click copy the text without minimizing the window first.
+        self._paste_ready = bool(getattr(result, "ok", False))
         # Explicit class call keeps partially-built test doubles working.
         PastexApp._cancel_paste_send_timeout(self)
+        PastexApp._cancel_paste_watchdog(self)
         # The picker never hid the main window, so leave the target app alone.
         restore = self.__dict__.get("_paste_restore_window", True)
         self._paste_hide_widget = None
@@ -1906,10 +2011,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         )
 
     def _paste_failed(self, message: str) -> None:
+        self._paste_finished = True
         self._pasting = False
         self._paste_pending = False
         self._paste_clipboard_ready = False
+        self._paste_ready = False
         PastexApp._cancel_paste_send_timeout(self)
+        PastexApp._cancel_paste_watchdog(self)
         # Keep the app visible so the clipboard failure message can be read.
         self.deiconify()
         self.lift()

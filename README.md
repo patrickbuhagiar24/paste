@@ -161,11 +161,18 @@ injects `Ctrl+V` without root and without `/dev/uinput`; the desktop asks for
 permission once per session. The portal needs `python3-dbus` (a recommended
 package), and `pastex --check` reports whether it is available.
 
-On Wayland, `ydotoold` may also be started for the current user with:
+Pastex starts `ydotoold` for you: it asks the user unit first, and when that
+unit does not exist (Ubuntu ships `ydotoold.service` as a *system* unit, which
+needs root) it launches `ydotoold` with a socket it owns in
+`$XDG_RUNTIME_DIR` and points `ydotool` at that socket. Everything still depends
+on `/dev/uinput` access, so run `pastex --enable-permissions` once.
 
-```bash
-systemctl --user enable --now ydotoold
-```
+A click never leaves the window minimized when `Ctrl+V` cannot be delivered:
+the send stage has a 9 s deadline, each tool call has its own timeout, and when
+the deadline passes the window comes back with an explanation instead of
+waiting on a wedged daemon or an unanswered portal prompt. After a failed
+paste, the next click only copies the text and keeps the window visible until
+`pastex --check` reports the paste path as ready.
 
 ## Command-line options
 

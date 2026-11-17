@@ -7,6 +7,7 @@ then restores the original file.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -472,6 +473,62 @@ MUTATIONS = [
         ["tests/test_app.py::test_releasing_the_owner_restores_the_tools"],
     ),
     (
+        "the watchdog is never armed for a paste",
+        "pastex/app.py",
+        "        if hidden:\n            self._send_paste()\n            PastexApp._arm_paste_watchdog(self)",
+        "        if hidden:\n            self._send_paste()",
+        ["tests/test_app.py::test_a_click_with_a_hidden_window_arms_the_watchdog"],
+    ),
+    (
+        "a stalled paste leaves the window minimized forever",
+        "pastex/app.py",
+        '        if self.__dict__.get("_paste_finished", True):\n            return\n        self._paste_aborted = True',
+        '        if True:\n            return\n        self._paste_aborted = True',
+        [
+            "tests/test_app.py::test_the_watchdog_restores_the_window_when_the_sender_stalls",
+            "tests/test_app.py::test_the_watchdog_does_nothing_after_a_finished_paste",
+        ],
+    ),
+    (
+        "the sender ignores the abort flag",
+        "pastex/app.py",
+        "                should_stop=lambda: bool(self.__dict__.get(\"_paste_aborted\", False)),",
+        "                should_stop=None,",
+        ["tests/test_app.py::test_paste_passes_the_prewarmed_plans"],
+    ),
+    (
+        "a failed paste is forgotten and the next click hides the window again",
+        "pastex/app.py",
+        '        self._paste_ready = bool(getattr(result, "ok", False))',
+        "        self._paste_ready = True",
+        [
+            "tests/test_app.py::test_a_failed_paste_stops_hiding_the_window_on_the_next_click",
+        ],
+    ),
+    (
+        "keystroke tools may block the paste forever",
+        "pastex/clipboard.py",
+        "            proc = _run_with_timeout(runner, cmd, PASTE_KEY_TIMEOUT)\n            # ydotool needs its daemon",
+        "            proc = runner(cmd)\n            # ydotool needs its daemon",
+        ["tests/test_clipboard.py::test_simulate_paste_bounds_every_tool_call"],
+    ),
+    (
+        "the portal is opened even after the paste was abandoned",
+        "pastex/clipboard.py",
+        "    portal = None if stop() else _try_portal()",
+        "    portal = _try_portal()",
+        ["tests/test_clipboard.py::test_simulate_paste_stops_before_the_portal_when_aborted"],
+    ),
+    (
+        "a missing user unit leaves ydotool without a daemon",
+        "pastex/clipboard.py",
+        "    binary = shutil.which(\"ydotoold\")\n    if binary is None or not os.path.exists(binary):",
+        "    binary = None\n    if binary is None or not os.path.exists(binary):",
+        [
+            "tests/test_clipboard.py::test_ensure_ydotoold_starts_its_own_daemon_when_the_unit_is_missing",
+        ],
+    ),
+    (
         "the CLI leaves the clipboard owner running after the loop ends",
         "pastex/app.py",
         '        release_owner = getattr(app, "_release_clipboard_owner", None)\n        if callable(release_owner):\n            release_owner()',
@@ -543,7 +600,7 @@ MUTATIONS = [
     (
         "the portal is never consulted",
         "pastex/clipboard.py",
-        "    portal = _try_portal()",
+        "    portal = None if stop() else _try_portal()",
         "    portal = None",
         ["tests/test_clipboard.py::test_simulate_paste_falls_back_to_the_portal"],
     ),
@@ -616,6 +673,7 @@ MUTATIONS = [
             "            hidden = self._hide_widget(hide)\n"
             "        if hidden:\n"
             "            self._send_paste()\n"
+            "            PastexApp._arm_paste_watchdog(self)\n"
             "        _run_in_thread(self._paste_worker, text)"
         ),
         "        _run_in_thread(self._paste_worker, text)",
@@ -730,12 +788,16 @@ MUTATIONS = [
 
 
 def run(tests):
+    # Never reuse bytecode: a cached .pyc whose (mtime, size) header happened to
+    # match a mutated file made a real regression look like a passing test.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     proc = subprocess.run(
-        [PYTHON, "-m", "pytest", "-q", "--no-header", *tests],
+        [PYTHON, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", *tests],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     return proc.returncode, proc.stdout + proc.stderr
 

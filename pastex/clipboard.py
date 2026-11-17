@@ -45,6 +45,16 @@ _FORKING_TOOLS = frozenset({"wl-copy", "xclip", "xsel"})
 # Clipboard read timeout for explicit diagnostics; never let a read hang the GUI.
 READ_TIMEOUT = 0.3
 
+# A keystroke must be quick: if `ydotool key` has not returned by then the
+# daemon is unreachable or wedged, and waiting longer only delays the restore
+# of the Pastex window. Two candidates x 2 s stays inside the GUI deadline.
+PASTE_KEY_TIMEOUT = 2.0
+# `systemctl --user start ydotoold.service` must answer immediately.
+DAEMON_START_TIMEOUT = 3.0
+# Total portal budget. The portal is a fallback; a consent dialog the user
+# never answers must not keep the window minimized.
+PORTAL_TIMEOUT = 6.0
+
 # Ctrl+V as ydotool >= 1.0 keycodes: 29=LeftCtrl, 47=V.
 # Order: press Ctrl, press V, release V, release Ctrl.
 KEYCODE_CTRL_V = ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
@@ -54,6 +64,14 @@ XDOTOOL_CTRL_V = ["xdotool", "key", "ctrl+v"]
 
 # Clipboard reader tools used for explicit diagnostics.
 READER_TOOLS = ("wl-paste", "xclip", "xsel")
+
+
+def _run_with_timeout(runner: Runner, cmd: list[str], timeout: float):
+    """Run ``cmd`` with ``timeout``, tolerating runners without kwargs."""
+    try:
+        return runner(cmd, timeout=timeout)
+    except TypeError:  # pragma: no cover - only simple test doubles
+        return runner(cmd)
 
 
 def _default_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -299,16 +317,92 @@ def copy_text(
     )
 
 
-def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
-    """Start ydotoold if it is not running; return True if it appears ready.
+def _runtime_dir() -> str:
+    uid = getattr(os, "getuid", lambda: 0)()
+    return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
 
-    This is called automatically after `ydotool key` fails, so users do not
-    need to configure it in advance. Lack of systemd is not fatal.
+
+def _ydotoold_socket_paths() -> list[str]:
+    """Every place a ydotoold socket may live, most specific first."""
+    runtime = _runtime_dir()
+    paths = []
+    env = os.environ.get("YDOTOOL_SOCKET")
+    if env:
+        paths.append(env)
+    paths.extend(
+        [
+            f"{runtime}/ydotool.sock",
+            f"{runtime}/.ydotool_socket",
+            "/run/ydotoold.sock",
+            "/tmp/ydotool.sock",
+        ]
+    )
+    return paths
+
+
+def _ydotoold_socket_exists() -> bool:
+    return any(os.path.exists(path) for path in _ydotoold_socket_paths())
+
+
+def _spawn_private_ydotoold() -> bool:
+    """Start a ydotoold we own, with a socket in XDG_RUNTIME_DIR.
+
+    Ubuntu ships ``ydotoold.service`` as a *system* unit, so
+    ``systemctl --user start ydotoold.service`` fails on a stock install and
+    automatic paste looked broken. A daemon started by the user with a
+    user-owned socket needs no root: it only needs write access to
+    /dev/uinput, which ``pastex --enable-permissions`` sets up.
+    """
+    binary = shutil.which("ydotoold")
+    if binary is None or not os.path.exists(binary):
+        return False
+    runtime = _runtime_dir()
+    socket = f"{runtime}/pastex-ydotool.sock"
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+    except AttributeError:  # pragma: no cover - non-POSIX
+        return False
+    cmd = [binary, "--socket-path", socket, "--socket-own", f"{uid}:{gid}"]
+    try:
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - spawn failed
+        return False
+    # ydotool reads YDOTOOL_SOCKET, so every later call talks to our daemon.
+    os.environ["YDOTOOL_SOCKET"] = socket
+    for _ in range(20):
+        if os.path.exists(socket):
+            return True
+        if _sleep is not None:
+            _sleep(0.05)
+    os.environ.pop("YDOTOOL_SOCKET", None)
+    return False
+
+
+def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
+    """Start ydotoold if it is not running; return True if a socket exists.
+
+    Called after `ydotool key` fails so users do not have to configure the
+    daemon in advance. Three attempts, cheapest first: an already running
+    daemon, the user unit (works where the package ships one), and finally a
+    daemon we start ourselves with a socket we own. The return value is the
+    presence of a socket, not the exit status of systemctl: a unit that
+    "starts" without creating a socket leaves ydotool just as broken.
     """
     try:
-        proc = runner(["systemctl", "--user", "start", "ydotoold.service"])
+        proc = _run_with_timeout(
+            runner,
+            ["systemctl", "--user", "start", "ydotoold.service"],
+            DAEMON_START_TIMEOUT,
+        )
     except (OSError, subprocess.SubprocessError):
-        return False
+        proc = None
     if getattr(proc, "returncode", 1) == 0:
         # Allow time for the socket to appear before retrying.
         for _ in range(20):
@@ -316,17 +410,10 @@ def ensure_ydotoold(runner: Runner = _default_runner) -> bool:
                 return True
             if _sleep is not None:
                 _sleep(0.05)
+    # The unit may already be up (or the socket may live somewhere else).
+    if _ydotoold_socket_exists():
         return True
-    return False
-
-
-def _ydotoold_socket_exists() -> bool:
-    uid = getattr(os, "getuid", lambda: 0)()
-    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-    for path in (f"{runtime}/ydotool.sock", "/run/ydotoold.sock", "/tmp/ydotool.sock"):
-        if os.path.exists(path):
-            return True
-    return False
+    return _spawn_private_ydotoold()
 
 
 try:  # Allow tests to replace the sleep function.
@@ -393,12 +480,14 @@ def type_text(text: str, runner: Runner = _default_runner) -> PasteResult:
         return PasteResult(ok=False, tool="", message=str(exc))
 
 
-def _try_portal() -> tuple[bool, str] | None:
+def _try_portal(timeout: float = PORTAL_TIMEOUT) -> tuple[bool, str] | None:
     """Ask the desktop portal to press Ctrl+V; None when it is unavailable.
 
     The portal needs no /dev/uinput access, so it rescues automatic paste on a
     machine where the udev rule was never installed. It is consulted only after
-    every tool in the plan failed, so the normal path is unchanged.
+    every tool in the plan failed, so the normal path is unchanged. ``timeout``
+    bounds the consent dialog: an unanswered prompt must not keep the Pastex
+    window minimized.
     """
     try:
         from . import portal  # noqa: PLC0415 - optional dependency
@@ -407,7 +496,10 @@ def _try_portal() -> tuple[bool, str] | None:
     try:
         if not portal.available():
             return None
-        return portal.send_ctrl_v()
+        try:
+            return portal.send_ctrl_v(timeout=timeout)
+        except TypeError:  # pragma: no cover - older signature or a test double
+            return portal.send_ctrl_v()
     except Exception as exc:  # noqa: BLE001 - the portal is best-effort
         return False, f"portal error: {exc}"
 
@@ -415,24 +507,31 @@ def _try_portal() -> tuple[bool, str] | None:
 def simulate_paste(
     runner: Runner = _default_runner,
     plan: ToolPlan | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> PasteResult:
     """Send Ctrl+V to the focused application.
 
     Pass a pre-resolved ``plan`` to skip the PATH lookups on the click path;
-    without one the candidates are resolved here, as before.
+    without one the candidates are resolved here, as before. ``should_stop`` is
+    checked between candidates and before the portal, so a paste that takes too
+    long is abandoned instead of pressing keys after Pastex came back.
     """
+    stop = should_stop or (lambda: False)
     plan = plan or resolve_paste_plan()
     session = plan.session
     errors: list[str] = []
     daemon_tried = False
     for name, cmd in plan.candidates:
+        if stop():
+            errors.append("dibatalkan: jendela sudah dipulihkan")
+            break
         try:
-            proc = runner(cmd)
+            proc = _run_with_timeout(runner, cmd, PASTE_KEY_TIMEOUT)
             # ydotool needs its daemon; if it fails, start it once and retry.
             if proc.returncode != 0 and name == "ydotool" and not daemon_tried:
                 daemon_tried = True
                 if ensure_ydotoold(runner=runner):
-                    proc = runner(cmd)
+                    proc = _run_with_timeout(runner, cmd, PASTE_KEY_TIMEOUT)
             if proc.returncode == 0:
                 return PasteResult(
                     ok=True,
@@ -454,7 +553,7 @@ def simulate_paste(
             errors.append(f"{name}: {exc}")
     # Last resort: the desktop portal injects the keystroke without
     # /dev/uinput, so a missing udev rule or group no longer blocks paste.
-    portal = _try_portal()
+    portal = None if stop() else _try_portal()
     if portal is not None:
         ok, detail = portal
         if ok:
