@@ -192,7 +192,7 @@ def test_paste_copies_before_withdrawing(monkeypatch):
     assert calls == [("start", "_paste_worker", "isi")]
 
 
-def test_after_copy_withdraws_then_sends_paste():
+def test_after_copy_hides_then_sends_paste():
     from pastex.app import PastexApp
     from pastex.clipboard import ClipboardResult
 
@@ -202,11 +202,14 @@ def test_after_copy_withdraws_then_sends_paste():
         def withdraw(self):
             calls.append("withdraw")
 
+        def _hide_for_paste(self):
+            calls.append("hide")
+
         def _send_paste(self):
             calls.append("send")
 
     PastexApp._after_copy(FakeApp(), ClipboardResult(True, "wl-copy", "Text copied."))
-    assert calls == ["withdraw", "send"]
+    assert calls == ["hide", "send"]
 
 
 def test_copy_failure_does_not_withdraw_or_send():
@@ -493,3 +496,105 @@ def test_thread_helper_runs_target_with_args():
     _run_in_thread(work, 1, 2)
     assert done.wait(5), "target tidak dijalankan"
     assert seen == [(1, 2)]
+
+
+# --- Dock icon during paste ------------------------------------------------
+
+
+def test_hide_for_paste_minimizes_instead_of_unmapping():
+    """Minimizing keeps the window mapped so the dock entry survives."""
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def iconify(self):
+            calls.append("iconify")
+
+        def update_idletasks(self):
+            calls.append("update")
+
+        def state(self):
+            return "iconic"
+
+        def withdraw(self):
+            calls.append("withdraw")
+
+    PastexApp._hide_for_paste(FakeApp())
+
+    assert calls == ["iconify", "update"]
+    assert "withdraw" not in calls
+
+
+def test_hide_for_paste_falls_back_to_withdraw_when_minimize_is_refused():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def iconify(self):
+            calls.append("iconify")
+
+        def update_idletasks(self):
+            calls.append("update")
+
+        def state(self):
+            return "normal"
+
+        def withdraw(self):
+            calls.append("withdraw")
+
+    PastexApp._hide_for_paste(FakeApp())
+
+    assert calls[-1] == "withdraw"
+
+
+def test_hide_for_paste_falls_back_to_withdraw_when_iconify_fails():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def iconify(self):
+            raise AttributeError("no display")
+
+        def withdraw(self):
+            calls.append("withdraw")
+
+    PastexApp._hide_for_paste(FakeApp())
+
+    assert calls == ["withdraw"]
+
+
+def test_send_paste_waits_for_focus_to_settle(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app.after = lambda ms, callback: calls.append(("wait", ms, callback))
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(("run", target.__name__))
+    )
+
+    PastexApp._send_paste(app)
+
+    assert calls[0][0] == "wait"
+    assert calls[0][1] == app_module.FOCUS_SETTLE_MS
+    calls[0][2]()
+    assert calls[-1] == ("run", "_paste_sender")
+
+
+def test_send_paste_falls_back_to_immediate_send_without_tk(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(target.__name__)
+    )
+
+    PastexApp._send_paste(app)
+
+    assert calls == ["_paste_sender"]

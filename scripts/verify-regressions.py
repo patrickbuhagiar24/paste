@@ -251,6 +251,71 @@ MUTATIONS = [
         "        self.writable = path",
         ["tests/test_v150_source_dir.py::test_choose_source_dir_saves_and_refreshes"],
     ),
+    (
+        "left click no longer moves the darker highlight",
+        "pastex/app.py",
+        "        self.tree.focus(row)\n        self._set_context_highlight(row)\n        if self._select_mode:",
+        "        self.tree.focus(row)\n        if self._select_mode:",
+        [
+            "tests/test_folder_controls.py::test_left_click_moves_context_highlight_between_rows",
+            "tests/test_folder_controls.py::test_left_click_in_select_mode_moves_context_highlight",
+        ],
+    ),
+    (
+        "select mode right click moves the darker highlight",
+        "pastex/app.py",
+        "        if not self._select_mode:\n            self._set_context_highlight(row)",
+        "        if True:\n            self._set_context_highlight(row)",
+        [
+            "tests/test_folder_controls.py::test_right_click_in_select_mode_keeps_existing_context_highlight",
+        ],
+    ),
+    (
+        "highlight is dropped when the context menu closes",
+        "pastex/app.py",
+        "    def _context_menu_unmapped(self, _event=None) -> None:\n        self._context_menu_active = False\n        self._cancel_menu_focus_watch()",
+        "    def _context_menu_unmapped(self, _event=None) -> None:\n        self._context_menu_active = False\n        self._cancel_menu_focus_watch()\n        self._clear_context_highlight()",
+        [
+            "tests/test_folder_controls.py::test_right_click_normal_mode_applies_darker_context_tag_and_keeps_it",
+        ],
+    ),
+    (
+        "popup menu survives switching to another application",
+        "pastex/app.py",
+        "        if focused is not None:\n            return\n        self._unpost_context_menu()",
+        "        if focused is not None:\n            return\n        return",
+        [
+            "tests/test_folder_controls.py::test_menu_is_dismissed_when_another_app_takes_focus",
+        ],
+    ),
+    (
+        "paste withdraws the window and drops the dock icon",
+        "pastex/app.py",
+        "        try:\n            self.iconify()\n            self.update_idletasks()",
+        "        try:\n            self.withdraw()\n            self.update_idletasks()",
+        ["tests/test_app.py::test_hide_for_paste_minimizes_instead_of_unmapping"],
+    ),
+    (
+        "Ctrl+Down reorder shortcut is not bound",
+        "pastex/app.py",
+        '        self.tree.bind("<Control-Down>", lambda _e: self._on_tree_move_shortcut(1))',
+        "        pass",
+        ["tests/test_folder_controls.py::test_tree_binds_arrow_navigation_and_ctrl_reorder"],
+    ),
+    (
+        "Up arrow navigation is not bound",
+        "pastex/app.py",
+        '        self.tree.bind("<Up>", lambda _e: self._on_tree_arrow(-1))',
+        "        pass",
+        ["tests/test_folder_controls.py::test_tree_binds_arrow_navigation_and_ctrl_reorder"],
+    ),
+    (
+        "highlight is lost on refresh",
+        "pastex/app.py",
+        "        if previous_highlight:\n            self._set_context_highlight(previous_highlight)",
+        "        if previous_highlight:\n            pass",
+        ["tests/test_folder_controls.py::test_context_highlight_survives_refresh"],
+    ),
 ]
 
 

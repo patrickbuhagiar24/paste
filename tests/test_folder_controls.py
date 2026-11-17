@@ -569,7 +569,7 @@ def test_cancel_select_mode_clears_remaining_selection(gui, sample_root):
     assert app.status_var.get() == "Selection mode ended."
 
 
-def test_right_click_normal_mode_applies_darker_context_tag_and_clears_on_close(
+def test_right_click_normal_mode_applies_darker_context_tag_and_keeps_it(
     gui, sample_root
 ):
     source = Path(app_module.__file__).read_text(encoding="utf-8")
@@ -586,9 +586,10 @@ def test_right_click_normal_mode_applies_darker_context_tag_and_clears_on_close(
     assert "context" in app._item_tags(row)
     assert app._context_highlight_iid == row
 
+    # Closing the menu keeps the darker highlight on the current row.
     app._context_menu_unmapped()
-    assert "context" not in app._item_tags(row)
-    assert app._context_highlight_iid == ""
+    assert "context" in app._item_tags(row)
+    assert app._context_highlight_iid == row
 
 
 def test_right_click_in_select_mode_does_not_apply_context_tag(gui, sample_root):
@@ -605,3 +606,212 @@ def test_right_click_in_select_mode_does_not_apply_context_tag(gui, sample_root)
     assert "context" not in app._item_tags(row)
     assert app._context_highlight_iid == ""
 
+
+
+# --- Darker current-row highlight follows every highlight interaction -------
+
+
+def test_left_click_moves_context_highlight_between_rows(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app.menu = FakeMenu()
+    app.do_paste = lambda: None
+    app.show_preview = lambda: None
+    app.tree.identify_row = lambda _y: folder
+
+    app._on_single_click(SimpleNamespace(y=3, x=1))
+
+    assert "context" in app._item_tags(folder)
+    assert app._context_highlight_iid == folder
+
+    app.tree.identify_row = lambda _y: text
+    app._on_single_click(SimpleNamespace(y=3, x=1))
+
+    assert "context" not in app._item_tags(folder)
+    assert "context" in app._item_tags(text)
+    assert app._context_highlight_iid == text
+
+
+def test_left_click_in_select_mode_moves_context_highlight(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    text = str(sample_root / "General" / "Greeting.txt")
+    app._select_mode = True
+    app.show_preview = lambda: None
+    app.tree.identify_row = lambda _y: text
+
+    app._on_single_click(SimpleNamespace(y=3, x=1))
+
+    assert "context" in app._item_tags(text)
+    assert app.tree.selection() == (text,)
+
+
+def test_right_click_in_select_mode_keeps_existing_context_highlight(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "Email" / "Balas.txt")
+    app._set_context_highlight(folder)
+    app._select_mode = True
+    app.tree.selection_set(folder, text)
+    app.tree.identify_row = lambda _y: text
+    app.menu = FakeMenu()
+
+    app._on_right_click(SimpleNamespace(y=3, x_root=20, y_root=30))
+
+    assert "context" in app._item_tags(folder)
+    assert "context" not in app._item_tags(text)
+    assert app._context_highlight_iid == folder
+
+
+def test_arrow_keys_move_highlight_and_selection(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    rows = app._visible_rows()
+    assert len(rows) >= 2
+
+    # With nothing highlighted yet, Down starts at the first visible row.
+    assert app._on_tree_arrow(1) == "break"
+    assert app.tree.selection() == (rows[0],)
+    assert app._context_highlight_iid == rows[0]
+    assert "context" in app._item_tags(rows[0])
+
+    assert app._on_tree_arrow(1) == "break"
+    assert app.tree.selection() == (rows[1],)
+    assert app._context_highlight_iid == rows[1]
+    assert "context" not in app._item_tags(rows[0])
+
+    assert app._on_tree_arrow(-1) == "break"
+    assert app.tree.selection() == (rows[0],)
+    assert app._context_highlight_iid == rows[0]
+
+
+def test_arrow_keys_skip_collapsed_folders(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    app._toggle_collapsed(folder)
+
+    app.refresh_tree()
+    rows = app._visible_rows()
+
+    assert folder in rows
+    assert str(sample_root / "General" / "Greeting.txt") not in rows
+
+
+def test_ctrl_arrow_moves_current_row_like_menu_up_down(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    folder = str(sample_root / "General")
+    text = str(sample_root / "General" / "Greeting.txt")
+
+    app._set_context_highlight(text)
+    assert list(app.tree.get_children(folder)) == [text]
+
+    other_text = str(sample_root / "General" / "Zeta.txt")
+    (sample_root / "General" / "Zeta.txt").write_text("zeta", encoding="utf-8")
+    app.refresh_tree()
+    app._set_context_highlight(text)
+    assert list(app.tree.get_children(folder)) == [text, other_text]
+
+    assert app._on_tree_move_shortcut(1) == "break"
+
+    assert list(app.tree.get_children(folder)) == [other_text, text]
+    assert "Moved 1 selected item(s) down." in app.status_var.get()
+
+    assert app._on_tree_move_shortcut(-1) == "break"
+    assert list(app.tree.get_children(folder)) == [text, other_text]
+
+
+def test_context_highlight_survives_refresh(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    text = str(sample_root / "General" / "Greeting.txt")
+    app._set_context_highlight(text)
+
+    app.refresh_tree()
+
+    assert "context" in app._item_tags(text)
+    assert app._context_highlight_iid == text
+
+
+# --- Popup menu must not linger over another application --------------------
+
+
+def test_menu_is_dismissed_when_another_app_takes_focus(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.focus_displayof = lambda: None
+
+    app._dismiss_menu_when_unfocused()
+
+    assert app._context_menu_active is False
+    assert app.menu.unposts == 1
+
+
+def test_menu_stays_open_while_a_pastex_widget_keeps_focus(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.focus_displayof = lambda: app.tree
+
+    app._dismiss_menu_when_unfocused()
+
+    assert app._context_menu_active is True
+    assert app.menu.unposts == 0
+
+
+def test_focus_out_dismisses_posted_menu(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = True
+    app.focus_displayof = lambda: None
+
+    app._on_window_focus_out(SimpleNamespace())
+
+    assert app._context_menu_active is False
+    assert app.menu.unposts == 1
+
+
+def test_focus_out_without_posted_menu_does_nothing(gui):
+    app = gui()
+    app.menu = FakeMenu()
+    app._context_menu_active = False
+    app.focus_displayof = lambda: None
+
+    assert app._on_window_focus_out(SimpleNamespace()) is None
+    assert app.menu.unposts == 0
+
+
+def test_tree_binds_arrow_navigation_and_ctrl_reorder():
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+
+    assert 'self.tree.bind("<Up>", lambda _e: self._on_tree_arrow(-1))' in source
+    assert 'self.tree.bind("<Down>", lambda _e: self._on_tree_arrow(1))' in source
+    assert (
+        'self.tree.bind("<Control-Up>", lambda _e: self._on_tree_move_shortcut(-1))'
+        in source
+    )
+    assert (
+        'self.tree.bind("<Control-Down>", lambda _e: self._on_tree_move_shortcut(1))'
+        in source
+    )
+    assert 'self.bind("<FocusOut>", self._on_window_focus_out, add="+")' in source
+    assert 'self.menu.bind("<FocusOut>", self._on_window_focus_out, add="+")' in source
+
+
+def test_arrow_keys_keep_select_mode_toggles_intact(gui, sample_root):
+    app = gui(roots=[sample_root])
+    app.refresh_tree()
+    rows = app._visible_rows()
+    app._select_mode = True
+    app.tree.selection_set(rows[0], rows[2])
+
+    app._on_tree_arrow(1)
+
+    assert app.tree.selection() == (rows[0], rows[2])
+    assert app.tree.focus() == rows[1]
+    assert app._context_highlight_iid == rows[1]

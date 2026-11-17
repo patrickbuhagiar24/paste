@@ -49,6 +49,9 @@ except ImportError:  # pragma: no cover - ditangani saat runtime
 # Use object as the GUI base when tkinter is unavailable so the CLI still works.
 _TkBase = tk.Tk if tk is not None else object  # type: ignore[union-attr]
 _ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-attr]
+# Errors raised by Tk calls. Without tkinter, AttributeError is what the same
+# calls raise on a test double, so both cases are handled by the same handlers.
+TK_ERRORS = (tk.TclError, AttributeError) if tk is not None else (AttributeError,)
 
 
 SETTINGS_DIR = (
@@ -64,6 +67,9 @@ APP_ID = "pastex"
 TK_CLASS_NAME = "Pastex"
 WM_CLASS = "Pastex"
 ICON_NAME = APP_ID
+# Time given to the window manager to move focus to the previous application
+# after Pastex hides itself, before Ctrl+V is sent.
+FOCUS_SETTLE_MS = 80
 
 
 def log_error(message: str) -> None:
@@ -554,6 +560,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._context_menu_active = False
         self._suppress_next_release = False
         self.menu.bind("<Unmap>", self._context_menu_unmapped, add="+")
+        # Switching to another window must never leave the popup hovering over
+        # that other application; FocusOut on the app or the menu triggers it.
+        self.menu.bind("<FocusOut>", self._on_window_focus_out, add="+")
+        self.bind("<FocusOut>", self._on_window_focus_out, add="+")
         # Run dismissal before widget/class bindings: Treeview and Menu class
         # handlers can consume outside clicks before a bind_all callback sees them.
         self._context_dismiss_bindtag = f"PastexContextDismiss{id(self)}"
@@ -597,6 +607,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind(
             "<<TreeviewClose>>", lambda e: self._toggle_collapsed(self._event_iid(e))
         )
+        # Arrow keys walk the visible rows and move the darker current-row
+        # highlight; Ctrl+Up/Ctrl+Down reorder the current row like Up/Down
+        # in the context menu.
+        self.tree.bind("<Up>", lambda _e: self._on_tree_arrow(-1))
+        self.tree.bind("<Down>", lambda _e: self._on_tree_arrow(1))
+        self.tree.bind("<Control-Up>", lambda _e: self._on_tree_move_shortcut(-1))
+        self.tree.bind("<Control-Down>", lambda _e: self._on_tree_move_shortcut(1))
         self.tree.bind("<Return>", lambda _e: self.on_activate())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<F2>", lambda _e: self.edit_selected())
@@ -661,12 +678,93 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._hover_iid = ""
 
     def _clear_context_highlight(self) -> None:
-        """Remove the darker right-click highlight tag from the previous row."""
+        """Remove the darker current-row highlight tag from the previous row."""
         iid = self.__dict__.get("_context_highlight_iid", "")
         if iid and self.tree.exists(iid):
             tags = tuple(tag for tag in self._item_tags(iid) if tag != "context")
             self.tree.item(iid, tags=tags)
         self._context_highlight_iid = ""
+
+    def _set_context_highlight(self, iid: str) -> None:
+        """Move the darker highlight to ``iid`` and keep it on that row.
+
+        Every interaction that highlights a row — left click, right click,
+        arrow keys, and editing — moves the highlight, except a right click
+        while Select mode is active.
+        """
+        if not iid or not self.tree.exists(iid):
+            return
+        previous = self.__dict__.get("_context_highlight_iid", "")
+        if previous and previous != iid and self.tree.exists(previous):
+            tags = tuple(tag for tag in self._item_tags(previous) if tag != "context")
+            self.tree.item(previous, tags=tags)
+        tags = self._item_tags(iid)
+        if "context" not in tags:
+            self.tree.item(iid, tags=(*tags, "context"))
+        self._context_highlight_iid = iid
+
+    def _visible_rows(self) -> list[str]:
+        """Return the visible tree rows top to bottom, skipping collapsed folders."""
+        rows: list[str] = []
+
+        def walk(parent: str) -> None:
+            for child in self.tree.get_children(parent):
+                rows.append(child)
+                if self.tree.item(child, "open"):
+                    walk(child)
+
+        walk("")
+        return rows
+
+    def _current_row_iid(self) -> str:
+        """Return the row that currently carries the darker highlight."""
+        iid = self.__dict__.get("_context_highlight_iid", "")
+        if iid and self.tree.exists(iid):
+            return iid
+        selection = self.tree.selection()
+        if selection:
+            return str(selection[0])
+        try:
+            return str(self.tree.focus() or "")
+        except TK_ERRORS:  # pragma: no cover - tree unavailable during teardown
+            return ""
+
+    def _move_tree_highlight(self, delta: int) -> str:
+        """Select and highlight the row ``delta`` positions away and preview it."""
+        rows = self._visible_rows()
+        if not rows:
+            return ""
+        current = self._current_row_iid()
+        if current in rows:
+            index = min(max(rows.index(current) + delta, 0), len(rows) - 1)
+        else:
+            index = 0 if delta >= 0 else len(rows) - 1
+        iid = rows[index]
+        self.tree.focus(iid)
+        self._set_context_highlight(iid)
+        see = getattr(self.tree, "see", None)
+        if callable(see):
+            see(iid)
+        # Select mode keeps its toggled rows: arrows only move the highlight.
+        if not self._select_mode:
+            self.tree.selection_set(iid)
+            if "preview" in self.__dict__:
+                self.show_preview()
+        return iid
+
+    def _on_tree_arrow(self, delta: int) -> str:
+        """Handle Up/Down: move the highlight without pasting."""
+        self._move_tree_highlight(delta)
+        return "break"
+
+    def _on_tree_move_shortcut(self, direction: int) -> str:
+        """Handle Ctrl+Up/Ctrl+Down as the context menu's Up/Down actions."""
+        current = self._current_row_iid()
+        if current and self.tree.exists(current):
+            self.move_selected(direction, item_ids=[current])
+        else:
+            self.move_selected(direction)
+        return "break"
 
     def _exit_select_mode(self) -> None:
         """Exit Select mode, clear remaining selections, and update the status bar."""
@@ -684,7 +782,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._suppress_next_release = False
             return "break"
         self._clear_tree_hover()
-        self._clear_context_highlight()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
@@ -698,6 +795,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 return "break"
 
         self.tree.focus(row)
+        self._set_context_highlight(row)
         if self._select_mode:
             if row in self.tree.selection():
                 self.tree.selection_remove(row)
@@ -730,7 +828,84 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _context_menu_unmapped(self, _event=None) -> None:
         self._context_menu_active = False
-        self._clear_context_highlight()
+        self._cancel_menu_focus_watch()
+
+    def _unpost_context_menu(self) -> None:
+        """Close the popup menu and release its grab."""
+        self._context_menu_active = False
+        self._cancel_menu_focus_watch()
+        try:
+            self.menu.unpost()
+        except TK_ERRORS:
+            pass
+        try:
+            self.menu.grab_release()
+        except TK_ERRORS:
+            pass
+
+    def _on_window_focus_out(self, _event=None) -> None:
+        """Dismiss the popup when another application takes focus."""
+        if not self.__dict__.get("_context_menu_active", False):
+            return
+        after_idle = getattr(self, "after_idle", None)
+        if callable(after_idle):
+            try:
+                after_idle(self._dismiss_menu_when_unfocused)
+                return
+            except TK_ERRORS:  # pragma: no cover - interpreter already gone
+                pass
+        self._dismiss_menu_when_unfocused()
+
+    def _dismiss_menu_when_unfocused(self) -> None:
+        """Unpost the menu once Tk reports that no Pastex widget has focus."""
+        if not self.__dict__.get("_context_menu_active", False):
+            return
+        try:
+            focused = self.focus_displayof()
+        except TK_ERRORS:  # pragma: no cover - no display/interpreter
+            focused = None
+        if focused is not None:
+            return
+        self._unpost_context_menu()
+
+    def _cancel_menu_focus_watch(self) -> None:
+        after_id = self.__dict__.get("_menu_focus_watch_id")
+        self._menu_focus_watch_id = None
+        if after_id is None:
+            return
+        try:
+            self.after_cancel(after_id)
+        except TK_ERRORS:
+            pass
+
+    def _watch_menu_focus(self) -> None:
+        """Poll for lost focus while the popup is posted.
+
+        Some window managers never deliver FocusOut to an override-redirect
+        popup, so a lightweight poll keeps the menu from lingering over other
+        applications.
+        """
+        self._menu_focus_watch_id = None
+        if not self.__dict__.get("_context_menu_active", False):
+            return
+        try:
+            focused = self.focus_displayof()
+        except TK_ERRORS:
+            focused = None
+        if focused is None:
+            self._unpost_context_menu()
+            return
+        try:
+            self._menu_focus_watch_id = self.after(250, self._watch_menu_focus)
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            self._menu_focus_watch_id = None
+
+    def _start_menu_focus_watch(self) -> None:
+        self._cancel_menu_focus_watch()
+        try:
+            self._menu_focus_watch_id = self.after(250, self._watch_menu_focus)
+        except TK_ERRORS:  # pragma: no cover - test doubles without Tk
+            self._menu_focus_watch_id = None
 
     def _consume_suppressed_release(self, _event=None):
         """Swallow the left-button release of a click that dismissed the popup menu."""
@@ -756,7 +931,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
 
         self._context_menu_active = False
-        self._clear_context_highlight()
+        self._cancel_menu_focus_watch()
         if getattr(event, "num", 1) == 1:
             self._suppress_next_release = True
         try:
@@ -772,7 +947,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _on_right_click(self, event):
         """Post a context menu for a row, or dismiss selection mode on blank space."""
         self._clear_tree_hover()
-        self._clear_context_highlight()
         row = self.tree.identify_row(event.y)
         if not row:
             if self._select_mode:
@@ -783,11 +957,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return "break"
         self._context_iid = row
         self.tree.focus(row)
-        if not self._select_mode and self.tree.exists(row):
-            tags = self._item_tags(row)
-            if "context" not in tags:
-                self.tree.item(row, tags=(*tags, "context"))
-            self._context_highlight_iid = row
+        # A right click in Select mode keeps the bulk selection untouched, so
+        # the darker current-row highlight is only moved in normal mode.
+        if not self._select_mode:
+            self._set_context_highlight(row)
         self.menu.delete(0, "end")
 
         if self._select_mode:
@@ -834,6 +1007,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
+        self._start_menu_focus_watch()
         return "break"
 
     def _context_target_iids(self) -> list[str]:
@@ -933,6 +1107,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._apply_saved_order(node.children)
 
     def refresh_tree(self) -> None:
+        previous_highlight = self.__dict__.get("_context_highlight_iid", "")
         self._hover_iid = ""
         self._context_highlight_iid = ""
         self.tree.delete(*self.tree.get_children())
@@ -966,6 +1141,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 f"({', '.join(str(r) for r in roots)})"
             )
         self._update_source_label()
+        # Row ids survive a refresh, so keep the darker highlight on the same row.
+        if previous_highlight:
+            self._set_context_highlight(previous_highlight)
         if "preview" in self.__dict__:
             self.show_preview()
 
@@ -1189,7 +1367,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         The flow is:
 
           1. Copy the text while Pastex remains visible.
-          2. Withdraw the window after copying so the target app receives focus.
+          2. Minimize the window after copying so the target app receives focus;
+             minimizing keeps the dock entry, unlike withdrawing the window.
           3. Send Ctrl+V to the focused app.
           4. Wait briefly, then restore Pastex with deiconify().
         """
@@ -1225,12 +1404,51 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if not result.ok:
             self._paste_failed(result.message)
             return
-        self.withdraw()
-        log_error("[paste] clipboard ready; window withdrawn before Ctrl+V")
+        self._hide_for_paste()
         self._send_paste()
 
+    def _hide_for_paste(self) -> None:
+        """Take Pastex out of the way while keeping its dock entry alive.
+
+        ``withdraw()`` unmaps the only window, so GNOME drops an unpinned app
+        from the dock and only shows it again once a click makes the window
+        active — which looked like the icon vanishing on one click and coming
+        back on the next. Minimizing keeps the window mapped, so the dock
+        entry survives while focus returns to the previous application.
+        """
+        try:
+            self.iconify()
+            self.update_idletasks()
+        except TK_ERRORS:
+            try:
+                self.withdraw()
+            except TK_ERRORS:  # pragma: no cover - window already gone
+                pass
+            return
+        try:
+            state = str(self.state())
+        except TK_ERRORS:  # pragma: no cover - state unavailable in test doubles
+            state = "iconic"
+        if state not in {"iconic", "withdrawn"}:
+            # The window manager refused to minimize: fall back to withdrawing
+            # so the target application still receives Ctrl+V.
+            try:
+                self.withdraw()
+            except TK_ERRORS:  # pragma: no cover - window already gone
+                pass
+            return
+        log_error("[paste] window minimized before Ctrl+V; dock entry kept")
+
     def _send_paste(self) -> None:
-        _run_in_thread(self._paste_sender)
+        """Wait for the window manager to hand focus over, then send Ctrl+V."""
+        after = getattr(self, "after", None)
+        if FOCUS_SETTLE_MS <= 0 or not callable(after):
+            _run_in_thread(self._paste_sender)
+            return
+        try:
+            after(FOCUS_SETTLE_MS, lambda: _run_in_thread(self._paste_sender))
+        except TK_ERRORS:  # pragma: no cover - test doubles without Tk
+            _run_in_thread(self._paste_sender)
 
     def _paste_sender(self) -> None:
         log_error("[paste] sending Ctrl+V")
@@ -1359,6 +1577,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if self.tree.exists(iid):
             self.tree.selection_set(iid)
             self.tree.focus(iid)
+            self._set_context_highlight(iid)
 
     def add_text(self) -> None:
         name = simpledialog.askstring(
@@ -1377,6 +1596,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if self.tree.exists(iid):
             self.tree.selection_set(iid)
             self.tree.focus(iid)
+            self._set_context_highlight(iid)
             if "preview" in self.__dict__:
                 self.show_preview()
             self.edit_selected()
@@ -1417,6 +1637,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def edit_selected(self) -> None:
         path = self.selected_path()
+        # Editing also moves the darker current-row highlight to the edited row.
+        selection = self.tree.selection()
+        if selection:
+            self._set_context_highlight(str(selection[0]))
         if path is None:
             self.status_var.set("Select a text file or folder to edit.")
             return
@@ -1437,6 +1661,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             if self.tree.exists(iid):
                 self.tree.selection_set(iid)
                 self.tree.focus(iid)
+                self._set_context_highlight(iid)
                 self.show_preview()
             self.status_var.set(f"Renamed folder to '{renamed.name}'.")
             return
