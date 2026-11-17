@@ -704,7 +704,7 @@ MUTATIONS = [
     (
         "paste ignores the prewarmed tool plans",
         "pastex/app.py",
-        'copy_text(text, plan=getattr(self, "_copy_plan", None))',
+        'copy_text(text, plan=self.__dict__.get("_copy_plan"))',
         "copy_text(text)",
         ["tests/test_app.py::test_paste_passes_the_prewarmed_plans"],
     ),
