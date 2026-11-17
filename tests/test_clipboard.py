@@ -1023,3 +1023,16 @@ def test_can_type_text_limits(monkeypatch):
     assert clipboard.can_type_text("x" * (clipboard.TYPE_TEXT_LIMIT + 1)) is False
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
     assert clipboard.can_type_text("body") is False
+
+
+def test_activate_window_asks_the_window_manager(monkeypatch):
+    """deiconify() can be dropped; EWMH activation brings the window back."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = []
+    assert clipboard.activate_window("0x2800003", runner=_x11_runner(captured)) is True
+    assert captured == [["xdotool", "windowactivate", "--sync", "0x2800003"]]
+
+
+def test_activate_window_reports_failure_without_xdotool(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
+    assert clipboard.activate_window("0x1", runner=_x11_runner([])) is False

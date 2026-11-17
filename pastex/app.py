@@ -29,6 +29,7 @@ from .clipboard import (
     prewarm as prewarm_clipboard,
     read_text_from_clipboard,
     set_clipboard_owner,
+    activate_window,
     simulate_paste,
     can_type_text,
     type_text_x11,
@@ -107,13 +108,19 @@ MINIMIZE_RETRY_MS = 20
 # paste only needs the focus to leave Pastex, and WM_STATE (which Tk's
 # ``state()`` reports) is not updated by every window manager, so polling the
 # focus is what actually decides the paste.
-MINIMIZE_FOCUS_CHECK_AT_MS = 200
-MINIMIZE_FOCUS_RETRY_MS = 120
+MINIMIZE_FOCUS_CHECK_AT_MS = 120
+MINIMIZE_FOCUS_RETRY_MS = 100
 # Restoring is checked and repeated as well: deiconify() is dropped when it
 # lands while the minimize animation is still running, which left the window
 # minimized for good.
 RESTORE_WAIT_MS = 1200
 RESTORE_RETRY_MS = 60
+# deiconify() is asked again for this long whatever the state says: Tk's
+# "wm state" reported "normal" for a window that was still minimized, so the
+# repeat must not depend on it.
+RESTORE_REPEAT_MS = 400
+# If the window is still not back by then, ask the window manager directly.
+RESTORE_ACTIVATE_AT_MS = 240
 # Some compositors need a second request before they hide the window.
 MINIMIZE_REHIDE_AT_MS = 120
 
@@ -1927,31 +1934,41 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.after(0, self._after_copy, result, empty)
 
     def _clipboard_holds(self, text: str, result) -> bool:
-        """Verify the copy, taking the selection over in Tk when it was lost.
+        """Make the clipboard hold the text, and say whether it does.
 
-        Runs in the copy worker. When the tool claims success but the clipboard
-        is empty or different, Tk itself claims the CLIPBOARD selection: no
-        subprocess can lose it then, which is what makes Ctrl+V paste something
-        on a machine where xclip's forked owner does not survive.
+        Runs in the copy worker. Tk claims the CLIPBOARD selection first: that
+        is in-process, instant, and no subprocess can lose it, so Ctrl+V has
+        something to paste even when the tool's forked owner does not survive.
+        Only then is the clipboard read back once (with one short retry) to
+        decide whether Ctrl+V or typing delivers the text -- reading first cost
+        a second per click on a machine where both readers are slow.
         """
+        started = time.monotonic()
+        claimed = PastexApp._claim_the_clipboard(self, text)
         try:
             verdict = verify_clipboard(text)
         except Exception as exc:  # noqa: BLE001 - diagnostics must not block
             log_error(f"[paste] clipboard verification failed: {exc}")
             return True
+        took_ms = (time.monotonic() - started) * 1000
         if verdict is True:
-            log_error(f"[paste] clipboard verified through {result.tool}")
+            log_error(
+                f"[paste] clipboard verified in {took_ms:.0f} ms "
+                f"(tool={result.tool}, tk_owner={claimed})"
+            )
             return True
         if verdict is None:
             log_error(
-                f"[paste] the clipboard cannot be read back; trusting {result.tool}"
+                f"[paste] the clipboard cannot be read back "
+                f"({took_ms:.0f} ms, tk_owner={claimed}); trusting {result.tool}"
             )
             return True
         log_error(
-            f"[paste] {result.tool} reported success but the clipboard is empty "
-            "or different; claiming the selection with Tk"
+            f"[paste] the clipboard is empty or different after {took_ms:.0f} ms "
+            f"(tool={result.tool}, tk_owner={claimed}); claiming the selection "
+            "with Tk once more"
         )
-        if PastexApp._claim_the_clipboard(self, text):
+        if not claimed and PastexApp._claim_the_clipboard(self, text):
             if verify_clipboard(text) is not False:
                 log_error("[paste] the clipboard now holds the text (Tk owner)")
                 return True
@@ -2023,11 +2040,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _restore_window(self, *, raise_window: bool = False) -> None:
         """Bring the window back and confirm that the WM really did it.
 
+        Two things made the window stay minimized after a successful paste:
         ``deiconify()`` is dropped when it arrives while Cinnamon is still
-        animating the minimize, and the window then stayed minimized for good.
-        The state is re-checked every ``RESTORE_RETRY_MS`` for up to
-        ``RESTORE_WAIT_MS`` and the request is repeated while it still reports
-        "iconic" or "withdrawn".
+        animating the minimize, and ``wm state`` reported "normal" for a window
+        that was still minimized, so a check that trusted it never asked again.
+        The request is now repeated every ``RESTORE_RETRY_MS`` for at least
+        ``RESTORE_REPEAT_MS`` whatever the state says, and after
+        ``RESTORE_ACTIVATE_AT_MS`` the window manager itself is asked to
+        activate the window through xdotool.
         """
         if raise_window:
             try:
@@ -2045,6 +2065,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             except TK_ERRORS:
                 pass
         self._restore_waited_ms = 0
+        self._restore_activated = False
         PastexApp._wait_for_the_restore(self)
 
     def _wait_for_the_restore(self) -> bool:
@@ -2061,21 +2082,43 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return True
 
     def _restore_check(self) -> None:
-        """Repeat deiconify() while the window is still reported as hidden."""
+        """Repeat deiconify() until the window is really back.
+
+        The state is only a hint: Muffin reported "normal" while the window was
+        still minimized, which used to cut this loop short and leave the window
+        hidden for good.
+        """
         self._restore_check_id = None
         waited = self.__dict__.get("_restore_waited_ms", 0) + RESTORE_RETRY_MS
         self._restore_waited_ms = waited
-        if PastexApp._window_state(self) not in {"iconic", "withdrawn"}:
+        state = PastexApp._window_state(self)
+        if state not in {"iconic", "withdrawn"} and waited > RESTORE_REPEAT_MS:
+            log_error(f"[paste] window restored after {waited} ms (state={state})")
             return
-        log_error(
-            "[paste] the window manager kept the window hidden; "
-            f"restoring again ({waited} ms)"
-        )
+        if state in {"iconic", "withdrawn"}:
+            log_error(
+                "[paste] the window manager kept the window hidden; "
+                f"restoring again ({waited} ms, state={state})"
+            )
         try:
             self.deiconify()
         except TK_ERRORS:  # pragma: no cover - interpreter already gone
             return
+        if waited >= RESTORE_ACTIVATE_AT_MS and not self.__dict__.get(
+            "_restore_activated", False
+        ):
+            # Ask the window manager directly: EWMH activation un-minimizes a
+            # window even when the deiconify request was dropped.
+            PastexApp._activate_the_window(self)
         PastexApp._wait_for_the_restore(self)
+
+    def _activate_the_window(self) -> None:
+        self._restore_activated = True
+        window_id = PastexApp._window_id(self)
+        if window_id is None:
+            return
+        log_error(f"[paste] asking the window manager to show {window_id} again")
+        _run_in_thread(activate_window, window_id)
 
     def _hide_for_paste(self) -> bool:
         """Minimize Pastex, keeping its panel entry, and report whether it worked.
@@ -2329,7 +2372,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         )
         try:
             if typing:
+                typed_at = time.monotonic()
                 result = type_text_x11(self.__dict__.get("_paste_body", ""))
+                log_error(
+                    f"[paste] typed {len(self.__dict__.get('_paste_body', ''))} "
+                    f"characters in {(time.monotonic() - typed_at) * 1000:.0f} ms"
+                )
             else:
                 result = simulate_paste(
                     plan=self.__dict__.get("_paste_plan"),

@@ -1,3 +1,24 @@
+pastex (1.10.7-1) unstable; urgency=medium
+
+  * Bring the window back after the paste. Muffin reported wm state "normal"
+    for a window it had left minimized, so the restore loop believed it was
+    visible after one deiconify() that the window manager had dropped during
+    the minimize animation, and Pastex stayed minimized. The request is now
+    repeated every 60 ms for at least 400 ms whatever the state says (and for
+    up to 1.2 s while it still reports iconic), after 240 ms the window
+    manager is asked to activate the window with xdotool windowactivate
+    --sync, and the log states when the window was restored.
+  * Claim the clipboard in Tk before reading it back. Reading first cost
+    about a second per click on a machine where both clipboard readers are
+    slow (each read waits for its timeout), which made the text appear late.
+    Tk owning the selection is instant and cannot be lost, so it is done
+    first and the single read after it only decides between Ctrl+V and the
+    typed delivery. The focus check also starts at 120 ms instead of 200 ms.
+  * Log how long the clipboard check and the typing took, so a slow click can
+    be read from the log instead of guessed at.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 18:20:00 +0700
+
 pastex (1.10.6-1) unstable; urgency=medium
 
   * Type the snippet when the clipboard cannot hold it. On the reporting
