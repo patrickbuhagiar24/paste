@@ -1,7 +1,7 @@
 """One Pastex per user, plus a tiny socket a second launch can talk to.
 
 Launching Pastex from the applications menu used to start another Tk process
-(~200-400 ms) and could leave two dock entries. Now the first process takes an
+(~200-400 ms) and could leave two panel entries. Now the first process takes an
 ``flock`` on ``$XDG_RUNTIME_DIR/pastex/pastex.lock`` and listens on a Unix
 socket next to it; a later launch sends ``show`` or ``pick`` and exits right
 away, which is effectively instant.

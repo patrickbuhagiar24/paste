@@ -1,8 +1,8 @@
-"""Uji v1.5.0 #3: kategori yang diciutkan disimpan & dipulihkan.
+"""v1.5.0 #3: collapsed categories are stored and restored.
 
-Bug yang dijaga: GUI selalu membuka semua kategori pada setiap refresh_tree
-(open=True), sehingga kategori yang baru diciutkan pengguna langsung mekar
-lagi — dan statusnya hilang setiap aplikasi ditutup.
+Bug guarded here: the GUI opened every category on each refresh_tree
+(open=True), so a category the user had just collapsed expanded again — and
+the state was lost every time the application was closed.
 """
 
 from __future__ import annotations
@@ -37,22 +37,22 @@ def test_load_settings_keeps_saved_collapsed(tmp_path, monkeypatch):
 
 
 def test_open_treeview_event_marks_folder_collapsed(gui, sample_root):
-    """Menciutkan kategori harus tersimpan ke settings.json."""
+    """Collapsing a category must be written to settings.json."""
     app = gui(roots=[sample_root])
     app.refresh_tree()
     assert app.tree.row("General")["open"] is True
 
     app._toggle_collapsed(str(sample_root / "General"))
 
-    assert app.saved_settings, "settings.json tidak ditulis"
+    assert app.saved_settings, "settings.json was not written"
     assert app.saved_settings[-1]["collapsed"] == [_norm(sample_root / "General")]
-    # berkas .txt tidak ikut dicatat walau event-nya nyasar
+    # .txt files are not recorded even if a stray event arrives
     app._toggle_collapsed(str(sample_root / "General" / "Greeting.txt"))
     assert app.saved_settings[-1]["collapsed"] == [_norm(sample_root / "General")]
 
 
 def test_refresh_tree_restores_collapsed_state(gui, sample_root):
-    """refresh_tree (F5) harus menghormati status ciut, bukan membuka semua."""
+    """refresh_tree (F5) must honour the collapsed state instead of opening everything."""
     saved = _norm(sample_root / "Email")
     app = gui(roots=[sample_root], settings={"collapsed": [saved]})
     app.refresh_tree()
@@ -61,7 +61,7 @@ def test_refresh_tree_restores_collapsed_state(gui, sample_root):
 
 
 def test_collapsed_survives_new_session(sample_root, tmp_path, monkeypatch):
-    """Sesi baru (settings.json dibaca ulang) memulihkan kategori ciut."""
+    """A new session (settings.json read again) restores collapsed categories."""
     from conftest import make_app
 
     config_dir = tmp_path / "config"
@@ -71,9 +71,9 @@ def test_collapsed_survives_new_session(sample_root, tmp_path, monkeypatch):
     first = make_app(roots=[sample_root], settings=app_module.load_settings())
     first.refresh_tree()
     first._toggle_collapsed(str(sample_root / "Email"))
-    assert (config_dir / "settings.json").exists(), "settings tidak ditulis"
+    assert (config_dir / "settings.json").exists(), "settings were not written"
 
-    # Sesi kedua: muat dari disk, bukan dari objek lama.
+    # Second session: load from disk, not from the old object.
     second = make_app(roots=[sample_root], settings=app_module.load_settings())
     second.refresh_tree()
     assert second.tree.row("Email")["open"] is False
@@ -85,23 +85,23 @@ def test_opening_again_removes_from_collapsed(gui, sample_root):
         roots=[sample_root], settings={"collapsed": [_norm(sample_root / "Email")]}
     )
     app.refresh_tree()
-    app._toggle_collapsed(str(sample_root / "Email"))  # dibuka lagi
+    app._toggle_collapsed(str(sample_root / "Email"))  # opened again
     assert app.saved_settings[-1]["collapsed"] == []
     app.refresh_tree()
     assert app.tree.row("Email")["open"] is True
 
 
 def test_search_expands_everything_and_does_not_overwrite_state(gui, sample_root):
-    """Saat mencari semua dibuka, tetapi status ciut tersimpan tidak dihapus."""
+    """Search opens everything, but the stored collapsed state is not dropped."""
     saved = _norm(sample_root / "Email")
     app = gui(roots=[sample_root], settings={"collapsed": [saved]})
     app.search_var.set("Greeting")
     app.refresh_tree()
     dirs = [r for r in app.tree.rows if r["tags"] == "dir"]
-    assert dirs, "pencarian tidak menemukan kategori"
-    assert all(r["open"] is True for r in dirs), "kategori harus terbuka saat cari"
-    assert app.settings["collapsed"] == [saved], "status ciut terhapus saat cari"
-    assert app.saved_settings == [], "pencarian tidak boleh menulis settings"
+    assert dirs, "the search found no categories"
+    assert all(r["open"] is True for r in dirs), "categories must be open while searching"
+    assert app.settings["collapsed"] == [saved], "the collapsed state was dropped during search"
+    assert app.saved_settings == [], "searching must not write settings"
 
     app.search_var.set("")
     app.refresh_tree()
@@ -150,21 +150,21 @@ def test_prune_only_removes_subtree(gui, sample_root):
 
 
 def test_treeview_open_close_bound_to_handler():
-    """Event <<TreeviewOpen>>/<<TreeviewClose>> harus tersambung.
+    """The <<TreeviewOpen>>/<<TreeviewClose>> events must be bound.
 
-    Tanpa binding ini, kategori bisa diciutkan tetapi statusnya tidak pernah
-    dicatat — gejala asli yang diperbaiki di 1.5.0.
+    Without these bindings a category can be collapsed while the state is
+    never recorded — the original symptom fixed in 1.5.0.
     """
     text = Path(app_module.__file__).read_text(encoding="utf-8")
     for event in ("<<TreeviewOpen>>", "<<TreeviewClose>>"):
         idx = text.index(event)
         snippet = text[idx : idx + 260]
-        assert "_toggle_collapsed" in snippet, f"{event} tidak tersambung:\n{snippet}"
+        assert "_toggle_collapsed" in snippet, f"{event} is not bound:\n{snippet}"
 
 
 def test_event_iid_prefers_event_attribute(gui):
     app = gui(roots=[])
     event = type("E", (), {"iid": "/tmp/kategori"})()
     assert app._event_iid(event) == "/tmp/kategori"
-    app.tree._focus = "/tmp/lain"
-    assert app._event_iid(object()) == "/tmp/lain"
+    app.tree._focus = "/tmp/other"
+    assert app._event_iid(object()) == "/tmp/other"

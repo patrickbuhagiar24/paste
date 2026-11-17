@@ -1,4 +1,4 @@
-"""Uji fallback portal RemoteDesktop dengan dbus palsu (tanpa sesi asli)."""
+"""RemoteDesktop portal fallback tests with a fake dbus (no real session)."""
 
 import sys
 from pathlib import Path
@@ -116,7 +116,7 @@ def test_session_is_reused_so_the_prompt_appears_once(monkeypatch):
     portal.send_ctrl_v()
 
     creates = [call for call in remote.calls if call[0] == "CreateSession"]
-    assert len(creates) == 1, "sesi portal harus di-cache"
+    assert len(creates) == 1, "the portal session must be cached"
     presses = [call for call in remote.calls if call[0] == "NotifyKeyboardKeycode"]
     assert len(presses) == 8
     portal.reset_session()

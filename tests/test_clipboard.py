@@ -1,4 +1,4 @@
-"""Uji clipboard/paste dengan runner palsu (tanpa clipboard asli)."""
+"""Clipboard/paste tests with a fake runner (no real clipboard)."""
 
 import subprocess
 import sys
@@ -26,9 +26,9 @@ def test_copy_prefers_wl_copy_on_wayland(monkeypatch):
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
     captured = []
-    result = clipboard.copy_text("halo", runner=_fake_runner(captured))
+    result = clipboard.copy_text("hello", runner=_fake_runner(captured))
     assert result.ok and result.tool == "wl-copy"
-    assert captured[0][1] == "halo"
+    assert captured[0][1] == "hello"
 
 
 def test_copy_falls_back_to_xclip(monkeypatch):
@@ -40,13 +40,13 @@ def test_copy_falls_back_to_xclip(monkeypatch):
         lambda name: "/usr/bin/xclip" if name == "xclip" else None,
     )
     captured = []
-    result = clipboard.copy_text("halo", runner=_fake_runner(captured))
+    result = clipboard.copy_text("hello", runner=_fake_runner(captured))
     assert result.ok and result.tool == "xclip"
 
 
 def test_copy_fails_without_tools(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
-    result = clipboard.copy_text("halo", runner=_fake_runner([]))
+    result = clipboard.copy_text("hello", runner=_fake_runner([]))
     assert not result.ok
 
 
@@ -58,8 +58,8 @@ def test_simulate_paste_uses_ydotool_on_wayland(monkeypatch):
     assert result.ok and result.tool == "ydotool"
     assert captured[0][0][0] == "ydotool"
     # ydotool >= 1.0: `key` HANYA menerima keycode (<kode>:<1|0>).
-    # 29=LeftCtrl, 47=V — bukan 42 (Shift) seperti bug v1.0.2, dan bukan
-    # "ctrl+v" (nama kunci ditolak) seperti bug v1.2.0.
+    # 29=LeftCtrl, 47=V — not 42 (Shift) as in the v1.0.2 bug, and not
+    # "ctrl+v" (key names are rejected) as in the v1.2.0 bug.
     assert captured[0][0] == ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
 
 
@@ -94,13 +94,13 @@ def test_ensure_ydotoold_failure_returns_false():
 
 def test_ensure_ydotoold_handles_missing_systemctl():
     def boom(cmd, **kw):
-        raise OSError("systemctl tidak ada")
+        raise OSError("no systemctl")
 
     assert clipboard.ensure_ydotoold(runner=boom) is False
 
 
 def test_paste_retries_once_after_starting_daemon(monkeypatch):
-    """Percobaan pertama gagal (daemon mati), lalu berhasil setelah start."""
+    """The first attempt fails (daemon down), then succeeds after a start."""
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: True)
@@ -111,7 +111,7 @@ def test_paste_retries_once_after_starting_daemon(monkeypatch):
         seq.append(cmd)
         if cmd[0] == "systemctl":
             return _mk(count=0)
-        # gagal pada percobaan pertama, berhasil setelahnya
+        # fails on the first attempt, succeeds afterwards
         return _mk(count=0 if len([c for c in seq if c[0] == "ydotool"]) > 1 else 3)
 
     result = clipboard.simulate_paste(runner=runner)
@@ -153,22 +153,22 @@ def test_forking_tool_is_not_waited_on(monkeypatch):
     """wl-copy mem-fork & tetap hidup: jangan tunggu, jangan tangkap output."""
     _FakePopen.hang = True
     monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
-    proc = clipboard._default_runner(["wl-copy"], input="halo")
-    assert proc.returncode == 0  # menggantung = normal, bukan gagal
+    proc = clipboard._default_runner(["wl-copy"], input="hello")
+    assert proc.returncode == 0  # blocking is expected, not a failure
     kw = _FakePopen.last.kw
     assert kw["stdout"] == clipboard.subprocess.DEVNULL
     assert kw["stderr"] == clipboard.subprocess.DEVNULL
     assert kw["start_new_session"] is True
     assert kw["text"] is True
-    # Masukan benar-benar ditulis lalu stdin ditutup.
-    assert _FakePopen.last.stdin.written == ["halo"]
+    # The input really is written, then stdin is closed.
+    assert _FakePopen.last.stdin.written == ["hello"]
     assert _FakePopen.last.stdin.closed is True
 
 
 def test_forking_tool_finishing_returns_exit_code(monkeypatch):
     _FakePopen.hang = False
     monkeypatch.setattr(clipboard.subprocess, "Popen", _FakePopen)
-    proc = clipboard._default_runner(["xclip", "-selection", "clipboard"], input="halo")
+    proc = clipboard._default_runner(["xclip", "-selection", "clipboard"], input="hello")
     assert proc.returncode == 0
 
 
@@ -196,7 +196,7 @@ def test_non_forking_tool_captures_output(monkeypatch):
 
 
 def test_ydotool_name_syntax_used_as_fallback(monkeypatch):
-    """ydotool 0.1.x memakai nama kunci; dicoba setelah keycode."""
+    """ydotool 0.1.x uses key names; try them after the keycodes."""
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
     monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
@@ -204,24 +204,24 @@ def test_ydotool_name_syntax_used_as_fallback(monkeypatch):
 
     def runner(cmd, **kw):
         seq.append(cmd)
-        # keycode ditolak, nama kunci diterima
+        # keycodes rejected, key names accepted
         return _Proc(0 if cmd[-1] == "ctrl+v" else 1, err="")
 
     result = clipboard.simulate_paste(runner=runner)
     assert result.ok is True
     assert len(seq) == 2
-    assert seq[0][2] == "29:1"  # percobaan pertama: keycode
-    assert seq[1][2] == "ctrl+v"  # cadangan: nama kunci
+    assert seq[0][2] == "29:1"  # first attempt: keycodes
+    assert seq[1][2] == "ctrl+v"  # fallback: key names
 
 
 def test_type_text_uses_ydotool_type(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda n: "/usr/bin/" + n)
     seen = []
     result = clipboard.type_text(
-        "halo", runner=lambda cmd, **kw: seen.append(cmd) or _Proc(rc=0)
+        "hello", runner=lambda cmd, **kw: seen.append(cmd) or _Proc(rc=0)
     )
     assert result.ok is True
-    assert seen == [["ydotool", "type", "halo"]]
+    assert seen == [["ydotool", "type", "hello"]]
 
 
 def test_type_text_reports_failure(monkeypatch):
@@ -244,9 +244,9 @@ def test_read_text_from_clipboard_wayland(monkeypatch):
 
     def runner(cmd, **kw):
         seen.append(cmd)
-        return _Proc(0, out="isi-clipboard")
+        return _Proc(0, out="clipboard-body")
 
-    assert clipboard.read_text_from_clipboard(runner=runner) == "isi-clipboard"
+    assert clipboard.read_text_from_clipboard(runner=runner) == "clipboard-body"
     assert seen == [["wl-paste", "--no-newline"]]
 
 
@@ -264,21 +264,21 @@ def test_copy_text_uses_successful_clipboard_tool_without_readback(monkeypatch):
         captured.append((cmd, input))
         return _Proc(rc=0)
 
-    result = clipboard.copy_text("halo", runner=runner)
+    result = clipboard.copy_text("hello", runner=runner)
 
     assert result.ok is True
     assert result.tool == "wl-copy"
     assert result.message == "Text copied with wl-copy."
-    assert captured == [(["wl-copy"], "halo")]
+    assert captured == [(["wl-copy"], "hello")]
 
 
 # --- Wayland: jangan percaya xdotool -------------------------------------
 
 
 def test_wayland_never_uses_xdotool(monkeypatch):
-    """Di GNOME Wayland, xdotool memakai XTEST dan TIDAK menjangkau aplikasi
-    Wayland asli, tetapi tetap mengembalikan kode 0. Melaporkan "berhasil"
-    dalam kondisi itu menyesatkan, jadi xdotool tidak boleh dipakai sama sekali.
+    """On a Wayland session, xdotool uses XTEST and does NOT reach native
+    Wayland clients, yet still exits 0. Reporting "success" in that case is
+    misleading, so xdotool must not be used at all there.
     """
     from pastex import clipboard
 
@@ -299,7 +299,7 @@ def test_wayland_never_uses_xdotool(monkeypatch):
 
 
 def test_wayland_message_explains_ydotool_requirement(monkeypatch):
-    """Tanpa ydotool di Wayland, pesan harus menjelaskan alasannya."""
+    """Without ydotool on Wayland the message must explain why."""
     from pastex import clipboard
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -307,13 +307,13 @@ def test_wayland_message_explains_ydotool_requirement(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: None)
     result = clipboard.simulate_paste(runner=lambda cmd: _Proc(rc=0))
     assert result.ok is False
-    assert "GNOME Wayland" in result.message or "Wayland" in result.message
+    assert "Wayland" in result.message
     assert "Ctrl+V" in result.message
 
 
 def test_x11_paste_marks_result_not_confident(monkeypatch):
-    """xdotool di X11 tetap dipakai, tetapi hasilnya ditandai belum pasti
-    (returncode saja bukan bukti teks benar-benar tertempel)."""
+    """On X11 xdotool is still used, but its result is marked unconfirmed
+    (a return code alone does not prove the text was really pasted)."""
     from pastex import clipboard
 
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -350,7 +350,7 @@ def test_wayland_ydotool_success_is_confident(monkeypatch):
 
 
 def test_copy_text_skips_path_lookups_when_a_plan_is_given(monkeypatch):
-    """Plan hasil prewarm menghilangkan shutil.which dari jalur klik."""
+    """The prewarmed plan keeps shutil.which off the click path."""
     from pastex import clipboard
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
@@ -367,10 +367,10 @@ def test_copy_text_skips_path_lookups_when_a_plan_is_given(monkeypatch):
 
     lookups.clear()
     captured = []
-    result = clipboard.copy_text("halo", runner=_fake_runner(captured), plan=plan)
+    result = clipboard.copy_text("hello", runner=_fake_runner(captured), plan=plan)
 
     assert result.ok and result.tool == "wl-copy"
-    assert lookups == [], "jalur klik tidak boleh memanggil shutil.which lagi"
+    assert lookups == [], "the click path must not call shutil.which again"
 
 
 def test_simulate_paste_skips_path_lookups_when_a_plan_is_given(monkeypatch):
@@ -427,7 +427,7 @@ def test_prewarm_starts_ydotoold_before_the_first_click(monkeypatch):
 
     copy_plan, paste_plan = clipboard.prewarm()
 
-    assert started == [{}], "ydotoold harus distart di background saat startup"
+    assert started == [{}], "ydotoold must be started in the background at startup"
     assert copy_plan.tool_names() == ["wl-copy", "xclip", "xsel"]
     assert paste_plan.tool_names() == ["ydotool"]
 
@@ -478,7 +478,7 @@ def test_try_portal_is_skipped_when_the_portal_is_unavailable(monkeypatch):
 
 
 def test_simulate_paste_falls_back_to_the_portal(monkeypatch):
-    """Tanpa ydotool/uinput, portal tetap bisa mengirim Ctrl+V tanpa root."""
+    """Without ydotool/uinput the portal can still send Ctrl+V without root."""
     from pastex import clipboard, portal
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
@@ -549,12 +549,12 @@ def test_owner_copies_without_spawning_a_tool():
     owner = FakeOwner()
     calls = []
 
-    result = clipboard.copy_text("halo", runner=calls.append, owner=owner)
+    result = clipboard.copy_text("hello", runner=calls.append, owner=owner)
 
     assert result.ok is True
     assert result.tool == "wayland-owner"
-    assert owner.copied == ["halo"]
-    assert calls == [], "wl-copy tidak boleh dijalankan"
+    assert owner.copied == ["hello"]
+    assert calls == [], "wl-copy must not be run"
 
 
 def _plan():
@@ -569,7 +569,7 @@ def test_owner_failure_falls_back_to_the_tools():
         calls.append(cmd[0])
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    result = clipboard.copy_text("halo", runner=runner, plan=_plan(), owner=owner)
+    result = clipboard.copy_text("hello", runner=runner, plan=_plan(), owner=owner)
 
     assert result.ok is True
     assert result.tool == "wl-copy"
@@ -582,7 +582,7 @@ def test_owner_exception_never_breaks_the_copy():
     def runner(cmd, **_kwargs):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    result = clipboard.copy_text("halo", runner=runner, plan=_plan(), owner=owner)
+    result = clipboard.copy_text("hello", runner=runner, plan=_plan(), owner=owner)
 
     assert result.ok is True
     assert result.tool == "wl-copy"
@@ -593,16 +593,16 @@ def test_module_level_owner_is_used_by_default():
     clipboard.set_clipboard_owner(owner)
     try:
         assert clipboard.clipboard_owner() is owner
-        result = clipboard.copy_text("halo", runner=lambda *_a, **_k: None)
+        result = clipboard.copy_text("hello", runner=lambda *_a, **_k: None)
         assert result.tool == "wayland-owner"
-        assert owner.copied == ["halo"]
+        assert owner.copied == ["hello"]
     finally:
         clipboard.set_clipboard_owner(None)
     assert clipboard.clipboard_owner() is None
 
 
 def test_simulate_paste_bounds_every_tool_call(monkeypatch):
-    """Setiap percobaan punya timeout, supaya GUI tidak menunggu selamanya."""
+    """Every attempt has a timeout so the GUI never waits forever."""
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
@@ -610,7 +610,7 @@ def test_simulate_paste_bounds_every_tool_call(monkeypatch):
 
     def runner(cmd, **kwargs):
         seen.append(kwargs.get("timeout"))
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tidak ada daemon")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="no daemon")
 
     result = clipboard.simulate_paste(runner=runner)
 
@@ -619,7 +619,7 @@ def test_simulate_paste_bounds_every_tool_call(monkeypatch):
 
 
 def test_simulate_paste_stops_before_the_portal_when_aborted(monkeypatch):
-    """Kalau jendela sudah dipulihkan, portal tidak boleh ditekan lagi."""
+    """Once the window is restored, the portal must not be touched again."""
     from pastex import clipboard, portal
 
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
@@ -635,7 +635,7 @@ def test_simulate_paste_stops_before_the_portal_when_aborted(monkeypatch):
 
     assert result.ok is False
     assert pressed == []
-    assert "dibatalkan" in result.message
+    assert "aborted" in result.message
 
 
 def test_the_abort_flag_is_checked_between_the_two_ydotool_syntaxes(monkeypatch):
@@ -653,18 +653,18 @@ def test_the_abort_flag_is_checked_between_the_two_ydotool_syntaxes(monkeypatch)
     )
 
     assert result.ok is False
-    assert len(calls) == 1  # percobaan kedua dilewati
+    assert len(calls) == 1  # the second attempt is skipped
 
 
 def test_the_private_daemon_is_started_with_our_own_socket(monkeypatch, tmp_path):
-    """Ubuntu mengirim ydotoold.service sebagai unit sistem: kita mulai sendiri."""
+    """Distros may ship ydotoold.service as a system unit: we start our own."""
     spawned = []
 
     socket = tmp_path / "pastex-ydotool.sock"
 
     def fake_popen(cmd, **kwargs):
         spawned.append((cmd, kwargs))
-        # Daemon sungguhan membuat socket-nya; di sini cukup dibuat manual.
+        # A real daemon creates its socket; here we create it by hand.
         socket.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotoold")
@@ -675,20 +675,20 @@ def test_the_private_daemon_is_started_with_our_own_socket(monkeypatch, tmp_path
 
     ok = clipboard._spawn_private_ydotoold()
 
-    assert spawned, "ydotoold harus dijalankan"
+    assert spawned, "ydotoold must be started"
     cmd, kwargs = spawned[0]
     assert cmd[0] == "/usr/bin/ydotoold"
     assert "--socket-path" in cmd and str(socket) in cmd
     assert "--socket-own" in cmd
     assert kwargs.get("start_new_session") is True
-    # ydotool hanya bicara ke daemon kita kalau YDOTOOL_SOCKET diset.
+    # ydotool only talks to our daemon when YDOTOOL_SOCKET is set.
     assert clipboard.os.environ["YDOTOOL_SOCKET"] == str(socket)
     assert ok is True
     clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
 
 
 def test_ensure_ydotoold_falls_back_to_the_private_daemon(monkeypatch):
-    """Unit pengguna tidak ada, jadi daemon sendiri yang dipakai."""
+    """No user unit on disk, so the private daemon is used."""
     started = []
     monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: False)
     monkeypatch.setattr(

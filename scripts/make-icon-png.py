@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render usr/share/icons/.../pastex.svg to PNG files for the window icon.
 
-GNOME loads menu icons from the theme as SVG, while Tk's PhotoImage/iconphoto
+Desktops load menu icons from the theme as SVG, while Tk's PhotoImage/iconphoto
 requires raster images. Without PNG files, the window uses a generic icon that
 does not match the application menu.
 
@@ -33,7 +33,7 @@ SIZES = (64, 128, 256)
 
 @dataclass
 class Shape:
-    """Satu bentuk sederhana hasil pembacaan SVG."""
+    """A minimal shape produced by the SVG reader."""
 
     kind: str  # "rect" | "circle" | "line"
     fill: tuple[int, int, int, int] | None = None
@@ -44,7 +44,7 @@ class Shape:
     y: float = 0.0
     w: float = 0.0
     h: float = 0.0
-    r: float = 0.0  # radius sudut rect / radius circle
+    r: float = 0.0  # rect corner radius / circle radius
     points: list[tuple[float, float]] = field(default_factory=list)
 
 
@@ -171,7 +171,7 @@ def _inside_rect(px, py, s: Shape) -> bool:
     r = min(s.r, s.w / 2, s.h / 2)
     if r <= 0:
         return True
-    # sudut membulat: titik di luar kotak inti harus berada dalam lingkaran sudut
+    # rounded corner: points outside the core box must stay inside the corner circle
     cx = min(max(px, s.x + r), s.x + s.w - r)
     cy = min(max(py, s.y + r), s.y + s.h - r)
     return (px - cx) ** 2 + (py - cy) ** 2 <= r * r
@@ -190,7 +190,7 @@ def _dist_to_segments(px, py, points) -> float:
 
 
 def _blend(buf: bytearray, index: int, color) -> None:
-    """Composite source-over warna opak di atas buffer RGBA."""
+    """Source-over composite of an opaque colour onto an RGBA buffer."""
     if color[3] >= 255:
         buf[index : index + 4] = bytes(color)
         return
@@ -337,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     view_w, view_h, shapes = parse_svg()
-    if view_w != view_h:  # pragma: no cover - ikon kita persegi
+    if view_w != view_h:  # pragma: no cover - our icon is square
         print(f"warning: viewBox is not square ({view_w}x{view_h})")
     base = Path(args.out)
     for size in (int(s) for s in args.sizes.split(",") if s.strip()):

@@ -1,3 +1,35 @@
+pastex (1.9.0-1) unstable; urgency=medium
+
+  * Target Linux Mint only. Pastex now documents, packages and tests for Linux
+    Mint (Cinnamon, MATE and Xfce; X11 by default and the Cinnamon Wayland
+    session) instead of Ubuntu with a GNOME-first PPA. The Ubuntu PPA
+    workflow and the apt-repo/pastex.list.example file are gone; the only
+    supported installation is APT from the signed archive.
+  * Rename the APT archive suite from "stonking" to "mint". The suite is a
+    fixed label for this project, not a Mint release codename, so the same
+    architecture-independent package serves every Mint edition and release.
+    A sources file written by 1.8.x still names "stonking"; re-running the
+    README installation block, or replacing that suite name with "mint", is
+    enough to keep upgrading (the keyring does not change).
+  * Rewrite the README installation section to match the youtube repository:
+    one subshell that downloads the keyring into a temporary directory, prints
+    the 40-character fingerprint for confirmation, writes the deb822
+    .sources file with Signed-By, and then documents upgrade, removal and
+    local package installation, including the expected
+    "Hit: ... mint InRelease" line.
+  * Say the default session first: on X11 automatic paste needs only xclip and
+    xdotool, with no /dev/uinput, no pastex group and permission checks that
+    are reported as not needed. The Wayland clipboard owner
+    (ext-data-control-v1) is described as applying only to compositors that
+    implement it, and panel wording replaces dock wording throughout.
+  * Translate every remaining Indonesian string into English: the startup line
+    is now "[paste] ready: copy=... paste=... ydotoold=running|not-running",
+    the clipboard abort message reads "aborted: the window was already
+    restored", and the paste log lines, code comments and test messages are
+    English.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 12:00:00 +0000
+
 pastex (1.8.2-1) unstable; urgency=medium
 
   * Fix one-click paste doing nothing on GNOME. The log said "window manager

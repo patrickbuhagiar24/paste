@@ -22,7 +22,7 @@ if [[ $# -lt 2 || $# -gt 3 ]]; then
 fi
 package_dir=$(realpath -m "$1")
 output_dir=$(realpath -m "$2")
-suite=${3:-stonking}
+suite=${3:-mint}
 if [[ ! "$suite" =~ ^[a-z][a-z0-9-]*$ ]]; then
   echo 'Invalid APT suite name.' >&2
   exit 2

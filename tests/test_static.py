@@ -1,8 +1,8 @@
-"""Uji statis: tangkap NameError tanpa perlu menjalankan GUI.
+"""Static tests: catch NameError without running the GUI.
 
-Regresi v1.0.3: `threading` dipakai di app.py tetapi tidak pernah diimpor,
-sehingga tombol Salin/Paste melempar NameError di mesin pengguna — padahal
-seluruh uji lolos karena jalur GUI tidak dijalankan tanpa display.
+v1.0.3 regression: app.py used `threading` without importing it, so the
+Copy/Paste buttons raised NameError on a user machine — while every test
+passed, because the GUI path is not exercised without a display.
 """
 
 import ast
@@ -13,7 +13,7 @@ PKG = Path(__file__).resolve().parent.parent / "pastex"
 
 
 def _bound_names(tree: ast.AST) -> set[str]:
-    """Semua nama yang diikat di modul: impor, definisi, target assign."""
+    """Every name bound in a module: imports, definitions, assignment targets."""
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -63,18 +63,18 @@ def test_no_undefined_names_in_package():
         missing = _used_names(tree) - _bound_names(tree) - known_builtins
         if missing:
             problems[path.name] = sorted(missing)
-    assert not problems, f"nama tidak terdefinisi: {problems}"
+    assert not problems, f"undefined names: {problems}"
 
 
 def test_app_module_imports_threading():
-    """Tombol Salin/Paste memakai thread latar."""
+    """The Copy/Paste buttons use a background thread."""
     from pastex import app
 
     assert hasattr(app, "threading")
 
 
 def test_modules_import_cleanly_without_display(monkeypatch):
-    """Semua modul harus bisa diimpor tanpa X/Wayland (CLI tetap jalan)."""
+    """Every module must import without X/Wayland (so the CLI still works)."""
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     import importlib
@@ -98,19 +98,19 @@ def _control_recommends(text: str) -> list[str]:
 
 
 def test_build_deb_recommends_matches_debian_control():
-    """Dua sumber Recommends (control & build-deb.sh) tidak boleh menyimpang."""
+    """The two Recommends sources (control & build-deb.sh) must not diverge."""
     control = _control_recommends((ROOT / "debian" / "control").read_text())
     script = _control_recommends((ROOT / "scripts" / "build-deb.sh").read_text())
     assert control == script, f"control={control} build-deb={script}"
 
 
 def test_reader_tools_declared_in_recommends():
-    """Setiap tool pembaca/pembuat clipboard yang dipakai kode harus diusulkan
-    sebagai paket, supaya pengguna tidak menemui fitur mati diam-diam."""
+    """Every clipboard tool the code calls must be suggested as a package, so
+    users do not hit a dead feature without any hint."""
     from pastex.clipboard import READER_TOOLS
 
     recommends = _control_recommends((ROOT / "debian" / "control").read_text())
-    # nama perintah -> paket Debian
+    # command name -> Debian package
     package_of = {
         "wl-paste": "wl-clipboard",
         "wl-copy": "wl-clipboard",
@@ -120,24 +120,24 @@ def test_reader_tools_declared_in_recommends():
         "ydotool": "ydotool",
     }
     needed = {package_of[t] for t in READER_TOOLS if t in package_of}
-    needed |= {"wl-clipboard", "ydotool"}  # salin Wayland + paste Wayland
+    needed |= {"wl-clipboard", "ydotool"}  # copy + paste on Wayland
     missing = needed - set(recommends)
-    assert not missing, f"paket belum ada di Recommends: {sorted(missing)}"
+    assert not missing, f"packages missing from Recommends: {sorted(missing)}"
 
 
 def test_docs_do_not_promise_removed_tk_clipboard():
-    """Fallback clipboard Tk dihapus di v1.4.0; dokumen tidak boleh menjanjikannya."""
+    """The Tk clipboard fallback was removed in v1.4.0; docs must not promise it."""
     for name in ("README.md", "debian/control"):
         text = (ROOT / name).read_text().lower()
         assert "fallback clipboard" not in text, (
-            f"{name} masih menjanjikan fallback clipboard"
+            f"{name} still promises a clipboard fallback"
         )
 
 
 def test_package_description_matches_between_sources():
-    """build-deb.sh menulis deskripsi sendiri; klaimnya tidak boleh menyimpang
-    dari debian/control (regresi v1.4.2: 'fallback clipboard internal' masih
-    tertinggal di .deb meski sudah dihapus dari control)."""
+    """build-deb.sh writes its own description; its claims must not diverge
+    from debian/control (v1.4.2 regression: an internal clipboard fallback
+    was still in the .deb after being dropped from control)."""
 
     def description_lines(text: str) -> list[str]:
         lines, capture = [], False
@@ -155,8 +155,8 @@ def test_package_description_matches_between_sources():
 
     control = description_lines((ROOT / "debian" / "control").read_text())
     script = description_lines((ROOT / "scripts" / "build-deb.sh").read_text())
-    assert control, "deskripsi control tidak terbaca"
+    assert control, "the control description could not be read"
     assert control == script, (
-        "deskripsi di .deb (build-deb.sh) berbeda dari debian/control:\n"
+        "the description in the .deb (build-deb.sh) differs from debian/control:\n"
         f"control   = {control}\nbuild-deb = {script}"
     )

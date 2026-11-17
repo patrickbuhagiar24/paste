@@ -57,7 +57,7 @@ def current_user() -> str:
     """Return the name of the non-root user running the app."""
     try:
         return pwd.getpwuid(os.getuid()).pw_name
-    except KeyError:  # pragma: no cover - sangat jarang
+    except KeyError:  # pragma: no cover - very unlikely
         return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
 
 

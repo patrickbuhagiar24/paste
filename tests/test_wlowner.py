@@ -1,8 +1,8 @@
-"""Uji klien pemilik clipboard Wayland (pastex/wlowner.py).
+"""Tests for the Wayland clipboard owner client (pastex/wlowner.py).
 
-Helper-nya sendiri adalah proses terpisah; di sini subprocess diganti tiruan
-supaya protokol JSON, timeout, deteksi kematian helper, dan self-test bisa
-diuji tanpa kompositor.
+The helper is a separate process; here subprocess is replaced by a stand-in
+so the JSON protocol, timeouts, helper death detection and the self-test can
+run without a compositor.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from pastex import wlowner
 
 
 class BlockingStdout:
-    """Stdout tiruan yang tidak pernah mengirim baris (untuk uji timeout)."""
+    """Fake stdout that never yields a line (for the timeout test)."""
 
-    def readline(self):  # pragma: no cover - dipakai lewat thread
+    def readline(self):  # pragma: no cover - reached from a thread
         time.sleep(5)
         return ""
 
@@ -35,7 +35,7 @@ class FakeStream(io.StringIO):
         self.block = block
 
     def readline(self, *args):
-        if self.block:  # pragma: no cover - dipakai lewat thread
+        if self.block:  # pragma: no cover - reached from a thread
             time.sleep(5)
             return ""
         return super().readline(*args)
@@ -59,7 +59,7 @@ class FakeProcess:
         self.waited += 1
         return 0
 
-    def terminate(self):  # pragma: no cover - hanya untuk helper keras kepala
+    def terminate(self):  # pragma: no cover - only for a stubborn helper
         self.terminated += 1
         self._alive = False
 
@@ -97,7 +97,7 @@ def test_start_reports_a_helper_that_exits_immediately():
 
 def test_start_reports_a_spawn_failure():
     def boom():
-        raise FileNotFoundError("python3 hilang")
+        raise FileNotFoundError("python3 missing")
 
     owner = wlowner.OwnerClipboard(spawn=boom)
     assert owner.start() is False
@@ -151,7 +151,7 @@ def test_copy_times_out_and_reports_failure():
     owner = wlowner.OwnerClipboard(
         spawn=lambda: process, start_timeout=5, copy_timeout=0.05
     )
-    # start() butuh baris ready; ambil dari antrean sebelum stdout memblokir.
+    # start() needs the ready line; read it before stdout blocks.
     owner._lines.put({"ready": True})
     owner.process = process
     assert owner.copy("halo") is False
@@ -202,7 +202,7 @@ class ScriptedOwner:
 
 
 class ServingOwner:
-    """Owner tiruan yang benar-benar "menyimpan" teksnya, seperti kompositor."""
+    """Fake owner that actually "holds" the text, like a compositor."""
 
     def __init__(self, store):
         self.store = store
@@ -229,7 +229,7 @@ def test_verify_polls_until_the_selection_is_readable():
 
     def reader():
         reads["count"] += 1
-        # Baris pertama belum siap: kompositor butuh waktu.
+        # The first line is not ready yet: the compositor needs a moment.
         return "" if reads["count"] == 1 else store["value"]
 
     ok, _detail = wlowner.verify(ServingOwner(store), reader, attempts=3, delay=0)
@@ -239,7 +239,7 @@ def test_verify_polls_until_the_selection_is_readable():
 
 def test_verify_rejects_an_owner_that_never_serves_it():
     owner = ScriptedOwner()
-    ok, detail = wlowner.verify(owner, lambda: "teks lama", attempts=3, delay=0)
+    ok, detail = wlowner.verify(owner, lambda: "old text", attempts=3, delay=0)
     assert ok is False
     assert "not readable" in detail
 
@@ -254,7 +254,7 @@ def test_verify_reports_when_the_owner_refuses_the_copy():
 def test_verify_restores_the_previous_clipboard():
     owner = ScriptedOwner()
     restored: list[str] = []
-    seen = {"value": "isi lama"}
+    seen = {"value": "old body"}
 
     def reader():
         return seen["value"]
@@ -268,7 +268,7 @@ def test_verify_restores_the_previous_clipboard():
         owner, reader, restore=restored.append, attempts=1, delay=0
     )
     assert ok is True
-    assert restored == ["isi lama"]
+    assert restored == ["old body"]
 
 
 def test_verify_does_not_restore_an_empty_clipboard():

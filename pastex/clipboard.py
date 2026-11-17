@@ -1,9 +1,9 @@
 """Clipboard and automatic paste into another app with one click.
 
-Tool priority for Ubuntu 26.10 (GNOME, Wayland by default):
+Tool priority on Linux Mint (X11 by default, Wayland in the Cinnamon session):
 
-  Copy   : wl-copy (Wayland) -> xclip -> xsel
-  Paste  : ydotool (Wayland) -> xdotool (X11)
+  Copy   : xclip (X11) / wl-copy (Wayland) -> xsel
+  Paste  : xdotool (X11) / ydotool (Wayland)
   Check  : clipboard read-back is reserved for explicit diagnostics
 
 All subprocess calls use an injectable ``runner``, allowing tests to run
@@ -347,7 +347,7 @@ def _ydotoold_socket_exists() -> bool:
 def _spawn_private_ydotoold() -> bool:
     """Start a ydotoold we own, with a socket in XDG_RUNTIME_DIR.
 
-    Ubuntu ships ``ydotoold.service`` as a *system* unit, so
+    Some distributions ship ``ydotoold.service`` as a *system* unit, so
     ``systemctl --user start ydotoold.service`` fails on a stock install and
     automatic paste looked broken. A daemon started by the user with a
     user-owned socket needs no root: it only needs write access to
@@ -523,7 +523,7 @@ def simulate_paste(
     daemon_tried = False
     for name, cmd in plan.candidates:
         if stop():
-            errors.append("dibatalkan: jendela sudah dipulihkan")
+            errors.append("aborted: the window was already restored")
             break
         try:
             proc = _run_with_timeout(runner, cmd, PASTE_KEY_TIMEOUT)
@@ -563,7 +563,7 @@ def simulate_paste(
         detail = "; ".join(errors)
     elif session == "wayland":
         detail = (
-            "ydotool was not found; on GNOME Wayland, only ydotool "
+            "ydotool was not found; on Wayland, only ydotool "
             "can send Ctrl+V to native Wayland apps"
         )
     else:

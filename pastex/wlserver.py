@@ -2,7 +2,7 @@
 
 ``wl-copy`` forks, connects to the compositor, writes the data and stays alive:
 5-20 ms for every copy, on the click path. The data-control protocol
-(``ext-data-control-v1``, implemented by mutter/GNOME 47+) lets a client own the
+(``ext-data-control-v1``, implemented by mutter-based compositors) lets a client own the
 selection directly, so a copy becomes a couple of marshalled messages.
 
 This module is the *helper*: a tiny process that connects to the compositor,

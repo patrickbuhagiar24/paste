@@ -1,53 +1,85 @@
 # Pastex
 
-Pastex is a desktop app for organizing and pasting text snippets from `.txt` files on Ubuntu (GNOME Wayland and X11). Arrange files in folders, hover to preview, and click a text file once to paste it into the previously active app.
+Pastex is a desktop app for organizing and pasting text snippets from `.txt` files on **Linux Mint** (Cinnamon, MATE and Xfce; X11 by default, and the Cinnamon Wayland session). Arrange files in folders, hover to preview, and click a text file once to paste it into the previously active app.
 
-## Install
+## Install on Linux Mint through APT only
 
-Pastex is installed through APT on Ubuntu 26.10. Choose either the Launchpad PPA or the GitHub Pages APT repository. Each command is in a separate code block so GitHub shows an individual copy button for it.
+Linux Mint is the only supported target. The project ships a Debian package, a deb822 APT source, and a GitHub Pages publishing workflow that builds and signs the archive. The repository URL is:
 
-### Launchpad PPA
+```text
+https://patrickbuhagiar24.github.io/paste/
+```
+
+Linux Mint uses the repository suite **`mint`**. The suite is a fixed label for this archive (it is not a Mint codename), so one architecture-independent package serves Cinnamon, MATE and Xfce and every Mint release.
+
+**Availability:** these commands work after the maintainer completes [APT repository publishing](apt-repo/README.md), including enabling GitHub Pages under **Settings → Pages → Build and deployment → Source: GitHub Actions**. Once configured, pushes to `main` build and publish the signed repository automatically; the workflow can also be started manually. Adding packaging files to the source tree does not itself configure Pages or create a signing key.
+
+Obtain the **full 40-character signing-key fingerprint** from a trusted maintainer channel independent of the repository website. Do not use the fingerprint downloaded from the same website as your only verification. The commands below require Bash, `curl`, and `gpg` (provided by `gnupg`). They download the key into a private temporary directory and ask for the trusted fingerprint before changing system files. If it is unavailable or does not match, stop and contact the maintainer.
 
 ```bash
-sudo add-apt-repository ppa:unisys/pastex
+(
+  set -euo pipefail
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/archive-keyring.gpg" \
+    https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
+  fingerprint=$(gpg --batch --with-colons --show-keys "$tmpdir/archive-keyring.gpg" |
+    awk -F: '$1 == "pub" { count++; want = 1; next }
+      want && $1 == "fpr" { print $10; want = 0 }
+      END { if (count != 1) exit 1 }')
+  [[ "$fingerprint" =~ ^[A-F0-9]{40}$ ]] || { echo 'Invalid key fingerprint.' >&2; exit 1; }
+  printf 'Downloaded key fingerprint: %s\n' "$fingerprint"
+  read -r -p 'Enter the independently verified fingerprint: ' expected
+  expected=${expected//[[:space:]]/}
+  [[ "${expected^^}" == "$fingerprint" ]] || { echo 'Fingerprint mismatch; nothing installed.' >&2; exit 1; }
+  cat > "$tmpdir/pastex.sources" <<'EOF'
+Types: deb
+URIs: https://patrickbuhagiar24.github.io/paste/
+Suites: mint
+Components: main
+Architectures: all
+Signed-By: /etc/apt/keyrings/pastex.gpg
+EOF
+  sudo install -d -m 0755 /etc/apt/keyrings
+  sudo install -m 0644 "$tmpdir/archive-keyring.gpg" /etc/apt/keyrings/pastex.gpg
+  sudo install -m 0644 "$tmpdir/pastex.sources" /etc/apt/sources.list.d/pastex.sources
+  sudo apt update
+  sudo apt install pastex
+)
 ```
+
+The local source explicitly scopes the verified key to this repository. No unsigned fallback, `Trusted: yes`, or `apt-key` is used. If a command fails, the subshell stops and removes its temporary directory. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it). APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`.
+
+That is the whole installation. `apt update` reports `Hit:… https://patrickbuhagiar24.github.io/paste mint InRelease`, which proves the metadata is signed and verified.
+
+If you installed a 1.8.x package before, the archive suite was renamed from `stonking` to `mint`. A `pastex.sources` written by the older instructions still asks for `stonking`, so `apt update` reports `404` for that suite and `apt upgrade` sees nothing new. Re-run the block above, or change `Suites: stonking` to `Suites: mint` in `/etc/apt/sources.list.d/pastex.sources`; the keyring does not need to be installed again.
+
+On Linux Mint, automatic paste needs only `xclip` and `xdotool` (both in the Mint repositories); the package recommends them, and the Mint Wayland session additionally uses `ydotool`. Nothing else has to be configured.
+
+### Upgrade
 
 ```bash
 sudo apt update
+sudo apt upgrade
 ```
 
+Settings under `~/.config/pastex` and your snippets are preserved.
+
+### Remove
+
 ```bash
-sudo apt install pastex
+sudo apt remove pastex
 ```
 
-PPA uploads are started manually by a maintainer when requested; pushing ordinary source changes does not upload a package to the PPA. Launchpad must finish building and publishing the package before APT can install it.
+User settings and snippets under `~/.config/pastex` and `~/.local/share/pastex` are left in place.
 
-### GitHub Pages APT repository
+### Local package installation
 
-The published archive is a standard APT repository at `https://patrickbuhagiar24.github.io/paste/` with the suite **`stonking`** (the Ubuntu 26.10 codename), a signed `dists/stonking/InRelease`, and packages under `pool/main/p/pastex/`.
-
-Verify [the signing-key fingerprint](https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt) against the fingerprint published by the maintainer before installing the key:
+If you have a built package instead of the published repository:
 
 ```bash
-sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt
-curl -fsSL --proto '=https' -o /tmp/pastex.gpg https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
-gpg --show-keys --with-fingerprint /tmp/pastex.gpg
-sudo install -m 0644 /tmp/pastex.gpg /etc/apt/keyrings/pastex.gpg
-curl -fsSL -o /tmp/pastex.sources https://patrickbuhagiar24.github.io/paste/pastex.sources
-sudo install -m 0644 /tmp/pastex.sources /etc/apt/sources.list.d/pastex.sources
-sudo apt update
-sudo apt install pastex
-```
-
-Both fingerprints must match. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it), and `/etc/apt/trusted.gpg.d` would trust this key for every repository. APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`; a file only root can read makes `apt update` reject the repository. Downloading to `/tmp` first also keeps a failed `curl` from writing an empty keyring as root.
-
-`apt update` then reports `Hit:… https://patrickbuhagiar24.github.io/paste stonking InRelease`, which proves the metadata is signed and verified. If the archive is published without a signing key, install `pastex-unsigned.sources` instead (it sets `Trusted: yes`).
-
-Upgrading from the old flat `./` repository: delete `/etc/apt/sources.list.d/pastex.list` and the keyring it used, then follow the steps above.
-
-```bash
-sudo rm -f /etc/apt/sources.list.d/pastex.list /usr/share/keyrings/pastex.gpg
+sudo apt install ./dist/pastex_1.9.0-1_all.deb
 ```
 
 ## Use
@@ -59,7 +91,7 @@ sudo rm -f /etc/apt/sources.list.d/pastex.list /usr/share/keyrings/pastex.gpg
 
 Press `Enter` to paste the selected text file, `F5` to refresh, `F2` to edit the selected item, and `Delete` to remove it. Folders are not pasted.
 
-Pasting minimizes Pastex so the dock entry stays visible, and the two slow halves of the paste run in parallel: the window is minimized first (the window manager needs a few milliseconds to hand focus back) while the text is copied in a worker thread, and Ctrl+V is sent as soon as both are done — normally on the window manager's unmap signal rather than after a fixed delay. Clipboard and paste tools are resolved once at startup, and on Wayland `ydotoold` is started then too, so the first click is as fast as the rest. Pastex never unmaps its window, so the dock icon cannot disappear: if a window manager refuses to minimize, Pastex keeps the window visible, leaves the text on the clipboard, and asks you to press `Ctrl+V` instead of pasting for you. Because a compositor answers `iconify()` asynchronously, the state is re-checked every 20 ms for up to 300 ms (with one repeated request for compositors that ignore the first), so a slow minimize no longer cancels the paste. `restore_delay` in `~/.config/pastex/settings.json` (seconds, default `0.03`) only controls how long Pastex waits before its window comes back; lower it to return sooner, raise it if a target app loses the paste.
+Pasting minimizes Pastex so its panel entry stays visible, and the two slow halves of the paste run in parallel: the window is minimized first (the window manager needs a few milliseconds to hand focus back) while the text is copied in a worker thread, and Ctrl+V is sent as soon as both are done — normally on the window manager's unmap signal rather than after a fixed delay. Clipboard and paste tools are resolved once at startup, and on Wayland `ydotoold` is started then too, so the first click is as fast as the rest. Pastex never unmaps its window, so the panel icon cannot disappear: if a window manager refuses to minimize, Pastex keeps the window visible, leaves the text on the clipboard, and asks you to press `Ctrl+V` instead of pasting for you. Because a compositor answers `iconify()` asynchronously, the state is re-checked every 20 ms for up to 300 ms (with one repeated request for compositors that ignore the first), so a slow minimize no longer cancels the paste. `restore_delay` in `~/.config/pastex/settings.json` (seconds, default `0.03`) only controls how long Pastex waits before its window comes back; lower it to return sooner, raise it if a target app loses the paste.
 Use the `Up` and `Down` arrow keys to move through the list without pasting, and `Ctrl+Up` / `Ctrl+Down` to move the current item up or down inside its folder.
 The darker highlight follows the row you last clicked, right-clicked, edited, or reached with the arrow keys; a right-click in Select mode leaves it unchanged.
 
@@ -67,35 +99,32 @@ The darker highlight follows the row you last clicked, right-clicked, edited, or
 
 `pastex --pick` (also the **Paste a Snippet** desktop action) opens a frameless
 list at the pointer. Type to filter, `Up`/`Down` to move, `Enter` to paste,
-`Esc` to cancel. Because the picker is a popup with no dock entry, selecting a
+`Esc` to cancel. Because the picker is a popup with no panel entry, selecting a
 snippet never minimizes or unmaps the main window: the application behind the
 popup keeps the focus and receives `Ctrl+V`. Bind it to a key of your choice,
 for example Super+V:
 
-```bash
-# GNOME: Settings -> Keyboard -> Custom Shortcuts, Command: pastex --pick
-gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
-  "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/']"
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ name 'Pastex picker'
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ binding '<Super>v'
-gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ command 'pastex --pick'
-```
+In Linux Mint, open **Menu → Preferences → Keyboard → Shortcuts → Custom
+Shortcuts**, add an entry with the command `pastex --pick`, and assign `Super+V`
+(or any free combination). The same shortcut works in MATE and Xfce; in Xfce it
+lives under **Settings → Keyboard → Application Shortcuts**.
 
 ### One running instance
 
 The first Pastex process takes a lock in `$XDG_RUNTIME_DIR/pastex/` and listens
 on a socket there, so later launches (`pastex`, `pastex --pick`) hand the
 request to it and exit immediately instead of starting a second Tk process
-(~200-400 ms) or a second dock entry. `--dir` sessions stay separate on
+(~200-400 ms) or a second panel entry. `--dir` sessions stay separate on
 purpose, because they use different folders.
 
 ### Faster copies (experimental, opt-in)
 
 Every copy normally runs `wl-copy`, which forks, connects to the compositor and
 daemonises: 5-20 ms on the click path. Pastex can instead own the Wayland
-selection itself through the data-control protocol
-(`ext-data-control-v1`, GNOME 47+/mutter), which turns a copy into a couple of
-marshalled messages:
+selection itself through the data-control protocol (`ext-data-control-v1`),
+which turns a copy into a couple of marshalled messages. This only applies to a
+Wayland session whose compositor implements that protocol; in the default X11
+session `xclip` already runs without a compositor round trip:
 
 ```bash
 pastex --wayland-clipboard      # opt in; remembered in settings.json
@@ -133,7 +162,7 @@ refresh. If inotify is unavailable, `F5` still works as before.
 - Select and reorder text files and folders from the context menu.
 - Choose one source folder; new and edited snippets are saved there.
 - Persistent folder expansion state and custom item order.
-- Clipboard tools: `wl-copy`, `xclip`, or `xsel`; paste simulation: `ydotool` or `xdotool`.
+- Clipboard tools: `xclip` or `xsel` (X11, the Mint default) and `wl-copy` (Wayland); paste simulation: `xdotool` (X11) or `ydotool` (Wayland).
 - Frameless snippet picker (`--pick`) that pastes without touching the main window.
 - One running instance with instant re-launch, inotify-driven live refresh,
   and repaints that update rows in place.
@@ -143,9 +172,9 @@ refresh. If inotify is unavailable, `F5` still works as before.
 
 ## Clipboard and permissions
 
-Pastex uses `wl-clipboard` on Wayland where available, and `xclip` or `xsel` on X11. Automatic paste on Wayland uses `ydotool` and `/dev/uinput`; X11 can use `xdotool`.
+Linux Mint starts an **X11** session by default, where Pastex copies with `xclip` (or `xsel`) and sends `Ctrl+V` with `xdotool`. Neither tool needs `/dev/uinput` access, a group membership, or a daemon, so on a default Mint install automatic paste works as soon as the recommended packages are installed. In the Cinnamon Wayland session, clipboard access uses `wl-clipboard` and automatic paste uses `ydotool` with `/dev/uinput`.
 
-On first launch, Pastex checks for clipboard and paste tools, the current display session, `/dev/uinput` access, and the `ydotoold` service before you select a snippet. The check does not write a test value to the clipboard. If permission setup is available, Pastex asks before requesting administrator authorization; missing packages are reported with install instructions.
+On first launch, Pastex checks for clipboard and paste tools, the current display session (X11 or Wayland), `/dev/uinput` access and the `ydotoold` service before you select a snippet. On X11 the permission checks are reported as not needed, because `xdotool` uses XTEST. The check does not write a test value to the clipboard. If permission setup is available, Pastex asks before requesting administrator authorization; missing packages are reported with install instructions.
 
 If paste does not work, inspect the environment:
 
@@ -161,9 +190,9 @@ injects `Ctrl+V` without root and without `/dev/uinput`; the desktop asks for
 permission once per session. The portal needs `python3-dbus` (a recommended
 package), and `pastex --check` reports whether it is available.
 
-Pastex starts `ydotoold` for you: it asks the user unit first, and when that
-unit does not exist (Ubuntu ships `ydotoold.service` as a *system* unit, which
-needs root) it launches `ydotoold` with a socket it owns in
+In a Wayland session Pastex starts `ydotoold` for you: it asks the user unit
+first, and when that unit does not exist (`ydotoold.service` is a *system* unit,
+which needs root) it launches `ydotoold` with a socket it owns in
 `$XDG_RUNTIME_DIR` and points `ydotool` at that socket. Everything still depends
 on `/dev/uinput` access, so run `pastex --enable-permissions` once.
 
@@ -205,7 +234,7 @@ A chosen source folder is remembered between sessions. The `--dir` option only a
 
 ## Maintainer checks
 
-The application is distributed to users through APT. To run the test suite on Ubuntu, install the test prerequisites with APT and run the tests from the checkout:
+The application is distributed to users through APT. To run the test suite on Linux Mint, install the test prerequisites with APT and run the tests from the checkout:
 
 ```bash
 sudo apt install python3-pytest python3-tk xvfb xauth x11-utils

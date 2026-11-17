@@ -1,4 +1,4 @@
-"""Uji watcher inotify: parsing event, koalisi, dan jalur gagal yang aman."""
+"""inotify watcher tests: event parsing, coalescing, and safe failure paths."""
 
 import struct
 import sys
@@ -51,16 +51,16 @@ def test_events_are_coalesced(tmp_path, monkeypatch):
     for _ in range(5):
         watcher.handle_events([(1, watcher_module.IN_MODIFY, "a.txt")])
 
-    assert calls == [1], "satu burst tulisan hanya memicu satu refresh"
+    assert calls == [1], "one write burst triggers a single refresh"
     assert watcher.changes == 1
 
 
 def test_first_event_fires_even_on_a_clock_that_just_started(tmp_path, monkeypatch):
-    """Regresi CI: mesin yang baru boot punya monotonic() < coalesce.
+    """CI regression: a freshly booted machine has monotonic() < coalesce.
 
-    Dulu `_last` diinisialisasi 0.0, sehingga event pertama dibandingkan dengan
-    nol dan ditelan saat uptime lebih kecil dari `coalesce` — refresh inotify
-    pertama tidak pernah terjadi.
+    `_last` used to start at 0.0, so the first event was compared against zero
+    and swallowed while the uptime was below `coalesce` — the first inotify
+    refresh never happened.
     """
     monkeypatch.setattr(watcher_module.time, "monotonic", lambda: 0.0)
     calls = []
@@ -73,7 +73,7 @@ def test_first_event_fires_even_on_a_clock_that_just_started(tmp_path, monkeypat
 
 
 def test_coalesce_window_is_measured_from_the_last_callback(tmp_path, monkeypatch):
-    """Satu event setelah jendela berlalu memicu refresh berikutnya."""
+    """One event after the window has passed triggers the next refresh."""
     clock = {"now": 0.0}
     monkeypatch.setattr(watcher_module.time, "monotonic", lambda: clock["now"])
     calls = []
@@ -82,7 +82,7 @@ def test_coalesce_window_is_measured_from_the_last_callback(tmp_path, monkeypatc
     watcher.handle_events([(1, watcher_module.IN_MODIFY, "a.txt")])
     clock["now"] = 0.10
     watcher.handle_events([(1, watcher_module.IN_MODIFY, "a.txt")])
-    assert calls == [1], "masih di dalam jendela koalisi"
+    assert calls == [1], "still inside the coalescing window"
 
     clock["now"] = 0.30
     watcher.handle_events([(1, watcher_module.IN_MODIFY, "a.txt")])

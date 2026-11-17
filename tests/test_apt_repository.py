@@ -1,7 +1,7 @@
 """Tests for the signed, standard-layout APT archive published on Pages.
 
 The layout mirrors the repository used by ``patrickbuhagiar24/youtube`` so APT
-reports ``Hit: … https://patrickbuhagiar24.github.io/paste stonking InRelease``
+reports ``Hit: … https://patrickbuhagiar24.github.io/paste mint InRelease``
 instead of fetching a flat ``./ Packages`` index from a trusted host.
 """
 
@@ -24,12 +24,12 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_sources_file_uses_the_stonking_suite_and_keyring() -> None:
+def test_sources_file_uses_the_mint_suite_and_keyring() -> None:
     sources = _text(PACKAGING / "pastex.sources")
 
     assert "Types: deb" in sources
     assert "URIs: https://patrickbuhagiar24.github.io/paste/" in sources
-    assert "Suites: stonking" in sources
+    assert "Suites: mint" in sources
     assert "Components: main" in sources
     assert "Architectures: all" in sources
     assert "Signed-By: /etc/apt/keyrings/pastex.gpg" in sources
@@ -39,15 +39,15 @@ def test_sources_file_uses_the_stonking_suite_and_keyring() -> None:
 def test_unsigned_sources_file_marks_the_archive_trusted() -> None:
     sources = _text(PACKAGING / "pastex-unsigned.sources")
 
-    assert "Suites: stonking" in sources
+    assert "Suites: mint" in sources
     assert "Trusted: yes" in sources
     assert "Signed-By" not in sources
 
 
-def test_builder_defaults_to_the_stonking_suite_and_pool_layout() -> None:
+def test_builder_defaults_to_the_mint_suite_and_pool_layout() -> None:
     script = _text(SCRIPTS / "build-apt-repository.sh")
 
-    assert 'suite=${3:-stonking}' in script
+    assert 'suite=${3:-mint}' in script
     assert "pool/main/p/pastex" in script
     assert 'dists/$suite/main/binary-all/Packages' in script
     assert "dpkg-scanpackages --multiversion" in script
@@ -72,20 +72,20 @@ def test_signer_publishes_inrelease_and_keyrings() -> None:
 
 
 def test_release_writer_emits_suite_checksums(tmp_path: Path) -> None:
-    distribution = tmp_path / "dists" / "stonking"
+    distribution = tmp_path / "dists" / "mint"
     index = distribution / "main" / "binary-all"
     index.mkdir(parents=True)
     (index / "Packages").write_text("Package: pastex\n", encoding="utf-8")
     (index / "Packages.gz").write_bytes(b"\x1f\x8b\x08\x00")
 
     subprocess.run(
-        [sys.executable, str(SCRIPTS / "write-apt-release.py"), str(distribution), "stonking"],
+        [sys.executable, str(SCRIPTS / "write-apt-release.py"), str(distribution), "mint"],
         check=True,
     )
 
     release = _text(distribution / "Release")
-    assert "Suite: stonking" in release
-    assert "Codename: stonking" in release
+    assert "Suite: mint" in release
+    assert "Codename: mint" in release
     assert "Architectures: all" in release
     assert "Components: main" in release
     for label in ("MD5Sum:", "SHA1:", "SHA256:", "SHA512:"):
@@ -146,7 +146,7 @@ def _build_test_package(tmp_path: Path) -> Path:
 
 def _run_builder(packages: Path, site: Path, *, signed: bool) -> None:
     subprocess.run(
-        [str(SCRIPTS / "build-apt-repository.sh"), str(packages), str(site), "stonking"],
+        [str(SCRIPTS / "build-apt-repository.sh"), str(packages), str(site), "mint"],
         check=True,
         capture_output=True,
         env={
@@ -164,7 +164,7 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
     _run_builder(packages, site, signed=False)
 
     assert (site / "pool" / "main" / "p" / "pastex" / "pastex_1.6.8-1_all.deb").is_file()
-    index = site / "dists" / "stonking" / "main" / "binary-all"
+    index = site / "dists" / "mint" / "main" / "binary-all"
     packages_index = _text(index / "Packages")
     assert "Package: pastex" in packages_index
     # APT resolves the pool path from the index, so it must exist as published.
@@ -176,7 +176,7 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
     assert filename == "pool/main/p/pastex/pastex_1.6.8-1_all.deb"
     assert (site / filename).is_file()
     assert (index / "Packages.gz").is_file()
-    assert "Suite: stonking" in _text(site / "dists" / "stonking" / "Release")
+    assert "Suite: mint" in _text(site / "dists" / "mint" / "Release")
     assert (site / ".nojekyll").is_file()
     assert (site / "index.html").is_file()
     assert not (site / "override").exists()
@@ -212,7 +212,7 @@ def test_signed_archive_links_the_signed_sources_only(tmp_path: Path) -> None:
     assert not (site / "pastex-unsigned.sources").exists()
     assert "archive-keyring.gpg" in page
     assert "pastex.sources" in page
-    assert "dists/stonking/InRelease" in page
+    assert "dists/mint/InRelease" in page
     # The unsigned fallback must not be linked when it is not published.
     assert "pastex-unsigned.sources" not in page
     assert "uns:" not in page
@@ -251,10 +251,10 @@ def test_documentation_uses_the_signed_deb822_source() -> None:
     for document in (readme, apt_readme):
         assert "/etc/apt/keyrings/pastex.gpg" in document
         assert "pastex.sources" in document
-        assert "stonking" in document
+        assert "mint" in document
         assert "/paste/apt/" not in document.split("Migrating")[0]
 
-    assert "Hit:6 https://patrickbuhagiar24.github.io/paste stonking InRelease" in apt_readme
+    assert "Hit:6 https://patrickbuhagiar24.github.io/paste mint InRelease" in apt_readme
 
 
 FAKE_KEY_ID = "A" * 40
@@ -322,11 +322,11 @@ exit "${FAKE_GPGV_STATUS:-0}"
 
 def _prepare_archive(tmp_path: Path) -> Path:
     repository = tmp_path / "site"
-    index = repository / "dists" / "stonking" / "main" / "binary-all"
+    index = repository / "dists" / "mint" / "main" / "binary-all"
     index.mkdir(parents=True)
     (index / "Packages").write_text("Package: pastex\n", encoding="utf-8")
-    (repository / "dists" / "stonking" / "Release").write_text(
-        "Suite: stonking\n", encoding="utf-8"
+    (repository / "dists" / "mint" / "Release").write_text(
+        "Suite: mint\n", encoding="utf-8"
     )
     return repository
 
@@ -341,7 +341,7 @@ def _run_signer(tmp_path: Path, repository: Path, **overrides: str):
     }
     env.update(overrides)
     result = subprocess.run(
-        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "stonking"],
+        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "mint"],
         capture_output=True,
         text=True,
         check=False,
@@ -357,7 +357,7 @@ def test_signer_creates_inrelease_keyrings_and_source(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "successfully" in result.stdout
-    distribution = repository / "dists" / "stonking"
+    distribution = repository / "dists" / "mint"
     assert (distribution / "InRelease").read_text(encoding="utf-8").startswith("FAKE SIGNATURE")
     assert (distribution / "Release.gpg").is_file()
     assert "FAKE-BINARY-KEYRING" in (repository / "archive-keyring.gpg").read_text(
@@ -393,7 +393,7 @@ def test_signer_reports_a_missing_fingerprint(tmp_path: Path) -> None:
     bin_dir, call_log = _fake_gpg_tools(tmp_path)
 
     result = subprocess.run(
-        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "stonking"],
+        [str(SCRIPTS / "sign-apt-repository.sh"), str(repository), "mint"],
         capture_output=True,
         text=True,
         check=False,
@@ -411,7 +411,7 @@ def test_signer_hints_at_the_passphrase_when_signing_fails(tmp_path: Path) -> No
 
     assert result.returncode == 1
     assert "GPG_PASSPHRASE" in result.stderr
-    assert not (repository / "dists" / "stonking" / "InRelease").exists()
+    assert not (repository / "dists" / "mint" / "InRelease").exists()
 
 
 def test_workflow_exports_the_fingerprint_before_signing() -> None:

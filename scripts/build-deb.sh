@@ -58,14 +58,15 @@ Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-tk
 Conflicts: paste-teks
 Replaces: paste-teks
-Recommends: wl-clipboard, xclip, xsel, xdotool, ydotool, python3-dbus
-Description: One-click desktop text snippet manager for Ubuntu 26.10
+Recommends: xclip, xsel, xdotool, wl-clipboard, ydotool, python3-dbus
+Description: One-click desktop text snippet manager for Linux Mint
  Pastex displays .txt files in a hierarchy of folders.
  Click a text file once to copy its contents and send Ctrl+V to the previously
  active app. A preview, search, and built-in editor are also included.
  .
- Supports Ubuntu 26.10 (GNOME Wayland and X11), using wl-copy/xclip/xsel
- for clipboard access and ydotool/xdotool for automatic paste.
+ Supports Linux Mint (Cinnamon, MATE and Xfce): on the default X11 session it
+ uses xclip/xsel for the clipboard and xdotool for automatic paste, and in the
+ Cinnamon Wayland session wl-clipboard with ydotool.
  .
  Choose a source folder in the GUI. User snippets are stored under
  ~/.local/share/pastex/snippets and can be managed in the GUI.

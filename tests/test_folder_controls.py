@@ -85,7 +85,7 @@ def test_select_context_item_replaces_leftover_selection(gui, sample_root):
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app.tree.selection_set(folder)
     app._context_iid = text
     app.show_preview = lambda: None
@@ -115,7 +115,7 @@ def test_right_click_in_select_mode_shows_only_bulk_actions(gui, sample_root):
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app._select_mode = True
     app.tree.selection_set(folder, text)
     app.tree.identify_row = lambda _y: folder
@@ -312,7 +312,7 @@ def test_move_selection_from_different_folders_moves_each_group(gui, sample_root
     extra.write_text("extra", encoding="utf-8")
     app.refresh_tree()
     folder = str(sample_root / "Email")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app.tree.selection_set(folder)
     app.tree.selection_add(text)
 
@@ -326,7 +326,7 @@ def test_move_selection_from_different_folders_moves_each_group(gui, sample_root
     ]
     assert app.settings["order"][app_module._norm_path(folder)] == [
         "Zulu.txt",
-        "Balas.txt",
+        "Reply.txt",
     ]
 
 
@@ -439,22 +439,17 @@ def test_clickable_source_label_opens_chosen_source(gui, sample_root, monkeypatc
     assert calls == [["xdg-open", str(sample_root)]]
 
 
-def test_old_toolbar_controls_are_not_rendered_and_ppa_is_manual():
+def test_old_toolbar_controls_are_not_rendered_and_ppa_is_gone():
+    """Pastex targets Linux Mint only: no distro PPA workflow ships with it."""
     source = Path(app_module.__file__).read_text(encoding="utf-8")
-    workflow = (
-        Path(app_module.__file__).resolve().parent.parent
-        / ".github"
-        / "workflows"
-        / "publish-ppa.yml"
-    ).read_text(encoding="utf-8")
+    workflows = Path(app_module.__file__).resolve().parent.parent / ".github" / "workflows"
     assert '"📂 Open Folder"' not in source
     assert '"✏️ Edit"' not in source
     assert '"🗑 Delete"' not in source
     assert '"⊟ Collapse All"' not in source
     assert '"Always on top"' not in source
     assert "self.top_var" not in source
-    assert "workflow_dispatch:" in workflow
-    assert "push:" not in workflow
+    assert not (workflows / "publish-ppa.yml").exists()
 
 
 def test_add_text_selects_new_file_and_opens_editor(gui, dialogs, sample_root, monkeypatch):
@@ -548,7 +543,7 @@ def test_click_outside_tree_clears_remaining_select_mode_selection(gui, sample_r
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app._select_mode = True
     app.tree.selection_set(folder, text)
     app.menu = FakeMenu()
@@ -620,7 +615,7 @@ def test_left_click_moves_context_highlight_between_rows(gui, sample_root):
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app.menu = FakeMenu()
     app.do_paste = lambda: None
     app.show_preview = lambda: None
@@ -657,7 +652,7 @@ def test_right_click_in_select_mode_keeps_existing_context_highlight(gui, sample
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
-    text = str(sample_root / "Email" / "Balas.txt")
+    text = str(sample_root / "Email" / "Reply.txt")
     app._set_context_highlight(folder)
     app._select_mode = True
     app.tree.selection_set(folder, text)

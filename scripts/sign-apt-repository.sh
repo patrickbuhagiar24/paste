@@ -9,7 +9,7 @@ set -euo pipefail
 export LC_ALL=C
 
 repository=$(realpath -m "${1:?Usage: $0 REPOSITORY_DIRECTORY [SUITE]}")
-suite=${2:-stonking}
+suite=${2:-mint}
 if [[ ! "$suite" =~ ^[a-z][a-z0-9-]*$ ]]; then
   echo 'Invalid APT suite name.' >&2
   exit 2

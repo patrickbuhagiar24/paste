@@ -241,7 +241,7 @@ def default_roots() -> list[Path]:
     The final root is the write destination for newly created or edited files.
     """
     system_root = Path("/usr/share/pastex/snippets")
-    # Relatif terhadap paket (terpasang di /usr/share/pastex/pastex).
+    # Relative to the package (installed at /usr/share/pastex/pastex).
     package_root = Path(__file__).resolve().parent.parent / "snippets"
     roots: list[Path] = []
     for candidate in (system_root, package_root):

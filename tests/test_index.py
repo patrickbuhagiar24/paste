@@ -1,4 +1,4 @@
-"""Uji cache index: pemindaian sekali, teks di-cache, invalidate memaksa ulang."""
+"""Index cache tests: scan once, text cached, invalidate forces a rescan."""
 
 import sys
 from pathlib import Path
@@ -14,7 +14,7 @@ def _make_tree(root: Path) -> Path:
     folder.mkdir(parents=True)
     (folder / "Greeting.txt").write_text("Halo dunia", encoding="utf-8")
     (folder / "Receipt.txt").write_text("Total 42", encoding="utf-8")
-    (root / "Notes.txt").write_text("catatan", encoding="utf-8")
+    (root / "Notes.txt").write_text("note body", encoding="utf-8")
     return root
 
 
@@ -25,7 +25,7 @@ def test_nodes_are_scanned_once_until_invalidated(tmp_path):
     first = index.nodes()
     second = index.nodes()
 
-    assert first is second, "pohon yang sama harus dipakai ulang"
+    assert first is second, "the same tree must be reused"
     assert index.scans == 1
 
     index.invalidate()
@@ -70,7 +70,7 @@ def test_search_matches_names_and_contents(tmp_path):
     assert [node.name for node in index.search("hAlo")] == ["Greeting"]
     assert [node.name for node in index.search("total")] == ["Receipt"]
     assert index.search("") != []
-    assert index.search("tidak-ada") == []
+    assert index.search("not-there") == []
 
 
 def test_contents_are_read_once_across_searches(tmp_path, monkeypatch):
@@ -87,8 +87,8 @@ def test_contents_are_read_once_across_searches(tmp_path, monkeypatch):
 
     monkeypatch.setattr(index_module, "read_text", counting_read)
 
-    index.search("halo")
-    index.search("halo")
+    index.search("hello")
+    index.search("hello")
     index.search("total")
     index.search("greet")  # already matched by name, must not read files
 
@@ -110,14 +110,14 @@ def test_changed_file_is_read_again(tmp_path, monkeypatch):
     )
 
     target = root / "Notes.txt"
-    index.search("catatan")
+    index.search("note body")
     assert reads.count("Notes.txt") == 1
 
-    target.write_text("catatan baru yang lebih panjang", encoding="utf-8")
+    target.write_text("a new and longer note body", encoding="utf-8")
     # Different size guarantees the cache notices even on coarse mtime clocks.
-    index.search("baru")
+    index.search("longer")
     assert reads.count("Notes.txt") == 2
-    assert [node.name for node in index.search("baru")] == ["Notes"]
+    assert [node.name for node in index.search("longer")] == ["Notes"]
 
 
 def test_forget_drops_one_cached_file(tmp_path, monkeypatch):
@@ -134,9 +134,9 @@ def test_forget_drops_one_cached_file(tmp_path, monkeypatch):
         lambda path: reads.append(Path(path).name) or real_read(path),
     )
 
-    index.search("catatan")
+    index.search("note body")
     index.forget(root / "Notes.txt")
-    index.search("catatan")
+    index.search("note body")
 
     assert reads.count("Notes.txt") == 2
 
@@ -149,4 +149,4 @@ def test_missing_file_is_skipped(tmp_path):
     (root / "Notes.txt").unlink()
 
     # The cached tree still lists it, but reading must not raise out of search.
-    assert [node.name for node in index.search("catatan")] == []
+    assert [node.name for node in index.search("note body")] == []

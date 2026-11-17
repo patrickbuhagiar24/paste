@@ -1,10 +1,10 @@
-"""Uji helper pemilik clipboard Wayland (pastex/wlserver.py).
+"""Tests for the Wayland clipboard owner helper (pastex/wlserver.py).
 
-Yang diuji adalah bagian yang bisa diuji tanpa kompositor: tabel protokol
-(opcode + signature, dicocokkan dengan ext-data-control-v1), marshalling
-terhadap libwayland tiruan, penulisan payload ke fd, dan protokol JSON helper.
-Panggilan ctypes yang sesungguhnya hanya berjalan di mesin pengguna, dan
-kegagalannya selalu jatuh kembali ke `wl-copy` (lihat pastex/wlowner.py).
+What is covered here needs no compositor: the protocol table (opcode plus
+signature, matched against ext-data-control-v1), marshalling against a fake
+libwayland, payload writes to an fd, and the helper JSON protocol. The real
+ctypes calls only run on a user machine, and their failures always fall back
+to `wl-copy` (see pastex/wlowner.py).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pastex import wlserver
 
 # --- tabel protokol -------------------------------------------------------
 def test_interface_tables_match_ext_data_control_v1():
-    """Opcode dan signature harus sama dengan protocol XML."""
+    """Opcodes and signatures must match the protocol XML."""
     expected = {
         wlserver.MANAGER_INTERFACE: {
             "methods": [
@@ -63,7 +63,7 @@ def test_interface_tables_match_ext_data_control_v1():
 
 
 def test_core_interface_tables_match_wayland_xml():
-    """wl_registry dan wl_seat: satu-satunya bagian protokol inti yang dipakai."""
+    """wl_registry and wl_seat: the only core protocol pieces used."""
     registry = wlserver._SPECS[wlserver.REGISTRY_INTERFACE]
     assert [method[:2] for method in registry["methods"]] == [("bind", "usun")]
     assert [event[:2] for event in registry["events"]] == [
@@ -98,7 +98,7 @@ def test_interface_structs_are_built_and_cross_linked():
     assert get_device.types[0].contents.name == b"ext_data_control_device_v1"
     assert get_device.types[1].contents.name == b"wl_seat"
 
-    # offer("s") tidak punya argumen objek -> pointer NULL.
+    # offer("s") has no object argument -> NULL pointer.
     source = interfaces[wlserver.SOURCE_INTERFACE]
     offer = source.methods[0]
     assert not bool(offer.types[0])
@@ -147,7 +147,7 @@ class FakeLibrary:
     def wl_display_flush(self, _display):
         return 0
 
-    # dipakai oleh wait(); diuji terpisah
+    # used by wait(); tested separately
     def wl_display_prepare_read(self, _display):
         return 0
 
@@ -166,7 +166,7 @@ class FakeLibrary:
 
 def make_connection():
     connection = wlserver.Connection(FakeLibrary())
-    # Beri id awal supaya tabel marshalling lengkap tanpa menyentuh kompositor.
+    # Seed an initial id so the marshalling table is complete without a compositor.
     connection.display = 7
     connection.registry = 50
     connection.manager = 51
@@ -238,10 +238,10 @@ def test_copy_offers_every_mime_and_sets_the_new_selection():
         "text/plain": "halo",
     }
 
-    # Copy berikutnya: source lama di-destroy setelah yang baru dipakai.
+    # Next copy: the old source is destroyed once the new one is in use.
     previous = source
     connection.lib.calls.clear()
-    connection.copy({"text/plain;charset=utf-8": "kedua"})
+    connection.copy({"text/plain;charset=utf-8": "second"})
     destroyed = [call for call in connection.lib.calls if call[1] == previous]
     assert len(destroyed) == 1
     assert destroyed[0][2] == wlserver.SOURCE_DESTROY
@@ -265,30 +265,30 @@ def test_send_event_writes_the_payload_and_closes_the_fd():
     assert os.read(read_fd, 4096) == b"halo dunia"
     os.close(read_fd)
     with pytest.raises(OSError):
-        os.close(write_fd)  # helper sudah menutupnya
+        os.close(write_fd)  # the helper already closed it
     assert connection.served == 1
     connection.close()
 
 
 def test_send_event_answers_any_offered_text_mime():
     connection = make_connection()
-    connection.payload = {"text/plain": "isi"}
+    connection.payload = {"text/plain": "body"}
     read_fd, write_fd = os.pipe()
 
     connection._on_send(None, 60, b"UTF8_STRING", write_fd)
 
-    assert os.read(read_fd, 4096) == b"isi"
+    assert os.read(read_fd, 4096) == b"body"
     os.close(read_fd)
     connection.close()
 
 
 def test_send_event_survives_a_closed_reader():
     connection = make_connection()
-    connection.payload = {"text/plain;charset=utf-8": "isi"}
+    connection.payload = {"text/plain;charset=utf-8": "body"}
     read_fd, write_fd = os.pipe()
     os.close(read_fd)
 
-    connection._on_send(None, 60, b"text/plain;charset=utf-8", write_fd)  # tidak raise
+    connection._on_send(None, 60, b"text/plain;charset=utf-8", write_fd)  # must not raise
     connection.close()
 
 
@@ -326,7 +326,7 @@ def test_open_collects_globals_and_binds_them():
     binds = [call for call in connection.lib.calls if call[0] == "construct"]
     assert ("construct", connection.registry, 0, wlserver.MANAGER_INTERFACE) in binds
     assert ("construct", connection.registry, 0, "wl_seat") in binds
-    assert connection.device == connection.lib._next  # device dibangun terakhir
+    assert connection.device == connection.lib._next  # the device is built last
     connection.close()
 
 
@@ -367,7 +367,7 @@ class FakeConnection:
         while True:
             try:
                 payload, reply = commands.get_nowait()
-            except Exception:  # noqa: BLE001 - queue kosong
+            except Exception:  # noqa: BLE001 - empty queue
                 return
             self.copy(payload)
             reply({"ok": True, "id": self.served})
@@ -417,16 +417,16 @@ def test_main_requires_the_serve_flag(capsys):
 
 
 def test_real_libwayland_reports_a_missing_compositor(monkeypatch):
-    """Panggilan ctypes sesungguhnya: simbol benar dan kegagalan bersih.
+    """Real ctypes calls: correct symbols and a clean failure.
 
-    Dilewati bila libwayland-client tidak terpasang (mis. sandbox tanpa GNOME);
-    di mesin pengguna/CI tes ini menyentuh pustaka yang sebenarnya.
+    Skipped when libwayland-client is not installed (e.g. a sandbox with no
+    compositor); on a user machine or CI this touches the real library.
     """
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     try:
         library = wlserver.Library()
     except wlserver.OwnerError:
-        pytest.skip("libwayland-client tidak terpasang")
+        pytest.skip("libwayland-client is not installed")
 
     connection = wlserver.Connection(library)
     with pytest.raises(wlserver.OwnerError, match="could not connect"):
