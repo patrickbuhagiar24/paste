@@ -1,3 +1,10 @@
+pastex (1.6.6-1) unstable; urgency=medium
+
+  * Start Select mode with only the right-clicked row, discarding any leftover
+    selection from earlier clicks.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 00:20:00 +0000
+
 pastex (1.6.5-1) unstable; urgency=medium
 
   * Fix click, preview, and Select mode clearing behaviors, and add darker
