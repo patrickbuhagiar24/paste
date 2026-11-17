@@ -1277,6 +1277,20 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         repaint paths pass ``force=False`` to reuse the cached tree instead of
         touching the disk on every keystroke.
         """
+        started = time.monotonic()
+        try:
+            PastexApp._refresh_tree_now(self, force)
+        finally:
+            elapsed_ms = (time.monotonic() - started) * 1000
+            if elapsed_ms >= 300:
+                # A slow first paint is fine; a slow repaint blocks the click
+                # handler behind it, which used to look like a slow paste.
+                log_error(
+                    f"[index] the refresh took {elapsed_ms:.0f} ms "
+                    f"(force={force})"
+                )
+
+    def _refresh_tree_now(self, force: bool = True) -> None:
         previous_highlight = self.__dict__.get("_context_highlight_iid", "")
         self._hover_iid = ""
         self._context_highlight_iid = ""
@@ -1786,6 +1800,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # the clipboard, or typed with xdotool when the clipboard cannot hold it.
         self._paste_body = text
         self._paste_by_typing = False
+        # Every paste log line carries the offset from the click, so a slow
+        # click can be read from the log instead of guessed at.
+        self._paste_clicked_at = time.monotonic()
         # Only restore the window that was actually hidden.
         self._paste_restore_window = hide is None
         # Reset the hide diagnostics of the previous attempt.
@@ -1811,6 +1828,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self._send_paste()
             PastexApp._arm_paste_watchdog(self)
         _run_in_thread(self._paste_worker, text)
+
+    def _since_click(self) -> str:
+        """Return the time since the click that started this paste, as text."""
+        started = self.__dict__.get("_paste_clicked_at")
+        if started is None:
+            return "+? ms"
+        return f"+{(time.monotonic() - started) * 1000:.0f} ms"
 
     def _paste_tools_ready(self) -> bool:
         """False only when Ctrl+V is known to be impossible on this machine.
@@ -1897,7 +1921,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             result = ClipboardResult(ok=False, message=f"copy error: {exc}")
         elapsed_ms = (time.monotonic() - started) * 1000
         log_error(
-            f"[paste] copy: ok={result.ok} tool={result.tool} ({elapsed_ms:.0f} ms)"
+            f"[paste] copy: ok={result.ok} tool={result.tool} "
+            f"({elapsed_ms:.0f} ms, {PastexApp._since_click(self)})"
         )
         empty = False
         if result.ok:
@@ -1943,6 +1968,15 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         decide whether Ctrl+V or typing delivers the text -- reading first cost
         a second per click on a machine where both readers are slow.
         """
+        if self.__dict__.get("_clipboard_unreliable", False):
+            # This machine already proved it cannot be read back; the check
+            # costs a round trip through the GUI thread and two reads, so do
+            # not pay for it on every click.
+            log_error(
+                f"[paste] the clipboard was unusable on an earlier click "
+                f"({PastexApp._since_click(self)}); typing again"
+            )
+            return False
         started = time.monotonic()
         claimed = PastexApp._claim_the_clipboard(self, text)
         try:
@@ -1954,7 +1988,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if verdict is True:
             log_error(
                 f"[paste] clipboard verified in {took_ms:.0f} ms "
-                f"(tool={result.tool}, tk_owner={claimed})"
+                f"(tool={result.tool}, tk_owner={claimed}, "
+                f"{PastexApp._since_click(self)})"
             )
             return True
         if verdict is None:
@@ -1965,15 +2000,18 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return True
         log_error(
             f"[paste] the clipboard is empty or different after {took_ms:.0f} ms "
-            f"(tool={result.tool}, tk_owner={claimed}); claiming the selection "
-            "with Tk once more"
+            f"(tool={result.tool}, tk_owner={claimed}, "
+            f"{PastexApp._since_click(self)}); claiming the selection with Tk "
+            "once more"
         )
         if not claimed and PastexApp._claim_the_clipboard(self, text):
             if verify_clipboard(text) is not False:
                 log_error("[paste] the clipboard now holds the text (Tk owner)")
                 return True
+        self._clipboard_unreliable = True
         log_error(
-            "[paste] the clipboard still does not hold the text; "
+            "[paste] the clipboard still does not hold the text "
+            f"({PastexApp._since_click(self)}); "
             + (
                 "it will be typed instead"
                 if can_type_text(text)
@@ -1983,7 +2021,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return False
 
     def _claim_the_clipboard(self, text: str) -> bool:
-        """Make Tk own the CLIPBOARD selection (Tk calls must run on its thread)."""
+        """Make Tk own the CLIPBOARD selection (Tk calls must run on its thread).
+
+        Called from the copy worker, so the call itself has to be marshalled
+        through ``after()``. The wait is short on purpose: when the GUI thread
+        is busy the paste must not sit here for seconds.
+        """
         outcome: dict[str, bool] = {}
         done = threading.Event()
 
@@ -2003,7 +2046,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.after(0, claim)
         except TK_ERRORS:
             return False
-        return done.wait(1.5) and outcome.get("ok", False)
+        return done.wait(0.4) and outcome.get("ok", False)
 
     def _after_copy(self, result, clipboard_empty: bool = False) -> None:
         """Release the armed Ctrl+V once the clipboard holds the copied text."""
@@ -2366,17 +2409,25 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _paste_sender(self) -> None:
         typing = bool(self.__dict__.get("_paste_by_typing", False))
         log_error(
-            "[paste] typing the text with xdotool"
-            if typing
-            else "[paste] sending Ctrl+V"
+            (
+                "[paste] typing the text with xdotool"
+                if typing
+                else "[paste] sending Ctrl+V"
+            )
+            + f" ({PastexApp._since_click(self)})"
         )
+        if typing:
+            # Typing a long snippet takes as long as it takes; the call has its
+            # own timeout, so the paste deadline must not fire mid-sentence.
+            PastexApp._cancel_paste_watchdog(self)
         try:
             if typing:
                 typed_at = time.monotonic()
                 result = type_text_x11(self.__dict__.get("_paste_body", ""))
                 log_error(
                     f"[paste] typed {len(self.__dict__.get('_paste_body', ''))} "
-                    f"characters in {(time.monotonic() - typed_at) * 1000:.0f} ms"
+                    f"characters in {(time.monotonic() - typed_at) * 1000:.0f} ms "
+                    f"({PastexApp._since_click(self)})"
                 )
             else:
                 result = simulate_paste(

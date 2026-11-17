@@ -1,3 +1,24 @@
+pastex (1.10.8-1) unstable; urgency=medium
+
+  * Stop re-checking a clipboard that already proved unusable. The 1.10.7 log
+    showed the click taking seconds while the work itself was quick: the check
+    costs a round trip through the GUI thread plus two clipboard reads. Once a
+    click has proved that this machine's clipboard cannot be read back, later
+    clicks type the snippet straight away.
+  * Time every paste log line from the click. Each line now ends with the
+    offset (+180 ms), so a slow click can be read from the log instead of
+    guessed at, and a tree refresh that takes 300 ms or more is reported too,
+    because a slow repaint delays the click handler behind it.
+  * Do not cut a typed snippet short. Typing a long snippet takes as long as it
+    takes and the call has its own timeout, so the paste deadline no longer
+    fires mid-sentence; the timeout now grows with the text instead of being
+    fixed at eight seconds for anything longer than a line.
+  * Do not attempt the Pages deployment from a branch. The github-pages
+    environment only accepts deployments from main, so a branch build now
+    stops after building instead of failing with a protection-rule error.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 20:05:00 +0700
+
 pastex (1.10.7-1) unstable; urgency=medium
 
   * Bring the window back after the paste. Muffin reported wm state "normal"

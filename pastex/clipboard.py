@@ -742,7 +742,9 @@ def type_text_x11(text: str, runner: Runner = _default_runner) -> PasteResult:
                 "--file",
                 handle.name,
             ],
-            max(2.0, min(8.0, len(text) / 500 + 2)),
+            # Typing sends one key event per character (about 4 ms each on a
+            # real desktop), so the timeout has to grow with the text.
+            max(3.0, min(60.0, len(text) * 0.006 + 2)),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return PasteResult(ok=False, tool="xdotool", message=f"typing failed: {exc}")

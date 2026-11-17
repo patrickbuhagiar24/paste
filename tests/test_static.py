@@ -268,3 +268,11 @@ def test_descriptions_avoid_shell_metacharacters():
         description = text.split("Description:", 1)[1]
         assert "`" not in description, f"{name} uses a backtick"
         assert "$" not in description, f"{name} uses a shell variable"
+
+
+def test_the_deploy_job_only_runs_on_main():
+    """The github-pages environment rejects branch deployments; do not try."""
+    text = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text(encoding="utf-8")
+    deploy = text.split("  deploy:", 1)[1]
+    head = deploy.split("steps:", 1)[0]
+    assert "github.ref == 'refs/heads/main'" in head
