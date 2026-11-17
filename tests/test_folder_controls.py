@@ -81,7 +81,7 @@ def test_right_click_folder_menu_selects_without_paste(gui, sample_root):
     assert app.menu.releases == 1
 
 
-def test_select_context_item_adds_to_existing_selection(gui, sample_root):
+def test_select_context_item_replaces_leftover_selection(gui, sample_root):
     app = gui(roots=[sample_root])
     app.refresh_tree()
     folder = str(sample_root / "General")
@@ -92,7 +92,7 @@ def test_select_context_item_adds_to_existing_selection(gui, sample_root):
 
     app.select_context_item()
 
-    assert app.tree.selection() == (folder, text)
+    assert app.tree.selection() == (text,)
     assert app._select_mode is True
 
 

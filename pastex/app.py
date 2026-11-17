@@ -849,12 +849,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         return selection
 
     def select_context_item(self) -> None:
-        """Enter Select mode and include the row that opened the menu."""
+        """Enter Select mode with only the row that opened the menu selected."""
         iid = getattr(self, "_context_iid", "")
         if not iid or not self.tree.exists(iid):
             return
         self._select_mode = True
-        self.tree.selection_add(iid)
+        self.tree.selection_set(iid)
         self.tree.focus(iid)
         self.show_preview()
         self.status_var.set(
