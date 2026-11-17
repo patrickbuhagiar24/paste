@@ -1678,7 +1678,7 @@ def test_releasing_the_owner_restores_the_tools(gui, monkeypatch):
     app = gui(roots=[])
     app._clipboard_owner = owner
 
-    app.destroy()
+    app._release_clipboard_owner()
 
     assert owner.stopped == 1
     assert installed == [None], "copy harus kembali ke wl-copy"
@@ -1692,7 +1692,7 @@ def test_releasing_without_an_owner_does_nothing(gui, monkeypatch):
     monkeypatch.setattr(app_module, "set_clipboard_owner", installed.append)
     app = gui(roots=[])
 
-    app.destroy()
+    app._release_clipboard_owner()
 
     assert installed == []
 
@@ -1743,3 +1743,53 @@ def test_check_reports_the_clipboard_owner(capsys):
     out = capsys.readouterr().out
     assert "Clipboard owner:" in out
     assert "--wayland-clipboard" in out
+
+
+def test_closing_the_main_loop_releases_the_owner(monkeypatch):
+    """Keluar lewat jalur mana pun harus melepas pemilik clipboard."""
+    from pastex import app as app_module
+
+    released = []
+
+    class FakeApp:
+        def __init__(self, roots=None, transient_roots=False):
+            self.roots = roots
+
+        def mainloop(self):
+            released.append("loop-ended")
+
+        def _release_clipboard_owner(self):
+            released.append("owner-released")
+
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
+    monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
+
+    assert app_module.run_cli([]) == 0
+    assert released == ["loop-ended", "owner-released"]
+
+
+def test_a_crashing_main_loop_still_releases_the_owner(monkeypatch):
+    import pytest
+
+    from pastex import app as app_module
+
+    released = []
+
+    class FakeApp:
+        def __init__(self, roots=None, transient_roots=False):
+            self.roots = roots
+
+        def mainloop(self):
+            raise RuntimeError("Tk mati")
+
+        def _release_clipboard_owner(self):
+            released.append("owner-released")
+
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
+    monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
+
+    with pytest.raises(RuntimeError):
+        app_module.run_cli([])
+    assert released == ["owner-released"]

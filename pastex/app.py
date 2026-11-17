@@ -458,15 +458,6 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         except OSError:  # pragma: no cover - already gone
             pass
 
-    def destroy(self) -> None:
-        """Release the clipboard owner before the window goes away."""
-        self._release_clipboard_owner()
-        try:
-            base_destroy = super().destroy
-        except AttributeError:  # pragma: no cover - no Tk (test doubles)
-            return
-        base_destroy()
-
     def _start_first_run_setup_check(self) -> None:
         """Inspect paste prerequisites once, before the user clicks a snippet."""
         if getattr(self, "_setup_check_started", False):
@@ -2370,6 +2361,11 @@ def run_cli(argv: list[str] | None = None) -> int:
     finally:
         if instance is not None:
             instance.stop()
+        # Whatever ended the loop, stop owning the clipboard before exiting:
+        # a helper left behind would keep serving a dead window's selection.
+        release_owner = getattr(app, "_release_clipboard_owner", None)
+        if callable(release_owner):
+            release_owner()
     return 0
 
 

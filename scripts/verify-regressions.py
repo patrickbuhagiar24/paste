@@ -472,6 +472,16 @@ MUTATIONS = [
         ["tests/test_app.py::test_releasing_the_owner_restores_the_tools"],
     ),
     (
+        "the CLI leaves the clipboard owner running after the loop ends",
+        "pastex/app.py",
+        '        release_owner = getattr(app, "_release_clipboard_owner", None)\n        if callable(release_owner):\n            release_owner()',
+        '        release_owner = None\n        if callable(release_owner):\n            release_owner()',
+        [
+            "tests/test_app.py::test_closing_the_main_loop_releases_the_owner",
+            "tests/test_app.py::test_a_crashing_main_loop_still_releases_the_owner",
+        ],
+    ),
+    (
         "the clipboard helper starts even when the user did not opt in",
         "pastex/app.py",
         '        if self.__dict__.get("settings", {}).get("clipboard_owner"):\n            self._start_clipboard_owner()',
