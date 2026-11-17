@@ -310,6 +310,13 @@ MUTATIONS = [
         ["tests/test_folder_controls.py::test_tree_binds_arrow_navigation_and_ctrl_reorder"],
     ),
     (
+        "test doubles report a ready Tcl interpreter",
+        "pastex/app.py",
+        '        return self.__dict__.get("tk") is not None',
+        "        return True",
+        ["tests/test_folder_controls.py::test_mock_app_is_not_tcl_ready"],
+    ),
+    (
         "highlight is lost on refresh",
         "pastex/app.py",
         "        if previous_highlight:\n            self._set_context_highlight(previous_highlight)",
