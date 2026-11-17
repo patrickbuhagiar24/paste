@@ -109,11 +109,13 @@ def test_release_writer_rejects_an_invalid_suite(tmp_path: Path) -> None:
     assert "Invalid APT suite name" in result.stderr
 
 
-@pytest.mark.skipif(
+NEEDS_DPKG = pytest.mark.skipif(
     shutil.which("dpkg-scanpackages") is None or shutil.which("dpkg-deb") is None,
     reason="dpkg-dev is required to build a package index",
 )
-def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
+
+
+def _build_test_package(tmp_path: Path) -> Path:
     stage = tmp_path / "deb" / "DEBIAN"
     stage.mkdir(parents=True)
     (stage / "control").write_text(
@@ -139,14 +141,27 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
         check=True,
         capture_output=True,
     )
+    return packages
 
-    site = tmp_path / "site"
+
+def _run_builder(packages: Path, site: Path, *, signed: bool) -> None:
     subprocess.run(
         [str(SCRIPTS / "build-apt-repository.sh"), str(packages), str(site), "stonking"],
         check=True,
         capture_output=True,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "PASSTEX_SIGNED": "0"},
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PASSTEX_SIGNED": "1" if signed else "0",
+        },
     )
+
+
+@NEEDS_DPKG
+def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
+    packages = _build_test_package(tmp_path)
+    site = tmp_path / "site"
+
+    _run_builder(packages, site, signed=False)
 
     assert (site / "pool" / "main" / "p" / "pastex" / "pastex_1.6.8-1_all.deb").is_file()
     index = site / "dists" / "stonking" / "main" / "binary-all"
@@ -165,9 +180,56 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
     assert (site / ".nojekyll").is_file()
     assert (site / "index.html").is_file()
     assert not (site / "override").exists()
-    # Unsigned builds publish the trusted source file, never the keyring one.
+
+
+@NEEDS_DPKG
+def test_unsigned_archive_links_only_files_it_publishes(tmp_path: Path) -> None:
+    packages = _build_test_package(tmp_path)
+    site = tmp_path / "site"
+
+    _run_builder(packages, site, signed=False)
+
+    page = _text(site / "index.html")
     assert (site / "pastex-unsigned.sources").is_file()
     assert not (site / "pastex.sources").exists()
+    assert "pastex-unsigned.sources" in page
+    # Nothing signed is advertised while it does not exist.
+    assert "archive-keyring.gpg" not in page
+    assert "InRelease" not in page
+    assert "sgn:" not in page
+    assert "uns:" not in page
+
+
+@NEEDS_DPKG
+def test_signed_archive_links_the_signed_sources_only(tmp_path: Path) -> None:
+    packages = _build_test_package(tmp_path)
+    site = tmp_path / "site"
+
+    _run_builder(packages, site, signed=True)
+
+    page = _text(site / "index.html")
+    assert (site / "pastex.sources").is_file()
+    assert not (site / "pastex-unsigned.sources").exists()
+    assert "archive-keyring.gpg" in page
+    assert "pastex.sources" in page
+    assert "dists/stonking/InRelease" in page
+    # The unsigned fallback must not be linked when it is not published.
+    assert "pastex-unsigned.sources" not in page
+    assert "uns:" not in page
+    assert "sgn:" not in page
+
+
+def test_index_template_keeps_both_notice_blocks() -> None:
+    template = _text(PACKAGING / "apt-index.html")
+
+    assert "<!--sgn:start-->" in template
+    assert "<!--sgn:end-->" in template
+    assert "<!--uns:start-->" in template
+    assert "<!--uns:end-->" in template
+    # Marker names must not contain each other, or sed ranges would overlap.
+    assert "unsigned-notice" not in template
+    assert "signed-notice" not in template
+    assert template.index("<!--sgn:end-->") < template.index("<!--uns:start-->")
 
 
 def test_workflow_signs_and_verifies_before_deploying() -> None:
