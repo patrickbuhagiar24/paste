@@ -26,6 +26,10 @@ from .clipboard import (
     prewarm as prewarm_clipboard,
     simulate_paste,
 )
+from .index import SnippetIndex
+from .instance import SingleInstance, send_command
+from .picker import open_picker
+from .watcher import DirectoryWatcher
 from .snippets import (
     DEFAULT_SAMPLES,
     Node,
@@ -393,8 +397,13 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._search_after_id: str | None = None
         self._select_mode = False
         self.collapsed: set[str] = set()
+        # Snippet tree and file contents are cached so repaints and searches
+        # stop walking the disk (see pastex/index.py).
+        self.index = SnippetIndex()
+        self.watcher = None
         self._build_ui()
-        self.refresh_tree()
+        self.index.set_roots(self.active_roots())
+        self.refresh_tree(force=True)
         # Ensure the window is visible and focused (important when launched from a menu).
         self.deiconify()
         self.lift()
@@ -402,6 +411,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._center_window()
         # Resolve clipboard and paste tools off the click path.
         self._prewarm_paste()
+        # Follow the snippet folders instead of rescanning them.
+        self._start_watcher()
         if not self.settings.get("setup_assistant_seen", False):
             # Check in the background so system permission probes never delay startup.
             self.after(250, self._start_first_run_setup_check)
@@ -679,7 +690,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # iconify(); sending Ctrl+V on that signal is much faster than a
         # fixed delay, with FOCUS_SETTLE_MS kept only as a fallback.
         self.bind("<Unmap>", self._on_window_unmap, add="+")
-        self.bind("<F5>", lambda _e: self.refresh_tree())
+        self.bind("<F5>", lambda _e: self.refresh_tree(force=True))
         self.bind("<Escape>", lambda _e: self._exit_select_mode())
         self.bind(
             "<Control-f>", lambda _e: self.search_var.set("") or self._focus_search()
@@ -689,7 +700,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         """Debounce searches by 300 ms to avoid rescanning on every keystroke."""
         if self._search_after_id is not None:
             self.after_cancel(self._search_after_id)
-        self._search_after_id = self.after(300, self.refresh_tree)
+        # Filter the cached tree: no disk walk while the user types.
+        self._search_after_id = self.after(
+            180, lambda: self.refresh_tree(force=False)
+        )
 
     def _focus_search(self) -> None:
         if getattr(self, "search_entry", None) is not None:
@@ -700,7 +714,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         if self._search_after_id is not None:
             self.after_cancel(self._search_after_id)
             self._search_after_id = None
-        self.refresh_tree()
+        self.refresh_tree(force=False)
         return "break"
 
     def clear_search(self) -> None:
@@ -1177,18 +1191,27 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             )
             self._apply_saved_order(node.children)
 
-    def refresh_tree(self) -> None:
+    def refresh_tree(self, force: bool = True) -> None:
+        """Repaint the tree from the in-memory index.
+
+        ``force`` (the default) re-walks the folders first, so a caller that
+        just changed something on disk always sees the result. Search and
+        repaint paths pass ``force=False`` to reuse the cached tree instead of
+        touching the disk on every keystroke.
+        """
         previous_highlight = self.__dict__.get("_context_highlight_iid", "")
         self._hover_iid = ""
         self._context_highlight_iid = ""
         self.tree.delete(*self.tree.get_children())
         roots = self.active_roots()
-        nodes = scan_roots(roots)
+        if self.index.set_roots(roots):
+            force = True
+        nodes = self.index.nodes(force=force)
         self._apply_saved_order(nodes)
         has_roots = bool(nodes)
         query = self.search_var.get().strip()
         if query:
-            nodes = filter_tree(nodes, search_nodes(nodes, query))
+            nodes = filter_tree(nodes, self.index.search(query))
         # Expand all folders during search so results are visible. Otherwise,
         # restore the saved collapsed state.
         self.collapsed = set() if query else self._collapsed_paths()
@@ -1328,7 +1351,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.settings["source_dir"] = _norm_path(path)
         self.writable = path
         save_settings(self.settings)
-        self.refresh_tree()
+        self.refresh_tree(force=True)
+        if self.watcher is not None:
+            self.watcher.set_roots(self.active_roots())
         self.status_var.set(f"📁 Source folder: {path}")
         return path
 
@@ -1418,7 +1443,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             return
         self.current_file = path
         try:
-            text = read_text(path)
+            text = self.preview_text(path)
         except OSError as exc:
             text = f"(Could not read file: {exc})"
         self.preview.insert("1.0", text)
@@ -1426,6 +1451,96 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.info_var.set(
             f"{path.name} — {len(text)} characters, {len(text.split())} words\n{path}"
         )
+
+    # Both caches are properties so partially built test doubles (and code
+    # paths that run before __init__ finishes) still work.
+    @property
+    def index(self) -> SnippetIndex:
+        """Cached snippet tree and file contents."""
+        index = self.__dict__.get("_index")
+        if index is None:
+            index = SnippetIndex()
+            self._index = index
+        return index
+
+    @index.setter
+    def index(self, value: SnippetIndex) -> None:
+        self._index = value
+
+    @property
+    def watcher(self):
+        """inotify watcher for the snippet folders, when it could start."""
+        return self.__dict__.get("_watcher")
+
+    @watcher.setter
+    def watcher(self, value) -> None:
+        self._watcher = value
+
+    def preview_text(self, path) -> str:
+        """Text of ``path`` from the index cache, refreshed when it changed."""
+        return self.index.text(path)
+
+    # ---------- Picker and single instance ----------
+    def open_picker(self) -> None:
+        """Show the snippet picker popup (see pastex/picker.py)."""
+        popup = open_picker(self)
+        if popup is None:
+            self.status_var.set("The picker needs a display.")
+
+    def paste_path(self, path, hide=None) -> None:
+        """Copy ``path`` and send Ctrl+V; ``hide`` is the popup to close first."""
+        try:
+            text = self.preview_text(path)
+        except OSError as exc:
+            self.status_var.set(f"Could not read {path.name}: {exc}")
+            return
+        self._paste_text(text, hide=hide)
+
+    def _handle_instance_command(self, command: str) -> None:
+        """Runs on the instance socket thread: hand the command to Tk."""
+        try:
+            self.after(0, self._run_instance_command, command)
+        except TK_ERRORS:  # pragma: no cover - window already gone
+            pass
+
+    def _run_instance_command(self, command: str) -> None:
+        """Act on a command sent by a later ``pastex`` launch."""
+        if command == "pick":
+            self.open_picker()
+        elif command == "quit":
+            self.destroy()
+        else:
+            self.show_window()
+
+    def show_window(self) -> None:
+        """Bring the existing window back (used instead of a second process)."""
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    # ---------- Live refresh ----------
+    def _start_watcher(self) -> None:
+        """Watch the snippet folders so edits appear without pressing F5."""
+        if self.watcher is not None:
+            return
+        watcher = DirectoryWatcher(self.active_roots(), self._on_folders_changed)
+        self.watcher = watcher
+        if not watcher.start():
+            log_error("[index] inotify unavailable; manual refresh only")
+
+    def _on_folders_changed(self) -> None:
+        """Watcher thread callback: repaint on the Tk thread."""
+        try:
+            self.after(0, self._refresh_from_disk)
+        except TK_ERRORS:  # pragma: no cover - shutting down
+            pass
+
+    def _refresh_from_disk(self) -> None:
+        """Re-walk the folders once the change settles (and not mid-paste)."""
+        if getattr(self, "_pasting", False):
+            self.after(150, self._refresh_from_disk)
+            return
+        self.refresh_tree(force=True)
 
     # ---------- Copy and paste ----------
     def on_activate(self) -> None:
@@ -1456,10 +1571,22 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             self.status_var.set("Select a .txt file first.")
             return
         try:
-            text = read_text(path)
+            # Usually already read for the preview, so a click does not touch
+            # the disk at all.
+            text = self.preview_text(path)
         except OSError as exc:
             messagebox.showerror("Read failed", str(exc))
             return
+        self._paste_text(text)
+
+    def _paste_text(self, text: str, hide=None) -> None:
+        """Copy ``text`` and send Ctrl+V.
+
+        ``hide`` is the window to get out of the way: ``None`` means the main
+        window, which is minimized (never unmapped) and restored afterwards.
+        The picker passes its own popup, which is destroyed instead, leaving
+        the main window and the dock entry untouched.
+        """
         self._pasting = True
         self.status_var.set("Preparing to paste...")
         # Ctrl+V may only be sent once the clipboard owns the text, so the
@@ -1467,9 +1594,28 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # window manager refuses to minimize nothing is armed: keeping the
         # dock icon matters more than pasting, and Ctrl+V would land in Pastex.
         self._paste_clipboard_ready = False
-        if self._hide_for_paste():
+        self._paste_hide_widget = hide
+        # Only restore the window that was actually hidden.
+        self._paste_restore_window = hide is None
+        if hide is None:
+            hidden = self._hide_for_paste()
+        else:
+            hidden = self._hide_widget(hide)
+        if hidden:
             self._send_paste()
         _run_in_thread(self._paste_worker, text)
+
+    def _hide_widget(self, widget) -> bool:
+        """Destroy a helper window so focus returns to the target application.
+
+        Only popups use this: they carry no dock entry, so unmapping them
+        cannot remove the Pastex icon, and the main window stays visible.
+        """
+        try:
+            widget.destroy()
+        except TK_ERRORS:
+            return False
+        return True
 
     def _paste_worker(self, text: str) -> None:
         started = time.monotonic()
@@ -1557,7 +1703,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _on_window_unmap(self, event=None) -> None:
         """Send Ctrl+V once the window manager has hidden the window."""
         widget = getattr(event, "widget", None)
-        if widget is not None and widget is not self:
+        expected = self.__dict__.get("_paste_hide_widget", None)
+        if expected is None:
+            expected = self
+        if widget is not None and widget is not expected:
             return
         self._send_paste_now()
 
@@ -1614,9 +1763,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._paste_clipboard_ready = False
         # Explicit class call keeps partially-built test doubles working.
         PastexApp._cancel_paste_send_timeout(self)
-        self.deiconify()
+        # The picker never hid the main window, so leave the target app alone.
+        restore = self.__dict__.get("_paste_restore_window", True)
+        self._paste_hide_widget = None
+        if restore:
+            self.deiconify()
         if not result.ok:
-            self.lift()
+            if restore:
+                self.lift()
             self.status_var.set(f"📋 Text copied. {result.message}")
             self._show_paste_failure(result.message)
             return
@@ -1627,7 +1781,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         # The command succeeded but its effect is uncertain (for example, xdotool
         # on Wayland). Do not claim success; ask the user to verify.
         log_error("[paste] sent; success is not yet confirmed")
-        self.lift()
+        if restore:
+            self.lift()
         self.status_var.set(
             f"⚡ {result.message} If the text does not appear, press Ctrl+V."
         )
@@ -1720,7 +1875,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             messagebox.showerror("Could not create folder", str(exc))
             return
         self._expand_parent_if_collapsed(created.parent)
-        self.refresh_tree()
+        self.index.invalidate()
+        self.refresh_tree(force=True)
         iid = str(created)
         if self.tree.exists(iid):
             self.tree.selection_set(iid)
@@ -1739,7 +1895,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             messagebox.showerror("Could not create text", str(exc))
             return
         self._expand_parent_if_collapsed(created.parent)
-        self.refresh_tree()
+        self.index.invalidate()
+        self.refresh_tree(force=True)
         iid = str(created)
         if self.tree.exists(iid):
             self.tree.selection_set(iid)
@@ -1804,7 +1961,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 messagebox.showerror("Could not rename folder", str(exc))
                 return
             self._remap_folder_settings(path, renamed)
-            self.refresh_tree()
+            self.index.invalidate()
+            self.refresh_tree(force=True)
             iid = str(renamed)
             if self.tree.exists(iid):
                 self.tree.selection_set(iid)
@@ -1854,7 +2012,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             # Remove collapsed-state entries for deleted folders in one save.
             self._prune_collapsed_paths(paths)
             self._select_mode = False
-        self.refresh_tree()
+            for path in paths:
+                self.index.forget(path)
+            self.index.invalidate()
+        self.refresh_tree(force=True)
 
     def open_source_folder(self) -> None:
         """Open the chosen source folder when its clickable name is activated."""
@@ -1908,7 +2069,8 @@ class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
             messagebox.showerror("Could not save", str(exc))
             return False
         if isinstance(self.master, PastexApp):
-            self.master.refresh_tree()
+            self.master.index.forget(self.path)
+            self.master.refresh_tree(force=True)
             self.master.status_var.set(f"💾 Saved: {self.path}")
         return True
 
@@ -1982,6 +2144,14 @@ def run_cli(argv: list[str] | None = None) -> int:
         default=None,
         help="Export sample snippets to FOLDER (default: the user data folder).",
     )
+    parser.add_argument(
+        "--pick",
+        action="store_true",
+        help=(
+            "Show the snippet picker popup; asks a running Pastex instead of "
+            "starting a second window."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.version:
@@ -2037,6 +2207,16 @@ def run_cli(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # One instance per user: a later launch asks the running one to show its
+    # window (or picker) and exits, so it costs no startup time and cannot
+    # leave a second dock entry. --dir sessions stay separate on purpose.
+    if not args.dir:
+        answer = send_command("pick" if args.pick else "show")
+        if answer is not None and answer.get("ok"):
+            return 0
+        if answer is not None:
+            log_error(f"[instance] command refused: {answer.get('error')}")
+
     try:
         # --dir applies only to this session; it does not change the saved source
         # folder.
@@ -2047,7 +2227,21 @@ def run_cli(argv: list[str] | None = None) -> int:
         print(f"Error: Pastex could not start. See {ERROR_LOG}", file=sys.stderr)
         print(tb, file=sys.stderr)
         return 1
-    app.mainloop()
+    # getattr keeps partially built test doubles working, like elsewhere here.
+    handler = getattr(app, "_handle_instance_command", None)
+    instance = SingleInstance(handler) if handler is not None else None
+    if instance is not None:
+        if instance.claim() and not instance.serve():
+            log_error("[instance] could not listen; later launches start a new window")
+        app.instance = instance
+    open_picker_callback = getattr(app, "open_picker", None)
+    if args.pick and open_picker_callback is not None:
+        app.after(120, open_picker_callback)
+    try:
+        app.mainloop()
+    finally:
+        if instance is not None:
+            instance.stop()
     return 0
 
 
@@ -2254,6 +2448,22 @@ def run_check(roots: list[Path]) -> int:
             f"{k}={'available' if v else 'not available'}" for k, v in tools.items()
         )
     )
+    from . import portal  # noqa: PLC0415 - optional dependency
+    from .instance import SOCKET_NAME, runtime_dir  # noqa: PLC0415 - local import
+
+    print(
+        "Portal paste fallback: "
+        + (
+            "available (works without /dev/uinput)"
+            if portal.available()
+            else "not available — install python3-dbus for a rootless fallback"
+        )
+    )
+    try:
+        running = (runtime_dir() / SOCKET_NAME).exists()
+    except OSError:  # pragma: no cover - read-only runtime dir
+        running = False
+    print(f"Running instance: {'yes (later launches reuse it)' if running else 'no'}")
     print(f"Application icon: {ICON_NAME} (expected WM_CLASS '{WM_CLASS}')")
     found_icons = icon_files()
     if found_icons:

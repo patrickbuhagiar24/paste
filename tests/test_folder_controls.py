@@ -229,12 +229,15 @@ def test_search_button_runs_query_immediately(gui):
     canceled = []
     searches = []
     app.after_cancel = canceled.append
-    app.refresh_tree = lambda: searches.append(app.search_var.get())
+    app.refresh_tree = lambda force=True: searches.append(
+        (app.search_var.get(), force)
+    )
 
     assert app.search_now() == "break"
 
     assert canceled == ["pending-search"]
-    assert searches == ["greeting"]
+    # A search filters the cached tree instead of re-walking the folders.
+    assert searches == [("greeting", False)]
     assert app._search_after_id is None
 
 
@@ -245,12 +248,14 @@ def test_clear_search_button_clears_query_and_refocuses(gui):
     focused = []
     searches = []
     app.search_entry = SimpleNamespace(focus_set=lambda: focused.append(True))
-    app.refresh_tree = lambda: searches.append(app.search_var.get())
+    app.refresh_tree = lambda force=True: searches.append(
+        (app.search_var.get(), force)
+    )
 
     app.clear_search()
 
     assert app.search_var.get() == ""
-    assert searches == [""]
+    assert searches == [("", False)]
     assert focused == [True]
 
 

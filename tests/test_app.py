@@ -158,8 +158,46 @@ def _snippet(tmp_path, text="Halo"):
     return f
 
 
-def test_paste_hides_the_window_before_copying(monkeypatch):
+def test_paste_text_hides_before_copying(monkeypatch):
     """Hide dimulai lebih dulu, jadi compositor dan tool clipboard jalan paralel."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        _pasting = False
+        _paste_clipboard_ready = True
+        status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
+
+        def _hide_for_paste(self):
+            calls.append(("hide",))
+            return True
+
+        def _send_paste(self):
+            calls.append(("arm",))
+
+        def _paste_worker(self, text):
+            calls.append(("copy", text))
+
+    app = FakeApp()
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: calls.append(("start", target.__name__, *args)),
+    )
+
+    PastexApp._paste_text(app, "isi")
+
+    # Hide and arm happen on the click path; the copy runs in the worker.
+    assert calls == [("hide",), ("arm",), ("start", "_paste_worker", "isi")]
+    # Ctrl+V must not be released before the clipboard owns the text.
+    assert app._paste_clipboard_ready is False
+    assert app._paste_restore_window is True
+
+
+def test_do_paste_uses_the_preview_text(monkeypatch):
+    """Klik memakai teks yang sudah dibaca preview, tanpa menyentuh disk lagi."""
     from pastex import app as app_module
     from pastex.app import PastexApp
 
@@ -173,36 +211,27 @@ def test_paste_hides_the_window_before_copying(monkeypatch):
 
     class FakeApp:
         _pasting = False
-        _paste_clipboard_ready = True
         status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
 
         def selected_path(self):
             return FakePath()
 
-        def _hide_for_paste(self):
-            calls.append(("hide",))
-            return True
+        def preview_text(self, path):
+            calls.append(("cached", path.name))
+            return "isi"
 
-        def _send_paste(self):
-            calls.append(("arm",))
+        def _paste_text(self, text, hide=None):
+            calls.append(("paste", text, hide))
 
-        def _paste_worker(self, text):
-            calls.append(("copy", text))
-
-    app = FakeApp()
-    monkeypatch.setattr(app_module, "read_text", lambda _path: "isi")
     monkeypatch.setattr(
         app_module,
-        "_run_in_thread",
-        lambda target, *args: calls.append(("start", target.__name__, *args)),
+        "read_text",
+        lambda _path: (_ for _ in ()).throw(AssertionError("disk dibaca ulang")),
     )
 
-    PastexApp.do_paste(app)
+    PastexApp.do_paste(FakeApp())
 
-    # Hide and arm happen on the click path; the copy runs in the worker.
-    assert calls == [("hide",), ("arm",), ("start", "_paste_worker", "isi")]
-    # Ctrl+V must not be released before the clipboard owns the text.
-    assert app._paste_clipboard_ready is False
+    assert calls == [("cached", "Greeting.txt"), ("paste", "isi", None)]
 
 
 def test_after_copy_releases_the_armed_paste():
@@ -427,17 +456,17 @@ def test_search_debounces_instead_of_scanning_every_keystroke():
         def after_cancel(self, ident):
             calls.append(("cancel", ident))
 
-        def refresh_tree(self):
-            calls.append(("scan",))
+        def refresh_tree(self, force=True):
+            calls.append(("scan", force))
 
     app = FakeApp()
     PastexApp._on_search_changed(app)  # ketikan ke-1
     PastexApp._on_search_changed(app)  # ketikan ke-2
     PastexApp._on_search_changed(app)  # ketikan ke-3
-    scans = [c for c in calls if c == ("scan",)]
+    scans = [c for c in calls if c[0] == "scan"]
     assert scans == [], "refresh_tree dipanggil langsung, bukan lewat debounce"
     timers = [c for c in calls if c[0] == "after"]
-    assert len(timers) == 3 and all(ms == 300 for _, ms in timers)
+    assert len(timers) == 3 and all(ms == 180 for _, ms in timers)
     cancels = [c for c in calls if c[0] == "cancel"]
     assert len(cancels) == 2, "timer sebelumnya harus dibatalkan"
 
@@ -934,23 +963,13 @@ def test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized(monkeypatch):
     from pastex.app import PastexApp
 
     calls = []
-    statuses = []
-
-    class FakePath:
-        def is_dir(self):
-            return False
 
     class FakeApp:
         _pasting = False
 
         def __init__(self):
-            self.status_var = type(
-                "V", (), {"set": staticmethod(statuses.append)}
-            )()
+            self.status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
             self._paste_clipboard_ready = True
-
-        def selected_path(self):
-            return FakePath()
 
         def _hide_for_paste(self):
             calls.append(("hide",))
@@ -963,14 +982,13 @@ def test_paste_skips_ctrl_v_when_the_window_cannot_be_minimized(monkeypatch):
             calls.append(("copy", text))
 
     app = FakeApp()
-    monkeypatch.setattr(app_module, "read_text", lambda _path: "isi")
     monkeypatch.setattr(
         app_module,
         "_run_in_thread",
         lambda target, *args: calls.append(("start", target.__name__, *args)),
     )
 
-    PastexApp.do_paste(app)
+    PastexApp._paste_text(app, "isi")
 
     assert calls == [("hide",), ("start", "_paste_worker", "isi")]
     assert "arm" not in calls, "Ctrl+V tidak boleh diarm bila window masih tampil"
@@ -1003,3 +1021,419 @@ def test_finished_copy_without_an_armed_send_shows_the_manual_hint():
     assert app._pasting is False
     assert statuses[-1] == app_module.PASTE_MANUAL_HINT
     assert "press Ctrl+V" in app_module.PASTE_MANUAL_HINT
+
+
+# --- Index, watcher, picker and single instance integration ---------------
+
+
+def test_refresh_tree_reuses_the_cached_index(gui, tmp_path):
+    """Repaint dengan force=False tidak menelusuri disk; force=True memindai ulang."""
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "A.txt").write_text("a", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+    scans = app.index.scans
+    assert scans >= 1
+
+    app.refresh_tree(force=False)
+    assert app.index.scans == scans, "repaint tidak boleh memindai disk"
+
+    app.refresh_tree(force=True)
+    assert app.index.scans == scans + 1
+
+
+def test_search_filters_the_cache_instead_of_rescanning(gui, tmp_path):
+    root = tmp_path / "snippets"
+    root.mkdir()
+    (root / "Greeting.txt").write_text("halo", encoding="utf-8")
+    (root / "Other.txt").write_text("lain", encoding="utf-8")
+    app = gui(roots=[root])
+    app.refresh_tree()
+    scan_count = app.index.scans
+
+    app.search_var.set("greet")
+    app.refresh_tree(force=False)
+
+    assert app.index.scans == scan_count
+    assert [row["iid"] for row in app.tree.rows if row["iid"].endswith(".txt")] == [
+        str(root / "Greeting.txt")
+    ]
+
+
+def test_folder_change_refreshes_through_the_index(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        "DirectoryWatcher",
+        lambda roots, on_change: type(
+            "W",
+            (),
+            {
+                "start": lambda self: True,
+                "set_roots": lambda self, roots: calls.append(("roots", tuple(roots))),
+            },
+        )(),
+    )
+
+    app = PastexApp.__new__(PastexApp)
+    app.roots = [Path("/snippets")]
+    app.transient_roots = False
+    app.settings = {"source_dir": "/snippets"}
+    app.watcher = None
+
+    PastexApp._start_watcher(app)
+
+    assert app.watcher is not None
+    # Starting twice must not add a second watcher.
+    first = app.watcher
+    PastexApp._start_watcher(app)
+    assert app.watcher is first
+
+
+def test_watcher_callback_marshals_to_the_gui_thread():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def after(self, ms, callback, *args):
+            calls.append((ms, callback.__name__, args))
+
+        def _refresh_from_disk(self):  # pragma: no cover - only referenced
+            pass
+
+    PastexApp._on_folders_changed(FakeApp())
+
+    assert calls == [(0, "_refresh_from_disk", ())]
+
+
+def test_refresh_from_disk_waits_while_pasting():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        _pasting = True
+
+        def after(self, ms, callback, *args):
+            calls.append(("after", ms))
+
+        def _refresh_from_disk(self):  # pragma: no cover - only referenced
+            pass
+
+        def refresh_tree(self, force=True):  # pragma: no cover - must not run
+            raise AssertionError("pohon tidak boleh dibangun ulang saat paste")
+
+    PastexApp._refresh_from_disk(FakeApp())
+
+    assert calls == [("after", 150)]
+
+
+def test_instance_commands_are_handled(monkeypatch):
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def open_picker(self):
+            calls.append("pick")
+
+        def destroy(self):
+            calls.append("quit")
+
+        def show_window(self):
+            calls.append("show")
+
+    app = FakeApp()
+    for command in ("pick", "quit", "show"):
+        PastexApp._run_instance_command(app, command)
+
+    assert calls == ["pick", "quit", "show"]
+
+
+def test_instance_command_is_marshalled_from_the_socket_thread():
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        def after(self, ms, callback, *args):
+            calls.append((ms, callback.__name__, args))
+
+        def _run_instance_command(self, command):  # pragma: no cover - referenced
+            pass
+
+    PastexApp._handle_instance_command(FakeApp(), "pick")
+
+    assert calls == [(0, "_run_instance_command", ("pick",))]
+
+
+def test_picker_paste_does_not_touch_the_main_window(monkeypatch):
+    """Pemilihan dari popup: window utama tidak disembunyikan/di-deiconify."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakePopup:
+        def destroy(self):
+            calls.append("popup-destroy")
+
+    class FakeApp:
+        _pasting = False
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+        _paste_text = PastexApp._paste_text
+        _hide_widget = PastexApp._hide_widget
+        _paste_done = PastexApp._paste_done
+        _finish_paste = PastexApp._finish_paste
+
+        def preview_text(self, path):
+            return "isi"
+
+        def _hide_for_paste(self):  # pragma: no cover - must not be used
+            raise AssertionError("window utama tidak boleh diminimize")
+
+        def _send_paste(self):
+            calls.append("arm")
+
+        def _paste_worker(self, text):
+            calls.append(("copy", text))
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: calls.append(("start", target.__name__)),
+    )
+
+    popup = FakePopup()
+    app = FakeApp()
+    PastexApp.paste_path(app, Path("/snippets/A.txt"), hide=popup)
+
+    assert calls == ["popup-destroy", "arm", ("start", "_paste_worker")]
+    assert app._paste_restore_window is False
+    assert app._paste_hide_widget is popup
+
+    # Finishing must not restore (and steal focus back to) the main window.
+    from pastex.clipboard import PasteResult
+
+    PastexApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
+
+    assert calls == ["popup-destroy", "arm", ("start", "_paste_worker")]
+    assert app._paste_hide_widget is None
+    assert app._pasting is False
+
+
+def test_finishing_a_picker_paste_leaves_the_target_app_focused():
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    calls = []
+
+    class FakeApp:
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+
+        def __init__(self):
+            self._pasting = True
+            self._paste_pending = True
+            self._paste_restore_window = False
+            self._paste_hide_widget = object()
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+    app = FakeApp()
+    PastexApp._finish_paste(app, PasteResult(True, "ydotool", "ok"))
+
+    assert calls == [], "jangan mencuri fokus dari aplikasi target"
+    assert app._paste_hide_widget is None
+
+
+def test_unmap_of_the_picker_popup_sends_the_paste(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    sent = []
+    popup = object()
+    app = PastexApp.__new__(PastexApp)
+    app._paste_pending = True
+    app._paste_clipboard_ready = True
+    app._paste_hide_widget = popup
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: sent.append(target.__name__)
+    )
+
+    PastexApp._on_window_unmap(app, SimpleNamespace(widget=popup))
+
+    assert sent == ["_paste_sender"]
+
+
+def test_main_window_unmap_is_ignored_while_the_picker_is_hidden(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    sent = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_pending = True
+    app._paste_clipboard_ready = True
+    app._paste_hide_widget = object()  # the picker popup
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: sent.append(target.__name__)
+    )
+
+    PastexApp._on_window_unmap(app, SimpleNamespace(widget=app))
+
+    assert sent == []
+    assert app._paste_pending is True
+
+
+def test_open_picker_reports_a_missing_display(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    statuses = []
+    monkeypatch.setattr(app_module, "open_picker", lambda app: None)
+
+    class FakeApp:
+        status_var = type("V", (), {"set": staticmethod(statuses.append)})()
+
+    PastexApp.open_picker(FakeApp())
+
+    assert statuses == ["The picker needs a display."]
+
+
+def test_cli_forwards_show_to_a_running_instance(monkeypatch):
+    from pastex import app as app_module
+
+    seen = []
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(
+        app_module,
+        "send_command",
+        lambda command: seen.append(command) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        app_module, "PastexApp", lambda *a, **k: (_ for _ in ()).throw(AssertionError())
+    )
+
+    assert app_module.run_cli([]) == 0
+    assert seen == ["show"]
+
+
+def test_cli_pick_forwards_pick_and_never_starts_a_window(monkeypatch):
+    from pastex import app as app_module
+
+    seen = []
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(
+        app_module,
+        "send_command",
+        lambda command: seen.append(command) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        app_module, "PastexApp", lambda *a, **k: (_ for _ in ()).throw(AssertionError())
+    )
+
+    assert app_module.run_cli(["--pick"]) == 0
+    assert seen == ["pick"]
+
+
+def test_cli_starts_a_window_when_no_instance_answers(monkeypatch):
+    from pastex import app as app_module
+
+    started = []
+
+    class FakeApp:
+        def __init__(self, roots=None, *, transient_roots=False):
+            started.append("app")
+
+        def mainloop(self):
+            started.append("loop")
+
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(app_module, "send_command", lambda command: None)
+    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
+    monkeypatch.setattr(
+        app_module,
+        "SingleInstance",
+        lambda handler: type(
+            "I",
+            (),
+            {"claim": lambda self: False, "serve": lambda self: True, "stop": lambda self: None},
+        )(),
+    )
+
+    assert app_module.run_cli([]) == 0
+    assert started == ["app", "loop"]
+
+
+def test_cli_dir_sessions_are_never_forwarded(monkeypatch, tmp_path):
+    from pastex import app as app_module
+
+    seen = []
+
+    class FakeApp:
+        def __init__(self, roots=None, *, transient_roots=False):
+            pass
+
+        def mainloop(self):
+            pass
+
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(
+        app_module, "send_command", lambda command: seen.append(command) or {"ok": True}
+    )
+    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
+    monkeypatch.setattr(
+        app_module,
+        "SingleInstance",
+        lambda handler: type(
+            "I",
+            (),
+            {"claim": lambda self: False, "serve": lambda self: True, "stop": lambda self: None},
+        )(),
+    )
+
+    assert app_module.run_cli(["--dir", str(tmp_path)]) == 0
+    assert seen == []
+
+
+def test_search_repaints_from_the_cache_after_the_debounce():
+    """Ketikan memakai pohon yang sudah di-cache, bukan memindai ulang disk."""
+    from pastex.app import PastexApp
+
+    timers = []
+    forces = []
+
+    class FakeApp:
+        _search_after_id = None
+
+        def after(self, ms, callback, *args):
+            timers.append((ms, callback))
+            return "timer"
+
+        def after_cancel(self, ident):  # pragma: no cover - single keystroke
+            pass
+
+        def refresh_tree(self, force=True):
+            forces.append(force)
+
+    app = FakeApp()
+    PastexApp._on_search_changed(app)
+    timers[0][1]()
+
+    assert forces == [False]

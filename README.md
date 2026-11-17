@@ -63,6 +63,40 @@ Pasting minimizes Pastex so the dock entry stays visible, and the two slow halve
 Use the `Up` and `Down` arrow keys to move through the list without pasting, and `Ctrl+Up` / `Ctrl+Down` to move the current item up or down inside its folder.
 The darker highlight follows the row you last clicked, right-clicked, edited, or reached with the arrow keys; a right-click in Select mode leaves it unchanged.
 
+### Snippet picker (`--pick`)
+
+`pastex --pick` (also the **Paste a Snippet** desktop action) opens a frameless
+list at the pointer. Type to filter, `Up`/`Down` to move, `Enter` to paste,
+`Esc` to cancel. Because the picker is a popup with no dock entry, selecting a
+snippet never minimizes or unmaps the main window: the application behind the
+popup keeps the focus and receives `Ctrl+V`. Bind it to a key of your choice,
+for example Super+V:
+
+```bash
+# GNOME: Settings -> Keyboard -> Custom Shortcuts, Command: pastex --pick
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
+  "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/']"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ name 'Pastex picker'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ binding '<Super>v'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/pastex/ command 'pastex --pick'
+```
+
+### One running instance
+
+The first Pastex process takes a lock in `$XDG_RUNTIME_DIR/pastex/` and listens
+on a socket there, so later launches (`pastex`, `pastex --pick`) hand the
+request to it and exit immediately instead of starting a second Tk process
+(~200-400 ms) or a second dock entry. `--dir` sessions stay separate on
+purpose, because they use different folders.
+
+### Live refresh
+
+The snippet folders are watched with inotify, so files added, edited, renamed or
+deleted by another program appear without pressing `F5`. The tree and file
+contents are cached in memory: searches filter that cache instead of re-walking
+the folders or re-reading every file on each keystroke. If inotify is
+unavailable, `F5` still works as before.
+
 ## Features
 
 - Nested folders and `.txt` snippets.
@@ -73,6 +107,9 @@ The darker highlight follows the row you last clicked, right-clicked, edited, or
 - Choose one source folder; new and edited snippets are saved there.
 - Persistent folder expansion state and custom item order.
 - Clipboard tools: `wl-copy`, `xclip`, or `xsel`; paste simulation: `ydotool` or `xdotool`.
+- Frameless snippet picker (`--pick`) that pastes without touching the main window.
+- One running instance with instant re-launch, and inotify-driven live refresh.
+- Rootless Ctrl+V fallback through the desktop portal when `ydotool` is unavailable.
 
 ## Clipboard and permissions
 
@@ -88,6 +125,12 @@ pastex --permissions
 pastex --enable-permissions
 ```
 
+If `ydotool` fails (for example the udev rule was never installed), Pastex
+falls back to the desktop portal (`org.freedesktop.portal.RemoteDesktop`), which
+injects `Ctrl+V` without root and without `/dev/uinput`; the desktop asks for
+permission once per session. The portal needs `python3-dbus` (a recommended
+package), and `pastex --check` reports whether it is available.
+
 On Wayland, `ydotoold` may also be started for the current user with:
 
 ```bash
@@ -97,7 +140,7 @@ systemctl --user enable --now ydotoold
 ## Command-line options
 
 ```text
-pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
+pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE] [--pick]
        [--check] [--permissions] [--enable-permissions]
        [--export-data [FOLDER]] [--test-paste] [--ctrl-v] [--version]
 ```
@@ -111,10 +154,12 @@ pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
 - `--enable-permissions`: request permission setup through `pkexec`.
 - `--export-data [FOLDER]`: create sample snippets; defaults to the user snippets folder.
 - `--test-paste [--ctrl-v]`: run a paste diagnostic.
+- `--pick`: show the snippet picker (reuses a running Pastex).
 
 ## Data locations
 
 - Settings and error log: `~/.config/pastex/`
+- Instance lock and socket: `$XDG_RUNTIME_DIR/pastex/` (cleared on logout)
 - User snippets: `~/.local/share/pastex/snippets/`
 - System-installed app files: `/usr/share/pastex/`
 
