@@ -1875,7 +1875,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     def _paste_worker(self, text: str) -> None:
         started = time.monotonic()
         try:
-            result = copy_text(text, plan=getattr(self, "_copy_plan", None))
+            # __dict__ on purpose: a partially built app (tests use __new__)
+            # would make tkinter's Misc.__getattr__ recurse instead of
+            # returning a default.
+            result = copy_text(text, plan=self.__dict__.get("_copy_plan"))
         except Exception as exc:  # noqa: BLE001 - always report back to the GUI
             log_error(f"[paste] copy failed: {exc}")
             result = ClipboardResult(ok=False, message=f"copy error: {exc}")
@@ -2298,7 +2301,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         log_error("[paste] sending Ctrl+V")
         try:
             result = simulate_paste(
-                plan=getattr(self, "_paste_plan", None),
+                plan=self.__dict__.get("_paste_plan"),
                 should_stop=lambda: bool(self.__dict__.get("_paste_aborted", False)),
             )
         except Exception as exc:  # noqa: BLE001 - always report back to the GUI
