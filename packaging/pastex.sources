@@ -1,0 +1,6 @@
+Types: deb
+URIs: https://patrickbuhagiar24.github.io/paste/
+Suites: stonking
+Components: main
+Architectures: all
+Signed-By: /etc/apt/keyrings/pastex.gpg

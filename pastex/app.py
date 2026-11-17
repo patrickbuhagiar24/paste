@@ -164,7 +164,7 @@ def apply_window_icon(window) -> list[Path]:
 
 DEFAULT_SETTINGS = {
     # Keep Pastex hidden briefly after Ctrl+V is sent before restoring its window.
-    "restore_delay": 0.1,
+    "restore_delay": 0.05,
     # User-selected source folder. If set, only this folder is displayed
     # and used for writes. The --dir argument does not change this value.
     "source_dir": None,
@@ -238,6 +238,13 @@ def load_settings() -> dict:
     settings = {**DEFAULT_SETTINGS, **data}
     # The old pre-paste focus delay has been replaced by a post-paste restore delay.
     settings.pop("focus_delay", None)
+    # Restores now happen sooner: migrate the previous 0.1 s default, but keep
+    # any value the user chose deliberately.
+    try:
+        if abs(float(settings.get("restore_delay", 0)) - 0.1) < 1e-9:
+            settings["restore_delay"] = DEFAULT_SETTINGS["restore_delay"]
+    except (TypeError, ValueError):
+        settings["restore_delay"] = DEFAULT_SETTINGS["restore_delay"]
     # Normalize values to prevent malformed settings from breaking the GUI.
     collapsed = settings.get("collapsed")
     settings["collapsed"] = (
@@ -621,6 +628,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self.tree.bind("<Return>", lambda _e: self.on_activate())
         self.tree.bind("<Delete>", lambda _e: self.delete_selected())
         self.tree.bind("<F2>", lambda _e: self.edit_selected())
+        # The window manager hides Pastex within a few milliseconds of
+        # iconify(); sending Ctrl+V on that signal is much faster than a
+        # fixed delay, with FOCUS_SETTLE_MS kept only as a fallback.
+        self.bind("<Unmap>", self._on_window_unmap, add="+")
         self.bind("<F5>", lambda _e: self.refresh_tree())
         self.bind("<Escape>", lambda _e: self._exit_select_mode())
         self.bind(
@@ -1453,16 +1464,49 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         log_error("[paste] window minimized before Ctrl+V; dock entry kept")
 
     def _send_paste(self) -> None:
-        """Wait for the window manager to hand focus over, then send Ctrl+V."""
+        """Arm the paste, which fires as soon as the window is hidden.
+
+        ``<Unmap>`` arrives once the window manager has actually taken the
+        window off screen, which is also when focus moves to the previous
+        application. That avoids a fixed delay, so the paste starts as soon as
+        the window manager allows; ``FOCUS_SETTLE_MS`` remains a fallback for
+        window managers that never report the unmap.
+        """
         if FOCUS_SETTLE_MS <= 0 or not self._tk_ready():
-            _run_in_thread(self._paste_sender)
+            self._paste_pending = True
+            self._send_paste_now()
+            return
+        self._paste_pending = True
+        try:
+            self._paste_send_id = self.after(FOCUS_SETTLE_MS, self._send_paste_now)
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            self._paste_send_id = None
+            self._send_paste_now()
+
+    def _on_window_unmap(self, event=None) -> None:
+        """Send Ctrl+V once the window manager has hidden the window."""
+        widget = getattr(event, "widget", None)
+        if widget is not None and widget is not self:
+            return
+        self._send_paste_now()
+
+    def _send_paste_now(self) -> None:
+        """Run the sender exactly once, for either the unmap or the timeout."""
+        if not self.__dict__.get("_paste_pending", False):
+            return
+        self._paste_pending = False
+        self._cancel_paste_send_timeout()
+        _run_in_thread(self._paste_sender)
+
+    def _cancel_paste_send_timeout(self) -> None:
+        after_id = self.__dict__.get("_paste_send_id")
+        self._paste_send_id = None
+        if after_id is None or self.__dict__.get("tk") is None:
             return
         try:
-            self.after(
-                FOCUS_SETTLE_MS, lambda: _run_in_thread(self._paste_sender)
-            )
-        except TK_ERRORS:  # pragma: no cover - interpreter already gone
-            _run_in_thread(self._paste_sender)
+            self.after_cancel(after_id)
+        except TK_ERRORS:
+            pass
 
     def _paste_sender(self) -> None:
         log_error("[paste] sending Ctrl+V")
@@ -1483,6 +1527,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _finish_paste(self, result) -> None:
         self._pasting = False
+        self._paste_pending = False
+        # Explicit class call keeps partially-built test doubles working.
+        PastexApp._cancel_paste_send_timeout(self)
         self.deiconify()
         if not result.ok:
             self.lift()
@@ -1503,6 +1550,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     def _paste_failed(self, message: str) -> None:
         self._pasting = False
+        self._paste_pending = False
+        PastexApp._cancel_paste_send_timeout(self)
         # Keep the app visible so the clipboard failure message can be read.
         self.deiconify()
         self.lift()

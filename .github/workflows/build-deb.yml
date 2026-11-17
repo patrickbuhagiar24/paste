@@ -14,6 +14,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # Ubuntu 26.10 codename; the published archive uses it as its suite.
+  APT_SUITE: stonking
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils python3-tk python3-pytest xvfb xauth x11-utils
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg gpgv python3-tk python3-pytest xvfb xauth x11-utils
 
       - name: Run tests
         env:
@@ -34,70 +38,47 @@ jobs:
       - name: Build the Debian package
         run: ./scripts/build-deb.sh
 
-      - name: Build APT repository (Packages and Release)
-        run: |
-          mkdir -p apt-repo/dist
-          cp dist/*.deb apt-repo/dist/
-          cd apt-repo/dist
-          dpkg-scanpackages --arch all . > Packages
-          gzip -9 -k -f Packages
-          cat > apt-ftparchive.conf <<'EOF'
-          APT::FTPArchive::Release::Origin "Pastex";
-          APT::FTPArchive::Release::Label "Pastex";
-          APT::FTPArchive::Release::Suite "stable";
-          APT::FTPArchive::Release::Codename "stable";
-          APT::FTPArchive::Release::Architectures "all";
-          APT::FTPArchive::Release::Components "main";
-          APT::FTPArchive::Release::Description "Pastex APT repository for Ubuntu 26.10";
-          EOF
-          apt-ftparchive -c apt-ftparchive.conf release . > Release
-          ls -la
+      - name: Build the APT archive (pool + dists + Release)
+        env:
+          PASSTEX_SIGNED: ${{ secrets.GPG_PRIVATE_KEY != '' && '1' || '0' }}
+        run: ./scripts/build-apt-repository.sh dist site "$APT_SUITE"
 
-      - name: Sign the Release with GPG (optional)
+      - name: Sign and verify the archive
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GNUPGHOME: ${{ runner.temp }}/pastex-apt-gnupg
         run: |
-          if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "GPG_PRIVATE_KEY secret is missing — Release will not be signed."
-            echo "The repository can still be used with [trusted=yes]; see apt-repo/README.md for signing instructions."
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::warning::GPG_PRIVATE_KEY is not configured; publishing an unsigned APT archive."
+            echo "Users must install pastex-unsigned.sources (Trusted: yes) until the secret is added."
+            rm -f site/pastex.sources
             exit 0
           fi
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --armor --detach-sign -o apt-repo/dist/Release.gpg apt-repo/dist/Release
-          gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-            --clearsign -o apt-repo/dist/InRelease apt-repo/dist/Release
-          gpg --batch --armor --export > apt-repo/dist/pastex.gpg
-          ls -la apt-repo/dist/
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # In colon output, field 5 is the key ID; the following fpr record holds the full fingerprint.
+          fingerprint=$(gpg --batch --with-colons --list-secret-keys | awk -F: '
+            $1 == "sec" { primaries++; want_fpr = 1; next }
+            want_fpr && $1 == "fpr" { print $10; want_fpr = 0 }
+            END { if (primaries != 1) exit 2 }
+          ') || { echo 'GPG_PRIVATE_KEY must contain exactly one primary key identity.'; exit 1; }
+          [[ "$fingerprint" =~ ^[A-Fa-f0-9]{40}$ ]] || { echo 'Could not determine a valid GPG fingerprint.'; exit 1; }
+          gpg --batch --with-colons --list-secret-keys "$fingerprint" \
+            | awk -F: '($1 == "sec" || $1 == "ssb") && tolower($12) ~ /s/ { found = 1 } END { exit !found }' \
+            || { echo 'The imported GPG key has no secret signing capability.'; exit 1; }
+          ./scripts/sign-apt-repository.sh site "$APT_SUITE"
 
-      - name: Create a simple index.html
+      - name: Remove the temporary GPG keyring
+        if: always()
+        env:
+          GNUPGHOME: ${{ runner.temp }}/pastex-apt-gnupg
         run: |
-          {
-            echo "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Repo APT Pastex</title></head><body>"
-            echo "<h1>Repo APT Pastex</h1><ul>"
-            for f in apt-repo/dist/*; do echo "<li><a href='$(basename "$f")'>$(basename "$f")</a></li>"; done
-            echo "</ul></body></html>"
-          } > apt-repo/dist/index.html
-
-      - name: Prepare GitHub Pages site
-        run: |
-          rm -rf _site
-          mkdir -p _site/apt
-          cp -r apt-repo/dist/* _site/apt/
-          cat > _site/index.html <<'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <meta http-equiv="refresh" content="0; url=apt/">
-            <title>Pastex APT Repository</title>
-          </head>
-          <body>
-            <p>Pastex APT repository: <a href="apt/">apt/</a></p>
-          </body>
-          </html>
-          EOF
+          if [ -d "$GNUPGHOME" ]; then
+            gpgconf --kill gpg-agent || true
+            rm -rf "$GNUPGHOME"
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -105,7 +86,8 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: site
+          include-hidden-files: true
 
       - name: Upload the Debian package artifact
         uses: actions/upload-artifact@v4

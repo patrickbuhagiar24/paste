@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pastex APT repository</title>
+  <style>body{max-width:850px;margin:40px auto;padding:0 20px;font:16px/1.6 system-ui,sans-serif;color:#202124}pre{overflow:auto;padding:18px;background:#f1f3f4;border-radius:8px}a{color:#174ea6}code{font-family:ui-monospace,monospace}</style>
+</head>
+<body>
+  <h1>Pastex APT repository</h1>
+  <p>This repository provides the <code>pastex</code> package for Ubuntu 26.10 (<code>stonking</code>). Its packages are architecture-independent.</p>
+  <p>Verify <a href="archive-keyring.fingerprint.txt">the signing-key fingerprint</a> against the fingerprint published by the maintainer before installing the key. Do not use <code>trusted=yes</code> or disable signature verification for a signed archive.</p>
+  <pre>sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg | sudo tee /etc/apt/keyrings/pastex.gpg &gt; /dev/null
+sudo chmod 0644 /etc/apt/keyrings/pastex.gpg
+curl -fsSL https://patrickbuhagiar24.github.io/paste/pastex.sources | sudo tee /etc/apt/sources.list.d/pastex.sources &gt; /dev/null
+sudo apt update
+sudo apt install pastex</pre>
+  <p>If this archive is published without signatures, use <a href="pastex-unsigned.sources">pastex-unsigned.sources</a> instead; it marks the repository <code>Trusted: yes</code>, which skips verification.</p>
+  <p><a href="https://github.com/patrickbuhagiar24/paste">Source code, documentation, and license</a> · <a href="dists/stonking/InRelease">Signed release metadata</a></p>
+</body>
+</html>

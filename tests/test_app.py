@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -246,7 +247,7 @@ def test_do_paste_ignores_repeat_while_paste_is_in_progress():
     assert calls == ["Paste in progress..."]
 
 
-def test_paste_done_waits_100ms_after_sending_before_restoring():
+def test_paste_done_waits_50ms_after_sending_before_restoring():
     from pastex.app import DEFAULT_SETTINGS, PastexApp
     from pastex.clipboard import PasteResult
 
@@ -272,7 +273,7 @@ def test_paste_done_waits_100ms_after_sending_before_restoring():
 
     app = FakeApp()
     PastexApp._paste_done(app, PasteResult(True, "ydotool", "Pasted."))
-    assert calls == [("wait", 100)]
+    assert calls == [("wait", 50)]
     app.finish()
     assert calls[-1] == ("deiconify", None)
     assert app._pasting is False
@@ -566,6 +567,119 @@ def test_hide_for_paste_falls_back_to_withdraw_when_iconify_fails():
     assert calls == ["withdraw"]
 
 
+def test_send_paste_sends_immediately_when_window_unmaps(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app.tk = object()
+    app.after = lambda ms, callback: calls.append(("arm", ms, callback))
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(("run", target.__name__))
+    )
+
+    PastexApp._send_paste(app)
+    assert calls == [("arm", app_module.FOCUS_SETTLE_MS, app._send_paste_now)]
+
+    # The window manager reports the unmap long before the fallback timer.
+    PastexApp._on_window_unmap(app, SimpleNamespace(widget=app))
+
+    assert calls[-1] == ("run", "_paste_sender")
+    assert app._paste_pending is False
+
+    # A second unmap (or a late timeout) must not send again.
+    PastexApp._send_paste_now(app)
+    assert [call[0] for call in calls].count("run") == 1
+
+
+def test_unmap_from_another_widget_does_not_send(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app._paste_pending = True
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(target.__name__)
+    )
+
+    PastexApp._on_window_unmap(app, SimpleNamespace(widget=object()))
+
+    assert calls == []
+    assert app._paste_pending is True
+
+
+def test_paste_falls_back_to_the_timeout_when_no_unmap_arrives(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app.tk = object()
+    app.after = lambda ms, callback: calls.append(("arm", ms, callback)) or "timer-1"
+    app.after_cancel = lambda name: calls.append(("cancel", name))
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda target: calls.append(("run", target.__name__))
+    )
+
+    PastexApp._send_paste(app)
+    calls[0][2]()  # run the fallback timer
+
+    assert ("cancel", "timer-1") in calls
+    assert calls[-1] == ("run", "_paste_sender")
+
+
+def test_finishing_a_paste_clears_the_pending_send():
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    calls = []
+
+    class FakeApp:
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type("V", (), {"set": staticmethod(lambda _value: None)})()
+        _pasting = True
+        _paste_pending = True
+
+        def _finish_paste(self, result):
+            PastexApp._finish_paste(self, result)
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+    app = FakeApp()
+    PastexApp._paste_done(app, PasteResult(True, "ydotool", "ok"))
+
+    assert app._paste_pending is False
+    assert calls[-1] == "deiconify"
+
+
+def test_settings_shorten_the_previous_restore_delay_default(tmp_path, monkeypatch):
+    from pastex import app as app_module
+
+    config = tmp_path / "pastex"
+    config.mkdir()
+    (config / "settings.json").write_text('{"restore_delay": 0.1}', encoding="utf-8")
+    monkeypatch.setattr(app_module, "SETTINGS_FILE", config / "settings.json")
+
+    assert app_module.load_settings()["restore_delay"] == app_module.DEFAULT_SETTINGS["restore_delay"]
+
+
+def test_settings_keep_a_deliberate_restore_delay(tmp_path, monkeypatch):
+    from pastex import app as app_module
+
+    config = tmp_path / "pastex"
+    config.mkdir()
+    (config / "settings.json").write_text('{"restore_delay": 0.25}', encoding="utf-8")
+    monkeypatch.setattr(app_module, "SETTINGS_FILE", config / "settings.json")
+
+    assert app_module.load_settings()["restore_delay"] == 0.25
+
+
 def test_send_paste_waits_for_focus_to_settle(monkeypatch):
     from pastex import app as app_module
     from pastex.app import PastexApp
@@ -600,3 +714,14 @@ def test_send_paste_falls_back_to_immediate_send_without_tk(monkeypatch):
     PastexApp._send_paste(app)
 
     assert calls == ["_paste_sender"]
+
+
+def test_window_unmap_is_bound_to_the_paste_sender():
+    """The unmap signal is what makes the paste start without a fixed delay."""
+    from pastex import app as app_module
+
+    source = Path(app_module.__file__).read_text(encoding="utf-8")
+
+    assert 'self.bind("<Unmap>", self._on_window_unmap, add="+")' in source
+    assert "def _on_window_unmap(" in source
+    assert "def _send_paste_now(" in source

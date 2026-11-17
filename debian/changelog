@@ -1,3 +1,14 @@
+pastex (1.6.9-1) unstable; urgency=medium
+
+  * Send Ctrl+V as soon as the window manager reports the window hidden, and
+    restore the window after 50 ms instead of 100 ms, for a faster paste while
+    the dock icon stays visible.
+  * Publish a standard signed APT archive at the GitHub Pages root with the
+    Ubuntu 26.10 suite name "stonking", deb822 sources, and an exported
+    keyring, so apt reports InRelease instead of a trusted flat index.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 03:20:00 +0000
+
 pastex (1.6.8-1) unstable; urgency=medium
 
   * Keep the GUI tests independent of a real Tcl interpreter so automated
