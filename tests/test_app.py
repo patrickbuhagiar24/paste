@@ -840,14 +840,20 @@ def test_paste_passes_the_prewarmed_plans(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "simulate_paste",
-        lambda plan=None: seen.append(("paste", plan)) or PasteResultLike(),
+        lambda plan=None, should_stop=None: (
+            seen.append(("paste", plan, should_stop)) or PasteResultLike()
+        ),
     )
 
     PastexApp._paste_worker(app, "isi")
     PastexApp._paste_sender(app)
 
     assert ("copy", "isi", "COPY-PLAN") in seen
-    assert ("paste", "PASTE-PLAN") in seen
+    paste_calls = [entry for entry in seen if entry[0] == "paste"]
+    assert paste_calls[0][1] == "PASTE-PLAN"
+    # The sender must hand the abort flag to simulate_paste so a paste that
+    # overran its deadline stops before pressing more keys.
+    assert callable(paste_calls[0][2])
 
 
 class PasteResultLike:
@@ -1793,3 +1799,199 @@ def test_a_crashing_main_loop_still_releases_the_owner(monkeypatch):
     with pytest.raises(RuntimeError):
         app_module.run_cli([])
     assert released == ["owner-released"]
+
+
+# --- Watchdog: the window must never stay minimized ------------------------
+
+
+def _stalled_app(**extra):
+    """A half-built app whose send stage never reports back."""
+    from pastex.app import PastexApp
+
+    calls = []
+
+    class FakeApp:
+        _pasting = True
+        _paste_finished = False
+        _paste_aborted = False
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+        _cancel_paste_send_timeout = PastexApp._cancel_paste_send_timeout
+        _cancel_paste_watchdog = PastexApp._cancel_paste_watchdog
+        _show_paste_failure = lambda self, message: calls.append(("dialog", message))
+        _finish_paste = PastexApp._finish_paste
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+        def after(self, *_args):
+            return "after-id"
+
+        def after_cancel(self, _id):
+            return None
+
+    app = FakeApp()
+    # State lives on the instance: PastexApp reads it through __dict__ so that
+    # half-built test doubles never recurse through Tk's __getattr__.
+    app._pasting = True
+    app._paste_finished = False
+    app._paste_aborted = False
+    for name, value in extra.items():
+        setattr(app, name, value)
+    return app, calls
+
+
+def test_the_watchdog_restores_the_window_when_the_sender_stalls():
+    """Kalau pengirim macet, jendela tetap dipulihkan dan alasannya dilaporkan."""
+    from pastex.app import PastexApp
+
+    app, calls = _stalled_app()
+
+    PastexApp._paste_watchdog(app)
+
+    assert "deiconify" in calls
+    assert app._paste_aborted is True, "percobaan berikutnya harus dibatalkan"
+    assert app._paste_finished is True
+    assert app._pasting is False
+    assert app._paste_ready is False
+    assert any(isinstance(c, tuple) and c[0] == "dialog" for c in calls)
+
+
+def test_the_watchdog_does_nothing_after_a_finished_paste():
+    from pastex.app import PastexApp
+
+    app, calls = _stalled_app(_paste_finished=True, _pasting=False)
+
+    PastexApp._paste_watchdog(app)
+
+    assert calls == []
+
+
+def test_a_late_result_after_the_watchdog_does_not_move_the_window_again():
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    app, calls = _stalled_app(_paste_finished=True, _pasting=False, _paste_ready=False)
+
+    PastexApp._finish_paste(app, PasteResult(ok=True, tool="ydotool", message="ok"))
+
+    assert "deiconify" not in calls
+    assert app._paste_ready is True, "hasil yang datang terlambat tetap dicatat"
+
+
+def test_arming_the_watchdog_needs_a_real_interpreter():
+    """Objek uji tanpa tk tidak boleh menyentuh after(); itu rekursi Tk."""
+    from pastex.app import PastexApp
+
+    app = PastexApp.__new__(PastexApp)
+
+    PastexApp._arm_paste_watchdog(app)
+    PastexApp._cancel_paste_watchdog(app)
+
+    assert app.__dict__.get("_paste_watchdog_id") is None
+
+
+def test_a_failed_paste_stops_hiding_the_window_on_the_next_click(monkeypatch):
+    """Kegagalan diingat: klik berikutnya hanya menyalin, jendela tetap tampil."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+    from pastex.clipboard import PasteResult
+
+    calls = []
+
+    def _paste_worker(self, text):
+        calls.append(("copy", text))
+
+    class FakeApp:
+        _pasting = False
+        settings: ClassVar[dict[str, float]] = {"restore_delay": 0}
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+        _cancel_paste_send_timeout = PastexApp._cancel_paste_send_timeout
+        _cancel_paste_watchdog = PastexApp._cancel_paste_watchdog
+
+        def _hide_for_paste(self):  # pragma: no cover - must not be used
+            raise AssertionError("jendela tidak boleh diminimize")
+
+        def _send_paste(self):  # pragma: no cover - must not be used
+            raise AssertionError("Ctrl+V tidak boleh diarm")
+
+        def deiconify(self):
+            calls.append("deiconify")
+
+        def lift(self):
+            calls.append("lift")
+
+        def _show_paste_failure(self, message):
+            calls.append(("dialog", message))
+
+    app = FakeApp()
+    app._paste_worker = _paste_worker
+    monkeypatch.setattr(
+        app_module,
+        "_run_in_thread",
+        lambda target, *args: calls.append(("start", target.__name__, *args)),
+    )
+
+    PastexApp._finish_paste(app, PasteResult(ok=False, tool="", message="gagal"))
+    assert app._paste_ready is False
+    calls.clear()
+
+    PastexApp._paste_text(app, "isi")
+
+    assert calls == [("start", "_paste_worker", "isi")]
+    assert app._paste_restore_window is False
+
+
+def test_an_empty_paste_plan_means_ctrl_v_cannot_be_sent():
+    from pastex.app import PastexApp
+    from pastex.clipboard import ToolPlan
+
+    app = PastexApp.__new__(PastexApp)
+    assert PastexApp._paste_tools_ready(app) is True  # belum diketahui
+
+    app._paste_plan = ToolPlan("wayland", [])
+    assert PastexApp._paste_tools_ready(app) is False
+
+    app._paste_plan = ToolPlan("wayland", [("ydotool", ["ydotool", "key"])])
+    assert PastexApp._paste_tools_ready(app) is True
+
+
+def test_a_click_with_a_hidden_window_arms_the_watchdog(monkeypatch):
+    """Setiap kali jendela disembunyikan, pengaman waktu harus dipasang."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+
+    class FakeApp:
+        status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+
+        def __init__(self):
+            self.tk = object()
+            self._paste_clipboard_ready = True
+
+        def _hide_for_paste(self):
+            return True
+
+        def _send_paste(self):
+            return None
+
+        def _paste_worker(self, text):
+            return None
+
+        def after(self, delay, callback=None):
+            scheduled.append(delay)
+            return "after-id"
+
+        def after_cancel(self, _id):
+            return None
+
+    app = FakeApp()
+    monkeypatch.setattr(app_module, "_run_in_thread", lambda *a, **k: None)
+
+    PastexApp._paste_text(app, "isi")
+
+    assert scheduled == [app_module.PASTE_DEADLINE_MS]

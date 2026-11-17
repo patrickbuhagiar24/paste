@@ -1,3 +1,26 @@
+pastex (1.8.1-1) unstable; urgency=medium
+
+  * Never leave the window minimized when Ctrl+V cannot be delivered. A click
+    now arms a 9 s watchdog: if the send stage overruns it, the window comes
+    back, the remaining tools are abandoned (so no key press can land in
+    Pastex afterwards) and the failure dialog says why. Every tool call in the
+    send stage now has its own timeout (2 s per keystroke, 6 s for the portal
+    consent dialog), and an exception in either worker thread is reported
+    instead of leaving the window hidden.
+  * Start a private ydotoold when the user unit is missing. Ubuntu ships
+    ydotoold.service as a system unit, so "systemctl --user start
+    ydotoold.service" fails on a stock install and automatic paste never
+    worked; Pastex now starts ydotoold itself with a socket it owns in
+    XDG_RUNTIME_DIR and points ydotool at it through YDOTOOL_SOCKET. Only
+    /dev/uinput access is still required, which --enable-permissions sets up.
+  * Stop hiding the window once a paste has failed: the next click copies the
+    text, keeps the window visible and shows the manual Ctrl+V hint, instead
+    of minimizing and immediately bouncing back.
+  * verify-regressions runs pytest with PYTHONDONTWRITEBYTECODE so a cached
+    .pyc can no longer make a restored bug look like a passing test.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 17 Nov 2026 06:00:00 +0000
+
 pastex (1.8.0-1) unstable; urgency=medium
 
   * Optional clipboard owner: own the Wayland selection through

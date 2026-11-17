@@ -599,3 +599,119 @@ def test_module_level_owner_is_used_by_default():
     finally:
         clipboard.set_clipboard_owner(None)
     assert clipboard.clipboard_owner() is None
+
+
+def test_simulate_paste_bounds_every_tool_call(monkeypatch):
+    """Setiap percobaan punya timeout, supaya GUI tidak menunggu selamanya."""
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
+    seen = []
+
+    def runner(cmd, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tidak ada daemon")
+
+    result = clipboard.simulate_paste(runner=runner)
+
+    assert result.ok is False
+    assert seen and all(t == clipboard.PASTE_KEY_TIMEOUT for t in seen)
+
+
+def test_simulate_paste_stops_before_the_portal_when_aborted(monkeypatch):
+    """Kalau jendela sudah dipulihkan, portal tidak boleh ditekan lagi."""
+    from pastex import clipboard, portal
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
+    monkeypatch.setattr(portal, "available", lambda: True)
+    pressed = []
+    monkeypatch.setattr(portal, "send_ctrl_v", lambda *a, **k: pressed.append(1) or (True, "ok"))
+
+    result = clipboard.simulate_paste(
+        runner=lambda cmd, **kw: _mk(count=1), should_stop=lambda: True
+    )
+
+    assert result.ok is False
+    assert pressed == []
+    assert "dibatalkan" in result.message
+
+
+def test_the_abort_flag_is_checked_between_the_two_ydotool_syntaxes(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(clipboard, "ensure_ydotoold", lambda runner=None: False)
+    calls = []
+
+    def runner(cmd, **kwargs):
+        calls.append(cmd)
+        return _mk(count=1)
+
+    result = clipboard.simulate_paste(
+        runner=runner, should_stop=lambda: len(calls) >= 1
+    )
+
+    assert result.ok is False
+    assert len(calls) == 1  # percobaan kedua dilewati
+
+
+def test_ensure_ydotoold_starts_its_own_daemon_when_the_unit_is_missing(monkeypatch, tmp_path):
+    """Ubuntu mengirim ydotoold.service sebagai unit sistem: kita mulai sendiri."""
+    socket = tmp_path / "pastex-ydotool.sock"
+    spawned = []
+
+    class FakeProc:
+        def __init__(self, cmd):
+            self.cmd = cmd
+
+    def fake_popen(cmd, **kwargs):
+        spawned.append(cmd)
+        socket.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotoold")
+    monkeypatch.setattr(
+        clipboard.os.path,
+        "exists",
+        lambda path: str(path) in {"/usr/bin/ydotoold", str(socket)},
+    )
+    monkeypatch.setattr(clipboard.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_paths", lambda: [str(socket)])
+    monkeypatch.setattr(
+        clipboard, "_ydotoold_socket_exists", lambda: socket.exists()
+    )
+    monkeypatch.setattr(clipboard, "_runtime_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+
+    ok = clipboard.ensure_ydotoold(runner=lambda cmd, **kw: _mk(count=1))
+
+    assert ok is True
+    assert spawned and "--socket-path" in spawned[0]
+    assert clipboard.os.environ["YDOTOOL_SOCKET"] == str(socket)
+    clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
+
+
+def test_ensure_ydotoold_gives_up_when_no_socket_appears(monkeypatch, tmp_path):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: "/usr/bin/ydotoold")
+    monkeypatch.setattr(clipboard.os.path, "exists", lambda path: path == "/usr/bin/ydotoold")
+    monkeypatch.setattr(clipboard.subprocess, "Popen", lambda cmd, **kw: None)
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_paths", lambda: [str(tmp_path / "x.sock")])
+    monkeypatch.setattr(clipboard, "_ydotoold_socket_exists", lambda: False)
+    monkeypatch.setattr(clipboard, "_runtime_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(clipboard, "_sleep", lambda _s: None)
+    clipboard.os.environ.pop("YDOTOOL_SOCKET", None)
+
+    assert clipboard.ensure_ydotoold(runner=lambda cmd, **kw: _mk(count=1)) is False
+    assert "YDOTOOL_SOCKET" not in clipboard.os.environ
+
+
+def test_ydotoold_socket_lookup_honours_YDOTOOL_SOCKET(monkeypatch, tmp_path):
+    socket = tmp_path / "custom.sock"
+    seen = []
+    monkeypatch.setenv("YDOTOOL_SOCKET", str(socket))
+    monkeypatch.setattr(
+        clipboard.os.path, "exists", lambda path: seen.append(path) or path == str(socket)
+    )
+
+    assert clipboard._ydotoold_socket_exists() is True
+    assert str(socket) in seen
