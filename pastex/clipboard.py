@@ -20,6 +20,22 @@ from dataclasses import dataclass
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
+# Set by the GUI once the opt-in Wayland clipboard owner has proved that it can
+# serve the selection (see pastex/wlowner.py). None means "use the tools".
+_OWNER = None
+_UNSET = object()
+
+
+def set_clipboard_owner(owner) -> None:
+    """Use ``owner`` for copies; pass None to go back to wl-copy/xclip/xsel."""
+    global _OWNER
+    _OWNER = owner
+
+
+def clipboard_owner():
+    """The clipboard owner in use, or None."""
+    return _OWNER
+
 
 # Clipboard tools that fork and remain alive to own the selection.
 # Capturing their output keeps the pipe open, so the subprocess waits
@@ -227,12 +243,26 @@ def copy_text(
     text: str,
     runner: Runner = _default_runner,
     plan: ToolPlan | None = None,
+    owner=_UNSET,
 ) -> ClipboardResult:
     """Copy text to the system clipboard and return the tool that succeeded.
 
     Pass a pre-resolved ``plan`` to skip the PATH lookups on the click path;
-    without one the candidates are resolved here, as before.
+    without one the candidates are resolved here, as before. When a clipboard
+    owner is live (opt-in, see pastex/wlowner.py) it copies without spawning a
+    process; every failure falls through to the tools below.
     """
+    active_owner = clipboard_owner() if owner is _UNSET else owner
+    if active_owner is not None:
+        try:
+            if active_owner.copy(text):
+                return ClipboardResult(
+                    ok=True,
+                    tool="wayland-owner",
+                    message="Text copied by the built-in clipboard owner.",
+                )
+        except Exception:  # noqa: BLE001 - the tools remain a safe fallback
+            pass
     plan = plan or resolve_copy_plan()
     errors: list[str] = []
     for name, cmd in plan.candidates:

@@ -3,6 +3,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -528,3 +529,73 @@ def test_a_broken_portal_never_breaks_the_paste(monkeypatch):
     failing = clipboard.simulate_paste(runner=_fake_runner([], returncode=1))
     assert failing.ok is False
     assert "portal error" in failing.message
+
+
+# --- pemilik clipboard Wayland (opt-in, 1.8.0) ---------------------------
+class FakeOwner:
+    def __init__(self, ok=True, explode=False):
+        self.ok = ok
+        self.explode = explode
+        self.copied: list[str] = []
+
+    def copy(self, text):
+        if self.explode:
+            raise RuntimeError("helper mati")
+        self.copied.append(text)
+        return self.ok
+
+
+def test_owner_copies_without_spawning_a_tool():
+    owner = FakeOwner()
+    calls = []
+
+    result = clipboard.copy_text("halo", runner=calls.append, owner=owner)
+
+    assert result.ok is True
+    assert result.tool == "wayland-owner"
+    assert owner.copied == ["halo"]
+    assert calls == [], "wl-copy tidak boleh dijalankan"
+
+
+def _plan():
+    return clipboard.ToolPlan("wayland", [("wl-copy", ["wl-copy"])])
+
+
+def test_owner_failure_falls_back_to_the_tools():
+    owner = FakeOwner(ok=False)
+    calls = []
+
+    def runner(cmd, **_kwargs):
+        calls.append(cmd[0])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = clipboard.copy_text("halo", runner=runner, plan=_plan(), owner=owner)
+
+    assert result.ok is True
+    assert result.tool == "wl-copy"
+    assert calls == ["wl-copy"]
+
+
+def test_owner_exception_never_breaks_the_copy():
+    owner = FakeOwner(explode=True)
+
+    def runner(cmd, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = clipboard.copy_text("halo", runner=runner, plan=_plan(), owner=owner)
+
+    assert result.ok is True
+    assert result.tool == "wl-copy"
+
+
+def test_module_level_owner_is_used_by_default():
+    owner = FakeOwner()
+    clipboard.set_clipboard_owner(owner)
+    try:
+        assert clipboard.clipboard_owner() is owner
+        result = clipboard.copy_text("halo", runner=lambda *_a, **_k: None)
+        assert result.tool == "wayland-owner"
+        assert owner.copied == ["halo"]
+    finally:
+        clipboard.set_clipboard_owner(None)
+    assert clipboard.clipboard_owner() is None

@@ -441,6 +441,67 @@ MUTATIONS = [
         ["tests/test_app.py::test_picker_paste_does_not_touch_the_main_window"],
     ),
     (
+        "the opt-in clipboard owner is never used for copies",
+        "pastex/clipboard.py",
+        "            if active_owner.copy(text):",
+        "            if False:",
+        [
+            "tests/test_clipboard.py::test_owner_copies_without_spawning_a_tool",
+            "tests/test_clipboard.py::test_module_level_owner_is_used_by_default",
+        ],
+    ),
+    (
+        "a broken clipboard owner breaks the copy instead of falling back",
+        "pastex/clipboard.py",
+        "        except Exception:  # noqa: BLE001 - the tools remain a safe fallback\n            pass",
+        "        except TypeError:  # noqa: BLE001\n            pass",
+        ["tests/test_clipboard.py::test_owner_exception_never_breaks_the_copy"],
+    ),
+    (
+        "an owner that fails its self-test is trusted anyway",
+        "pastex/app.py",
+        '            log_error(f"[owner] self-test failed ({detail}); keeping the tools")\n            owner.stop()\n            return False',
+        '            log_error(f"[owner] self-test failed ({detail}); keeping the tools")',
+        ["tests/test_app.py::test_clipboard_owner_that_fails_its_self_test_is_stopped"],
+    ),
+    (
+        "the clipboard owner is not released when the window closes",
+        "pastex/app.py",
+        '        owner = self.__dict__.get("_clipboard_owner")\n        if owner is None:\n            return',
+        '        owner = self.__dict__.get("_clipboard_owner")\n        if True:\n            return',
+        ["tests/test_app.py::test_releasing_the_owner_restores_the_tools"],
+    ),
+    (
+        "the clipboard helper starts even when the user did not opt in",
+        "pastex/app.py",
+        '        if self.__dict__.get("settings", {}).get("clipboard_owner"):\n            self._start_clipboard_owner()',
+        '        if True:\n            self._start_clipboard_owner()',
+        ["tests/test_app.py::test_prewarm_only_starts_the_owner_when_asked"],
+    ),
+    (
+        "the helper never writes the payload the compositor asks for",
+        "pastex/wlserver.py",
+        '            data = text.encode("utf-8")',
+        '            data = b""',
+        ["tests/test_wlserver.py::test_send_event_writes_the_payload_and_closes_the_fd"],
+    ),
+    (
+        "the helper never destroys the replaced source",
+        "pastex/wlserver.py",
+        '        if previous:\n            self._request(previous, SOURCE_DESTROY, "", [])',
+        '        if False:\n            self._request(previous, SOURCE_DESTROY, "", [])',
+        [
+            "tests/test_wlserver.py::test_copy_offers_every_mime_and_sets_the_new_selection"
+        ],
+    ),
+    (
+        "the self-test trusts the owner without reading the selection back",
+        "pastex/wlowner.py",
+        "    ok = seen == nonce",
+        "    ok = True",
+        ["tests/test_wlowner.py::test_verify_rejects_an_owner_that_never_serves_it"],
+    ),
+    (
         "a picker paste steals the focus back",
         "pastex/app.py",
         "        self._paste_restore_window = hide is None",

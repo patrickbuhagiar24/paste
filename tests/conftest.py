@@ -234,6 +234,16 @@ class FakeDialogs:
         self.asked.append(("warning", title, text))
 
 
+@pytest.fixture(autouse=True)
+def _no_clipboard_owner_between_tests():
+    """Jangan biarkan pemilik clipboard dari satu uji bocor ke uji lain."""
+    from pastex import clipboard
+
+    clipboard.set_clipboard_owner(None)
+    yield
+    clipboard.set_clipboard_owner(None)
+
+
 @pytest.fixture
 def dialogs(monkeypatch):
     """Ganti filedialog + simpledialog + messagebox dengan tiruan."""

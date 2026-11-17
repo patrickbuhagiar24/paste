@@ -1576,3 +1576,170 @@ def test_row_update_accepts_tcl_string_options(gui, tmp_path):
     app.refresh_tree(force=False)
 
     assert app.tree.item_updates == 0, "nilai Tcl yang setara tidak boleh ditulis ulang"
+
+
+# --- pemilik clipboard Wayland (opt-in) ----------------------------------
+class _FakeWlOwner:
+    started = 0
+    stopped = 0
+
+    def __init__(self, start_ok=True, verify_ok=True, error="", detail=""):
+        type(self).started = 0
+        type(self).stopped = 0
+        self.start_ok = start_ok
+        self.verify_ok = verify_ok
+        self.error = error
+        self._detail = detail
+        self.copies = 0
+
+    def start(self):
+        type(self).started += 1
+        return self.start_ok
+
+    def stop(self):
+        type(self).stopped += 1
+
+    def copy(self, text, mimes=None):  # pragma: no cover - lewat verify tiruan
+        self.copies += 1
+        return True
+
+
+def _fake_wlowner(monkeypatch, owner, *, available=True, verify_result=(True, "")):
+    from pastex import wlowner
+
+    calls = {"verify": 0}
+
+    def verify(_owner, _reader, restore=None, **_kwargs):
+        calls["verify"] += 1
+        return verify_result
+
+    monkeypatch.setattr(wlowner, "available", lambda: available)
+    monkeypatch.setattr(wlowner, "OwnerClipboard", lambda *a, **k: owner)
+    monkeypatch.setattr(wlowner, "verify", verify)
+    return calls
+
+
+def test_clipboard_owner_is_not_started_on_a_non_wayland_session(gui, monkeypatch):
+    from pastex import clipboard
+
+    owner = _FakeWlOwner()
+    _fake_wlowner(monkeypatch, owner, available=False)
+    monkeypatch.setattr(clipboard, "set_clipboard_owner", lambda _o: None)
+    app = gui(roots=[])
+
+    assert app._start_clipboard_owner() is False
+    assert owner.started == 0
+
+
+def test_clipboard_owner_reports_a_helper_that_will_not_start(gui, monkeypatch):
+    owner = _FakeWlOwner(start_ok=False, error="no compositor")
+    calls = _fake_wlowner(monkeypatch, owner)
+    app = gui(roots=[])
+
+    assert app._start_clipboard_owner() is False
+    assert owner.started == 1
+    assert calls["verify"] == 0
+
+
+def test_clipboard_owner_that_fails_its_self_test_is_stopped(gui, monkeypatch):
+    from pastex import app as app_module
+
+    owner = _FakeWlOwner()
+    installed = []
+    _fake_wlowner(monkeypatch, owner, verify_result=(False, "not readable"))
+    monkeypatch.setattr(app_module, "set_clipboard_owner", installed.append)
+    app = gui(roots=[])
+
+    assert app._start_clipboard_owner() is False
+    assert owner.stopped == 1
+    assert installed == [], "owner yang gagal tidak boleh dipasang"
+
+
+def test_verified_owner_becomes_the_copy_path(gui, monkeypatch):
+    from pastex import app as app_module
+
+    owner = _FakeWlOwner()
+    _fake_wlowner(monkeypatch, owner)
+    installed = []
+    monkeypatch.setattr(app_module, "set_clipboard_owner", installed.append)
+    app = gui(roots=[])
+
+    assert app._start_clipboard_owner() is True
+    assert installed == [owner]
+    assert app._clipboard_owner is owner
+
+
+def test_releasing_the_owner_restores_the_tools(gui, monkeypatch):
+    from pastex import app as app_module
+
+    owner = _FakeWlOwner()
+    installed = []
+    monkeypatch.setattr(app_module, "set_clipboard_owner", installed.append)
+    app = gui(roots=[])
+    app._clipboard_owner = owner
+
+    app.destroy()
+
+    assert owner.stopped == 1
+    assert installed == [None], "copy harus kembali ke wl-copy"
+    assert app._clipboard_owner is None
+
+
+def test_releasing_without_an_owner_does_nothing(gui, monkeypatch):
+    from pastex import app as app_module
+
+    installed = []
+    monkeypatch.setattr(app_module, "set_clipboard_owner", installed.append)
+    app = gui(roots=[])
+
+    app.destroy()
+
+    assert installed == []
+
+
+def test_prewarm_only_starts_the_owner_when_asked(gui, monkeypatch):
+    from pastex import app as app_module
+
+    from pastex.clipboard import ToolPlan
+
+    plan = ToolPlan("wayland", [("wl-copy", ["wl-copy"])])
+    monkeypatch.setattr(app_module, "prewarm_clipboard", lambda: (plan, plan))
+    owner = _FakeWlOwner()
+    _fake_wlowner(monkeypatch, owner)
+
+    app = gui(roots=[], settings={"clipboard_owner": False})
+    app._prewarm_paste_worker()
+    assert owner.started == 0
+
+    monkeypatch.setattr(app_module, "set_clipboard_owner", lambda _owner: None)
+    app = gui(roots=[], settings={"clipboard_owner": True})
+    app._prewarm_paste_worker()
+    assert owner.started == 1
+
+
+def test_wayland_clipboard_flag_saves_the_choice(tmp_path, monkeypatch):
+    from pastex import app as app_module
+
+    saved = []
+    monkeypatch.setattr(app_module, "load_settings", lambda: dict(app_module.DEFAULT_SETTINGS))
+    monkeypatch.setattr(app_module, "save_settings", saved.append)
+    monkeypatch.setattr(app_module, "tk", object())
+    monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
+
+    class FakeApp:
+        def __init__(self, roots=None, transient_roots=False):
+            self.roots = roots
+
+        def mainloop(self):
+            pass
+
+    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
+    assert app_module.run_cli(["--wayland-clipboard"]) == 0
+    assert saved and saved[0]["clipboard_owner"] is True
+
+
+def test_check_reports_the_clipboard_owner(capsys):
+    assert run_cli(["--check"]) == 0
+    out = capsys.readouterr().out
+    assert "Clipboard owner:" in out
+    assert "--wayland-clipboard" in out

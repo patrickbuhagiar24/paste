@@ -24,6 +24,8 @@ from .clipboard import (
     copy_text,
     detect_session,
     prewarm as prewarm_clipboard,
+    read_text_from_clipboard,
+    set_clipboard_owner,
     simulate_paste,
 )
 from .index import SnippetIndex
@@ -191,6 +193,10 @@ DEFAULT_SETTINGS = {
     # Optional per-folder child ordering, keyed by absolute parent path.
     "order": {},
     "setup_assistant_seen": False,
+    # Opt-in (1.8.0): own the Wayland selection from a helper process instead
+    # of spawning wl-copy for every copy. Off until the user asks for it,
+    # because the protocol glue cannot be exercised without a compositor.
+    "clipboard_owner": False,
 }
 
 
@@ -407,6 +413,59 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             f"salin={','.join(copy_plan.tool_names()) or '-'} "
             f"tempel={','.join(paste_plan.tool_names()) or '-'}"
         )
+        if self.__dict__.get("settings", {}).get("clipboard_owner"):
+            self._start_clipboard_owner()
+
+    def _start_clipboard_owner(self) -> bool:
+        """Own the Wayland selection instead of spawning wl-copy (opt-in).
+
+        Runs in the prewarm thread. The helper process only becomes the copy
+        path once it has proved that the compositor really serves what it
+        offers; otherwise ``wl-copy`` keeps being used and nothing changes.
+        """
+        from . import wlowner  # noqa: PLC0415 - optional feature
+
+        if not wlowner.available():
+            log_error("[owner] no Wayland session; keeping the clipboard tools")
+            return False
+        owner = wlowner.OwnerClipboard()
+        if not owner.start():
+            log_error(f"[owner] helper did not start: {owner.error}")
+            return False
+        ok, detail = wlowner.verify(
+            owner, read_text_from_clipboard, restore=copy_text
+        )
+        if not ok:
+            log_error(f"[owner] self-test failed ({detail}); keeping the tools")
+            owner.stop()
+            return False
+        self._clipboard_owner = owner
+        set_clipboard_owner(owner)
+        log_error("[owner] owning the Wayland selection; wl-copy stays the fallback")
+        return True
+
+    def _release_clipboard_owner(self) -> None:
+        """Stop the helper and go back to the clipboard tools."""
+        owner = self.__dict__.get("_clipboard_owner")
+        if owner is None:
+            return
+        self._clipboard_owner = None
+        # Stop routing copies through it before it exits, so a click during
+        # shutdown cannot write into a dead pipe.
+        set_clipboard_owner(None)
+        try:
+            owner.stop()
+        except OSError:  # pragma: no cover - already gone
+            pass
+
+    def destroy(self) -> None:
+        """Release the clipboard owner before the window goes away."""
+        self._release_clipboard_owner()
+        try:
+            base_destroy = super().destroy
+        except AttributeError:  # pragma: no cover - no Tk (test doubles)
+            return
+        base_destroy()
 
     def _start_first_run_setup_check(self) -> None:
         """Inspect paste prerequisites once, before the user clicks a snippet."""
@@ -2205,6 +2264,14 @@ def run_cli(argv: list[str] | None = None) -> int:
         help="Request /dev/uinput access (the 'pastex' group via pkexec).",
     )
     parser.add_argument(
+        "--wayland-clipboard",
+        action="store_true",
+        help=(
+            "Own the Wayland clipboard directly (experimental, avoids spawning "
+            "wl-copy per copy) and save the choice."
+        ),
+    )
+    parser.add_argument(
         "--pick",
         action="store_true",
         help=(
@@ -2265,6 +2332,12 @@ def run_cli(argv: list[str] | None = None) -> int:
     # One instance per user: a later launch asks the running one to show its
     # window (or picker) and exits, so it costs no startup time and cannot
     # leave a second dock entry. --dir sessions stay separate on purpose.
+    if args.wayland_clipboard and not load_settings().get("clipboard_owner"):
+        settings = dict(load_settings())
+        settings["clipboard_owner"] = True
+        save_settings(settings)
+        log_error("[owner] opt-in Wayland clipboard owner enabled by --wayland-clipboard")
+
     if not args.dir:
         answer = send_command("pick" if args.pick else "show")
         if answer is not None and answer.get("ok"):
@@ -2519,6 +2592,17 @@ def run_check(roots: list[Path]) -> int:
     except OSError:  # pragma: no cover - read-only runtime dir
         running = False
     print(f"Running instance: {'yes (later launches reuse it)' if running else 'no'}")
+    from . import wlowner  # noqa: PLC0415 - optional feature
+
+    owner_wanted = bool(load_settings().get("clipboard_owner"))
+    supported = wlowner.available()
+    if not supported:
+        detail = "n/a (not a Wayland session); opt-in with pastex --wayland-clipboard"
+    elif not owner_wanted:
+        detail = "off; opt-in with pastex --wayland-clipboard"
+    else:
+        detail = "on (verified at startup, wl-copy stays the fallback)"
+    print(f"Clipboard owner: {detail}")
     print(f"Application icon: {ICON_NAME} (expected WM_CLASS '{WM_CLASS}')")
     found_icons = icon_files()
     if found_icons:
