@@ -11,6 +11,7 @@ import argparse
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -30,6 +31,7 @@ from .clipboard import (
     read_text_from_clipboard,
     set_clipboard_owner,
     activate_window,
+    restore_window,
     simulate_paste,
     can_type_text,
     type_text_x11,
@@ -144,6 +146,14 @@ def log_error(message: str) -> None:
             fh.write(f"[{stamp}] {message}\n")
     except OSError:
         pass
+
+
+def _xdotool_available() -> bool:
+    """True when the window manager can be asked directly (xdotool is present)."""
+    try:
+        return shutil.which("xdotool") is not None
+    except Exception:  # noqa: BLE001 - never break a click on PATH oddities
+        return False
 
 
 def _run_in_thread(target, *args) -> None:
@@ -1812,6 +1822,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._focus_state = None
         self._hide_signal = None
         self._force_minimize_tried = False
+        self._paste_hide_via_x11 = False
         if hide is None and not PastexApp._paste_tools_ready(self):
             # A previous click (or startup) already showed that Ctrl+V cannot
             # be sent here, so there is nothing to minimize for: copy the text
@@ -2080,6 +2091,22 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         except TK_ERRORS:
             return ""
 
+    def _restore_window_via_x11(self, window_id: str) -> None:
+        """Show the window through the window manager, off the GUI thread."""
+        log_error(
+            f"[paste] asking the window manager to show {window_id} "
+            f"({PastexApp._since_click(self)})"
+        )
+        _run_in_thread(PastexApp._restore_window_worker, self, window_id)
+
+    def _restore_window_worker(self, window_id: str) -> None:
+        ok = restore_window(window_id)
+        log_error(
+            "[paste] the window manager "
+            + ("showed the window again" if ok else "did not show the window")
+            + f" ({PastexApp._since_click(self)})"
+        )
+
     def _restore_window(self, *, raise_window: bool = False) -> None:
         """Bring the window back and confirm that the WM really did it.
 
@@ -2092,6 +2119,14 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ``RESTORE_ACTIVATE_AT_MS`` the window manager itself is asked to
         activate the window through xdotool.
         """
+        if self.__dict__.get("_paste_hide_via_x11", False):
+            # The window was minimized through the window manager, so bring it
+            # back the same way: deiconify() would block the GUI thread for up
+            # to two seconds waiting for a state change that may never come.
+            window_id = PastexApp._window_id(self)
+            if window_id is not None:
+                PastexApp._restore_window_via_x11(self, window_id)
+                return
         if raise_window:
             try:
                 self.lift()
@@ -2180,10 +2215,24 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._minimize_waited_ms = 0
         self._rehide_done = False
         self._hide_logged = False
-        # Tk/X11 drops iconify() for a maximized ("zoomed") window, and the
-        # window then never hides at all. Unzoom first and put the zoom back
-        # when the window is restored.
         self._paste_was_zoomed = False
+        # Ask the window manager first: Tk's iconify() blocks the GUI thread for
+        # up to two seconds when the window manager does not report the state
+        # change (Tk waits for the unmap), which was where three seconds of a
+        # click went on a Cinnamon session. EWMH minimize returns immediately
+        # and is sent from a worker thread.
+        window_id = PastexApp._window_id(self)
+        if window_id is not None and _xdotool_available():
+            self._paste_hide_via_x11 = True
+            log_error(
+                f"[paste] minimizing through the window manager ({window_id}, "
+                f"{PastexApp._since_click(self)})"
+            )
+            _run_in_thread(force_minimize_window, window_id)
+            return True
+        self._paste_hide_via_x11 = False
+        # Tk/X11 drops iconify() for a maximized window, so the fallback (no
+        # xdotool) has to unzoom first and put the zoom back on restore.
         try:
             if str(self.state()) == "zoomed":
                 self._paste_was_zoomed = True

@@ -1,3 +1,19 @@
+pastex (1.10.9-1) unstable; urgency=medium
+
+  * Stop hiding and restoring the window through Tk. Tk's iconify() and
+    deiconify() wait up to two seconds for the window manager to report the
+    state change, and Muffin never reported it, so every click paid for two
+    such waits: the 1.10.8 log shows the copy starting at +2026 ms and the
+    paste being sent at +4227 ms while the work itself took 87 ms. The window
+    manager is now asked directly -- xdotool windowminimize --sync to hide and
+    xdotool windowactivate --sync to bring the window back, both from a worker
+    thread -- and Tk is only the fallback when there is no xdotool or no X11
+    window id. The restore is verified through the window manager and logged.
+  * The window therefore also comes back as soon as the paste is done instead
+    of waiting behind a two-second block in the GUI thread.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 22:30:00 +0700
+
 pastex (1.10.8-1) unstable; urgency=medium
 
   * Stop re-checking a clipboard that already proved unusable. The 1.10.7 log

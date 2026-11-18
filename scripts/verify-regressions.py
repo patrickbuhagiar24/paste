@@ -1206,6 +1206,41 @@ MUTATIONS = [
         "",
         ["tests/test_static.py::test_the_deploy_job_only_runs_on_main"],
     ),
+    (
+        "the click minimizes with tk instead of the window manager",
+        "pastex/app.py",
+        '        if window_id is not None and _xdotool_available():',
+        "        if False:",
+        ["tests/test_app.py::test_the_window_is_minimized_through_the_window_manager"],
+    ),
+    (
+        "the restore uses deiconify() even though the wm minimized the window",
+        "pastex/app.py",
+        '        if self.__dict__.get("_paste_hide_via_x11", False):',
+        "        if False:",
+        ["tests/test_app.py::test_the_window_is_shown_through_the_window_manager"],
+    ),
+    (
+        "the Tk restore is skipped although the wm was never asked",
+        "pastex/app.py",
+        '        if self.__dict__.get("_paste_hide_via_x11", False):',
+        "        if True:",
+        ["tests/test_app.py::test_the_tk_restore_is_used_when_the_window_manager_was_not_asked"],
+    ),
+    (
+        "xdotool is assumed present without checking",
+        "pastex/app.py",
+        "        if window_id is not None and _xdotool_available():",
+        "        if window_id is not None:",
+        ["tests/test_app.py::test_a_click_without_xdotool_falls_back_to_tk"],
+    ),
+    (
+        "the wm restore is not verified",
+        "pastex/clipboard.py",
+        "    if not activate_window(window_id, runner=runner):\n        return False",
+        "    if False:\n        return False",
+        ["tests/test_clipboard.py::test_restore_window_asks_the_window_manager"],
+    ),
 ]
 
 
