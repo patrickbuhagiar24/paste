@@ -1,8 +1,8 @@
 /* Pastex in-page layer: insert snippets at the cursor.
  *
  *  - Tracks the last focused editable (input, textarea, contenteditable).
- *  - Shows a small floating button next to the focused field (when enabled
- *    in settings) that opens the picker at the cursor.
+ *  - Shows a small floating button next to the focused field that opens
+ *    the picker at the cursor, on configured sites only.
  *  - The picker is a Shadow DOM popup: page styles cannot leak in or out.
  *  - Responds to background messages: toggle-picker, insert text.
  */
@@ -23,6 +23,15 @@
   var buttonHideTimer = 0;
   var pickerHost = null;
   var pickerState = null;
+
+  async function siteAllowed() {
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-site-allowed" });
+      return !!(response && response.allowed);
+    } catch (err) {
+      return false;
+    }
+  }
 
   function isEditable(el) {
     if (!el || el === document.body || el === document.documentElement) {
@@ -51,18 +60,6 @@
     return new Promise(function (resolve) {
       chrome.storage.local.get("pastex.tree.v1", function (obj) {
         resolve(Array.isArray(obj["pastex.tree.v1"]) ? obj["pastex.tree.v1"] : []);
-      });
-    });
-  }
-
-  function loadSettings() {
-    return new Promise(function (resolve) {
-      chrome.storage.local.get("pastex.settings.v1", function (obj) {
-        var saved = obj["pastex.settings.v1"] || {};
-        if (saved.floatingButton === undefined) {
-          saved.floatingButton = true;
-        }
-        resolve(saved);
       });
     });
   }
@@ -232,7 +229,8 @@
     pickerState = null;
   }
 
-  function openPicker(target) {
+  async function openPicker(target) {
+    if (!(await siteAllowed())) { hideButton(); closePicker(); return; }
     loadTree().then(function (tree) {
       var entries = flattenWithPaths(tree);
       if (!entries.length) {
@@ -399,7 +397,8 @@
     paintPickerList();
   }
 
-  function choosePicker() {
+  async function choosePicker() {
+    if (!(await siteAllowed())) { hideButton(); closePicker(); return; }
     if (!pickerState || !pickerState.matches.length) {
       return;
     }
@@ -419,10 +418,13 @@
       var el = event.target;
       if (isEditable(el)) {
         lastEditable = el;
-        loadSettings().then(function (settings) {
-          if (settings.floatingButton && document.hasFocus()) {
+        siteAllowed().then(function (allowed) {
+          if (allowed && document.hasFocus() && document.activeElement === el) {
             cancelHideButton();
             positionButton(el);
+          } else if (!allowed) {
+            hideButton();
+            closePicker();
           }
         });
       }

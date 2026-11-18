@@ -117,4 +117,4 @@ sed -i \
 mkdir -p dist
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT"
 echo "OK: $OUT"
-dpkg-deb --info "$OUT" | head -n 20
+dpkg-deb --info "$OUT"

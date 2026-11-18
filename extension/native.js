@@ -1,8 +1,8 @@
 /* Talk to the Pastex native host (com.pastex.native), the bridge to
  * ~/.config/pastex/*.json. The apt package installs the host plus its
  * manifests; without apt (unpacked dev install, non-Linux) the host is
- * absent and every call below fails fast so callers fall back to the
- * manual Settings form backed by chrome.storage.
+ * absent and every call below fails fast. File-based configuration and
+ * site access are unavailable until the native host is installed.
  *
  * Classic script, no DOM: loadable from pages, and unit-tested under node
  * through the module.exports branch below (with a stubbed chrome object).
@@ -96,12 +96,8 @@
     return send({ type: "pastex-read-config" });
   }
 
-  function writeDriveConfig(folderId, folderUrl) {
-    return send({ type: "pastex-write-drive-config", folderId: folderId || "", folderUrl: folderUrl || "" });
-  }
-
-  function writeServiceAccount(key) {
-    return send({ type: "pastex-write-service-account", key: key });
+  function readSites() {
+    return send({ type: "pastex-read-sites" });
   }
 
   function resetCache() {
@@ -114,8 +110,7 @@
     send: send,
     status: status,
     readConfig: readConfig,
-    writeDriveConfig: writeDriveConfig,
-    writeServiceAccount: writeServiceAccount,
+    readSites: readSites,
     resetCache: resetCache,
   };
 });

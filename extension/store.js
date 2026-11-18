@@ -1,14 +1,14 @@
 /* Pastex shared snippet model: folders + texts, search, and storage I/O.
  *
  * A classic script with no DOM access, so every context can load it:
- * side panel and options via <script src>, the background worker via
+ * side panel via <script src>, the background worker via
  * importScripts(). Pure helpers are also unit-tested under node
  * (see extension/test/) through the module.exports branch below.
  *
  * Storage schema (chrome.storage.local):
  *   pastex.tree.v1      [{id, kind, name, text?, children?, updatedAt}]
  *   pastex.recent.v1    [nodeId, ...] (most recent first, max 50)
- *   pastex.settings.v1  {floatingButton, collapsed}
+ *   pastex.settings.v1  {collapsed}
  */
 
 (function (root, factory) {
@@ -26,7 +26,6 @@
   var RECENT_KEY = "pastex.recent.v1";
   var SETTINGS_KEY = "pastex.settings.v1";
   var DRIVE_KEY = "pastex.drive.v1";
-  var SA_KEY = "pastex.sa.v1";
   var MAX_RECENT = 50;
 
   function uuid() {
@@ -214,7 +213,7 @@
   }
 
   function defaultSettings() {
-    return { floatingButton: true, collapsed: [] };
+    return { collapsed: [] };
   }
 
   function defaultDrive() {
@@ -287,28 +286,11 @@
     await storageArea().set(obj);
   }
 
-  async function loadServiceAccount() {
-    var obj = await storageArea().get(SA_KEY);
-    return obj[SA_KEY] || null;
-  }
-
-  async function saveServiceAccount(sa) {
-    var obj = {};
-    // Only the two fields the auth flow needs are kept.
-    obj[SA_KEY] = { client_email: sa.client_email, private_key: sa.private_key };
-    await storageArea().set(obj);
-  }
-
-  async function clearServiceAccount() {
-    await storageArea().remove(SA_KEY);
-  }
-
   return {
     TREE_KEY: TREE_KEY,
     RECENT_KEY: RECENT_KEY,
     SETTINGS_KEY: SETTINGS_KEY,
     DRIVE_KEY: DRIVE_KEY,
-    SA_KEY: SA_KEY,
     MAX_RECENT: MAX_RECENT,
     uuid: uuid,
     nowIso: nowIso,
@@ -333,8 +315,5 @@
     saveSettings: saveSettings,
     loadDrive: loadDrive,
     saveDrive: saveDrive,
-    loadServiceAccount: loadServiceAccount,
-    saveServiceAccount: saveServiceAccount,
-    clearServiceAccount: clearServiceAccount,
   };
 });

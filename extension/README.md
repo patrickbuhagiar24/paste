@@ -1,179 +1,128 @@
-# Pastex for Chrome
+# Pastex for Chrome and Chromium
 
-One-click text snippet manager as a Chrome extension (Manifest V3):
-
-- **Side Panel library** — folders + snippets, search by name or contents,
-  live preview, built-in editor.
-- **In-page picker** — `Ctrl+Shift+V`, the ⚡ button next to focused fields,
-  or right-click → *Paste snippet*. The picker appears at the field and
-  inserts the snippet at the cursor.
-- **Google Drive sync** — snippets mirror as `.txt` files through a service
-  account. No OAuth popups.
-
-No servers, no accounts, no tracking. Snippets live in local browser storage
-until you connect Drive.
+Pastex is a browser extension for text snippets, with a side panel and optional
+Google Drive sync. It operates on **only the sites you choose**. There is no
+settings window: configure Pastex by editing the files below.
 
 ## Install
 
-### From apt (recommended on Linux Mint)
+See the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run:
 
 ```bash
+cd ~
+sudo apt update
 sudo apt install pastex
 ```
 
-The package registers the extension for **auto-detection**: on the next
-launch, Chrome and Chromium notice
-`/usr/share/<browser>/extensions/*.json` and offer to enable Pastex with one
-click. No daemons, groups, or services are involved.
-
-### Unpacked (development)
-
-1. Open `chrome://extensions`, enable *Developer mode*.
-2. *Load unpacked* → select this `extension/` directory. Config lives in
-   browser storage; see `~/.config/pastex` above for the apt install.
-
-## Use
-
-- Click the Pastex toolbar icon to open the Side Panel.
-- Click a snippet once to insert it into the focused field of the active tab.
-  When no field is focused, the text is copied instead — press `Ctrl+V`.
-- In any page: focus a text field, then press `Ctrl+Shift+V`, click the ⚡
-  button beside the field, or right-click → *Paste snippet*.
-- Manage everything (folders, rename, reorder, edit, delete) in the Side
-  Panel. Search matches names first, then contents.
-
-## Config files (`~/.config/pastex`)
-
-With the apt install, Drive credentials live in two plain JSON files:
-
-- `~/.config/pastex/google-drive.json` — the shared Drive folder:
-  `{"folder_id": "…", "folder_url": "https://drive.google.com/…"}`
-  (either field is enough; if both are set, `folder_id` takes precedence.
-  Clear it when changing `folder_url`, so the ID is parsed from the new link).
-- `~/.config/pastex/service-account.json` — the Google Cloud JSON key
-  (`client_email` + `private_key`).
-
-A `.deb` runs as root and must not create per-user files at install time, so
-the folder is created **automatically on login** (an XDG autostart one-shot)
-**and on first use** (by the native host below), with templates and `0700` /
-`0600` permissions. You can edit both files by hand or from the Settings page
-— the files always win over browser storage, which remains as the fallback
-for installs without apt (unpacked, non-Linux).
-
-The browser cannot read local files by itself, so a tiny native host bridges
-the gap: `/usr/lib/pastex/pastex-native-host` (Python 3, standard library
-only), registered as `com.pastex.native` for Chrome and Chromium. It only
-serves the two config files over the native-messaging protocol and creates
-nothing else.
-
-## Google Drive sync (service account)
-
-Pastex signs in as a Google Cloud **service account**: one key, no per-user
-consent screens, works in the background. With apt, the Settings page reads
-and writes `~/.config/pastex/*.json`; otherwise it uses browser storage.
-
-1. In Google Cloud Console, select (or create) a project and enable the
-   **Google Drive API**.
-2. *IAM & Admin → Service Accounts* → create a service account (no roles
-   needed), then *Keys → Add key → JSON*. A `.json` file downloads.
-3. Decide where the snippets live:
-   - **Share a folder**: in Google Drive, share a folder with the service
-     account's `client_email` (role Editor), and copy the folder ID from the
-     folder URL (`.../folders/<ID>`); or
-   - **Let Pastex create one**: the Settings page can create a `Pastex`
-     folder owned by the service account.
-4. Open Pastex *Settings* (⚙ in the Side Panel), paste the JSON key, save it,
-   then enter/verify the folder ID (or create the folder).
-5. Press ⇄ *Sync* in the Side Panel.
-
-Sync rules (v1, deliberately simple):
-
-- Each snippet maps to `<path>/<Name>.txt` in the Drive folder.
-- **Sync** merges newest-wins per path: newer uploads, newer downloads.
-- ⇪ uploads everything local (overwrites newer remote copies); ⇩ downloads
-  everything remote (replaces local). Both ask for confirmation.
-- **Deletions never propagate**: delete on both sides if you mean it.
-
-Key security: anyone holding the JSON key acts as the service account, so
-treat it like a password. On apt installs the native host reads the key file;
-when saved through Settings a copy of `client_email` and `private_key` is
-also stored in local browser storage as a fallback. The private key itself is
-never sent to Google — only signed login requests go to the token endpoint.
-
-## Permissions (why each one)
-
-| Permission | Used for |
-|---|---|
-| `storage` | Snippets, settings, sync state (local only) |
-| `sidePanel` | The snippet library panel |
-| `contextMenus` | Right-click → *Paste snippet* with recent items |
-| `scripting`, `activeTab` | Talking to the current page (insert text, open picker) |
-| `clipboardWrite` | Copy fallback when no field is focused |
-| `nativeMessaging` | Read `~/.config/pastex/*.json` through the apt-shipped host |
-| `https://www.googleapis.com/`, `https://oauth2.googleapis.com/` | Drive sync only |
-
-Content scripts run on `http://`/`https://` pages to insert text and show the
-picker; page contents are never read except the field being typed into.
-
-## For maintainers: CRX signing and auto-detection
-
-The apt package ships a signed `.crx` plus external-install JSON:
-
-- `/usr/share/pastex/pastex.crx` and `/usr/share/pastex/extension/`
-- `/usr/share/google-chrome/extensions/<id>.json`
-- `/usr/share/chromium/extensions/<id>.json`
-
-The `<id>` is derived from the CRX signing key, so **releases must reuse one
-stable key** or every upgrade looks like a new extension. Generate once:
+Enable the extension when the browser offers it and restart the browser.
+Installing the package as root does not create files in another user's home:
+the config directory is created on the next user login, when the extension is
+installed/enabled, or when the browser starts. To create it immediately as
+your normal user (do **not** use sudo):
 
 ```bash
-openssl genrsa -out crx-key.pem 2048   # keep secret, never commit it
+/usr/lib/pastex/pastex-native-host --init-only
 ```
 
-and build with `PASTEX_CRX_KEY=/path/to/crx-key.pem ./scripts/build-deb.sh`
-(release CI reads the `PASTEX_CRX_KEY` secret). Without a key the build uses
-an ephemeral one and says so — fine for testing, not for release.
+If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/pastex` instead of
+`~/.config/pastex`. The directory is private (0700) and JSON files are 0600.
 
-Verify any build without a browser:
+## Choose sites
 
-```bash
-python3 scripts/pack-crx.py --verify /usr/share/pastex/pastex.crx
-```
-
-This checks the CRX structure, the RSA signature, and the embedded zip.
-
-### Silent force-install (managed machines)
-
-Auto-detection still asks the user to click *Enable*. For fully silent
-installs, publish the `.crx` over HTTPS with an update manifest:
-
-```xml
-<?xml version='1.0' encoding='UTF-8'?>
-<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
-  <app appid='<EXTENSION ID>'>
-    <updatecheck codebase='https://example.com/pastex.crx' version='2.0.0' />
-  </app>
-</gupdate>
-```
-
-and ship `/etc/opt/chrome/policies/managed/pastex.json`:
+Edit `~/.config/pastex/sites.json`, for example:
 
 ```json
-{"ExtensionInstallForcelist": ["<EXTENSION ID>;https://example.com/updates.xml"]}
+{
+  "allowed_sites": [
+    "https://example.com",
+    "https://*.example.org",
+    "http://localhost"
+  ]
+}
 ```
 
-The regular apt package deliberately does not do this: silent force-installs
-are an administrator decision.
+The default list is **empty**, so no websites are enabled until configured.
+Use origins with an `http` or `https` scheme and hostname only; no paths,
+credentials, ports or global wildcards. `*.example.org` includes the base domain
+and all subdomains. HTTP and HTTPS are separate; matching includes any port.
+If the file is malformed, contains an invalid entry, or the native host is
+unavailable, no sites are enabled. The extension requests access to HTTP/HTTPS
+in Chrome so it can register your chosen sites dynamically; it registers its
+content script and context menu only for the configured origins.
+
+**After changing sites.json, completely restart the browser and reload open
+tabs.** Already-open tabs can retain an earlier injected script until reloaded.
+When upgrading, Chrome may ask you to re-enable the extension because its site
+permissions changed. Insertion requests also check the current file each time,
+so a removed site is denied even before restart.
+
+## Configure Google Drive (optional)
+
+1. Enable the **Drive API** in Google Cloud, create a service account, and
+   download its JSON key. Share the desired Drive folder with the key's
+   `client_email` as an Editor.
+2. Copy the downloaded JSON key to `~/.config/pastex/service-account.json`.
+   It must contain `type`, `client_email` and `private_key`. Keep it private.
+3. Edit `~/.config/pastex/google-drive.json`, for example:
+
+   ```json
+   {"folder_url": "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"}
+   ```
+
+   A `folder_id` field may be used instead. When both are present, `folder_id`
+   wins; clear it when changing the link. No settings page or browser-storage
+   credential fallback is used. Older browser-storage credentials are not
+   automatically deleted on upgrade; remove them via Chrome's extension
+   storage developer tools if desired, after verifying your file setup.
+4. Open the Pastex side panel and press **⇄ Sync**. The service account key
+   never leaves the machine; only signed authentication requests are sent to
+   Google's token endpoint.
+
+Each snippet maps to a `.txt` file. Sync merges newest-wins per path; upload
+all and download all overwrite the other side after confirmation. Deletions
+never propagate automatically. Snippets themselves remain in browser storage.
+
+## Usage
+
+Open the side panel with the toolbar icon to create, edit, search and organize
+snippets. On an allowed site, focus an editable field and press `Ctrl+Shift+V`,
+click the floating lightning button, or use the editable-field context menu.
+Click a side-panel snippet to insert it. If no editable field is focused on an
+allowed page, it is copied to the clipboard. Restricted browser pages cannot
+receive scripts. Sites not listed in `sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
-- *Chrome never offers to enable*: check the JSON exists
-  (`/usr/share/google-chrome/extensions/*.json`), its `external_crx` path
-  exists, and restart the browser (not just the window).
-- *Sync says 404 on the folder*: the folder is not shared with the service
-  account email. Re-share it as Editor and verify again.
-- *Token request fails*: the JSON key is truncated or the Drive API is not
-  enabled in the Cloud project.
-- *Insert does nothing on some pages*: `chrome://`, the Web Store, and a few
-  privileged pages block content scripts by design; the text is copied to the
-  clipboard instead.
+- `getcwd() failed: No such file or directory` during apt means your terminal's
+  current directory was removed. Run `cd ~` before retrying; check install
+  status with `dpkg -s pastex`. The warning itself does not prove failure.
+- If configuration is missing, run `--init-only` as shown above and restart
+  the browser. The apt package installs `com.pastex.native`; the host manifest
+  authorizes only the packaged extension ID. An unpacked development extension
+  needs a matching native host manifest and permissions, otherwise it fails
+  closed. The extension service-worker console shows native-host errors.
+- If Drive says 404, share the folder with the service account email. Token
+  errors can indicate a malformed key or a disabled Drive API.
+- The built-in Chrome Web Store, `chrome://` pages and other browser-protected
+  pages cannot run extensions, even if listed.
+
+## Maintainers: builds and permissions
+
+The apt package ships `/usr/share/pastex/pastex.crx`, the unpacked extension,
+the Python 3 native host, XDG autostart initialization, and external extension
+and native-host manifests for Chrome and Chromium. `external_crx` registers the
+CRX in `/usr/share/google-chrome/extensions` and `/usr/share/chromium/extensions`.
+
+CRX IDs come from the signing key. Configure a stable `PASTEX_CRX_KEY` for
+release CI and use the same key on every upgrade. Without it, local builds use
+an ephemeral key: the extension ID and browser storage change, and the build is
+for testing only. Verify with `python3 scripts/pack-crx.py --verify FILE.crx`.
+An enterprise administrator may configure `ExtensionInstallForcelist` with
+an update manifest; the package does not silently force-install extensions.
+
+Permissions: `storage` holds snippets and UI state; `sidePanel`, `contextMenus`,
+`scripting` and `activeTab` provide the editor and approved-site picker;
+`clipboardWrite` is the fallback on approved sites; `nativeMessaging` reads
+the config files. HTTP/HTTPS host permission covers dynamic user-approved sites
+and the Google API endpoints; Chrome displays this as access to all sites even
+though Pastex restricts injection using the allowlist described above.

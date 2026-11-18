@@ -1,8 +1,7 @@
 """Pastex for Chrome (2.x): manifest, sources, CRX packaging, apt registration.
 
-The desktop app (pastex/, 1.x) stays in the repo as legacy; the shipped
-product is extension/, packed into a signed .crx and registered for
-auto-detection by Chrome/Chromium through external-install JSON files.
+The shipped product is extension/, packed into a signed .crx and registered
+for auto-detection by Chrome/Chromium through external-install JSON files.
 """
 
 import json
@@ -45,21 +44,18 @@ def test_manifest_permissions_are_minimal_and_documented():
         "clipboardWrite",
         "nativeMessaging",
     }
-    assert manifest["host_permissions"] == [
-        "https://www.googleapis.com/",
-        "https://oauth2.googleapis.com/",
-    ]
+    # Broad host permissions enable dynamic registration for user-chosen sites;
+    # content scripts themselves are registered only for the allowlist.
+    assert manifest["host_permissions"] == ["http://*/*", "https://*/*"]
 
 
 def test_manifest_entry_points_exist():
     manifest = _manifest()
     assert (EXT / manifest["background"]["service_worker"]).is_file()
     assert (EXT / manifest["side_panel"]["default_path"]).is_file()
-    assert (EXT / manifest["options_page"]).is_file()
-    for script in manifest["content_scripts"]:
-        assert script["matches"] == ["http://*/*", "https://*/*"]
-        for rel in script["js"] + script.get("css", []):
-            assert (EXT / rel).is_file(), rel
+    assert "options_page" not in manifest
+    assert "content_scripts" not in manifest
+    assert (EXT / "sites.js").is_file()
     assert "toggle-picker" in manifest["commands"]
     assert manifest["action"]["default_title"]
 
@@ -74,7 +70,7 @@ def test_manifest_icons_exist_and_match_sizes():
 
 
 def test_html_pages_reference_only_shipped_scripts():
-    for page in ("sidepanel.html", "options.html"):
+    for page in ("sidepanel.html",):
         text = (EXT / page).read_text(encoding="utf-8")
         for src in re.findall(r'<script\s+src="([^"]+)"', text):
             assert "://" not in src, f"{page} loads remote code: {src}"
@@ -332,14 +328,14 @@ def test_extension_readme_documents_setup_and_signing():
 HOST = ROOT / "native-host" / "pastex-native-host"
 
 
-def _run_host(home, messages):
+def _run_host(home, messages, *args):
     """Spawn the host with a fake HOME, send messages, return responses."""
     import os
     import struct
 
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
     proc = subprocess.Popen(
-        [sys.executable, str(HOST)],
+        [sys.executable, str(HOST), *args],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         env=env,
@@ -369,12 +365,40 @@ def test_native_host_is_executable_and_init_only(tmp_path):
     config = tmp_path / ".config" / "pastex"
     assert proc.stdout.strip() == str(config)
     assert stat.S_IMODE(config.stat().st_mode) == 0o700
-    for name in ("google-drive.json", "service-account.json"):
+    for name in ("google-drive.json", "service-account.json", "sites.json"):
         path = config / name
         assert path.is_file(), name
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, name
         json.loads(path.read_text(encoding="utf-8"))  # valid JSON templates
     assert (config / "README.txt").is_file()
+
+
+@pytest.mark.parametrize("extra", [[], ["--parent-window=123"]])
+def test_native_host_accepts_chrome_origin_and_creates_files(tmp_path, extra):
+    origin = "chrome-extension://" + "a" * 32 + "/"
+    status, = _run_host(tmp_path, [{"type": "pastex-status"}], origin, *extra)
+    assert status["ok"] is True
+    directory = tmp_path / ".config" / "pastex"
+    assert (directory / "google-drive.json").is_file()
+    assert (directory / "service-account.json").is_file()
+
+
+def test_native_host_respects_xdg_config_home(tmp_path):
+    config = tmp_path / "custom-config"
+    result = subprocess.run([sys.executable, str(HOST), "--init-only"],
+                            env={"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(config), "PATH": "/usr/bin:/bin"},
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert (config / "pastex" / "google-drive.json").is_file()
+    assert (config / "pastex" / "service-account.json").is_file()
+
+
+def test_native_host_rejects_unexpected_arguments(tmp_path):
+    result = subprocess.run([sys.executable, str(HOST), "--unknown"],
+                            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+                            capture_output=True, timeout=5)
+    assert result.returncode != 0
+    assert not (tmp_path / ".config" / "pastex").exists()
 
 
 def test_native_host_reports_unconfigured_files(tmp_path):
@@ -385,51 +409,33 @@ def test_native_host_reports_unconfigured_files(tmp_path):
     assert responses["serviceAccount"]["configured"] is False
 
 
-def test_native_host_write_and_read_roundtrip(tmp_path):
-    responses = _run_host(
-        tmp_path,
-        [
-            {"type": "pastex-write-drive-config",
-             "folderUrl": "https://drive.google.com/drive/folders/1AbC_xyz-9"},
-            {"type": "pastex-write-service-account",
-             "key": {"type": "service_account", "client_email": "e@x.iam", "private_key": "k"}},
-            {"type": "pastex-read-config"},
-        ],
-    )
-    assert responses[0] == {"ok": True, "folderId": "1AbC_xyz-9"}
-    assert responses[1] == {"ok": True, "email": "e@x.iam"}
-    assert responses[2]["ok"] is True
-    assert responses[2]["drive"]["folderId"] == "1AbC_xyz-9"
-    assert responses[2]["serviceAccount"]["client_email"] == "e@x.iam"
-    # Files on disk hold the same values.
-    drive_file = json.loads((tmp_path / ".config" / "pastex" / "google-drive.json").read_text())
-    assert drive_file["folder_id"] == "1AbC_xyz-9"
+def test_native_host_reads_config_files_and_site_allowlist(tmp_path):
+    _run_host(tmp_path, [{"type": "pastex-status"}])
+    config = tmp_path / ".config" / "pastex"
+    (config / "google-drive.json").write_text(json.dumps({"folder_url": "https://drive.google.com/drive/folders/1AbC_xyz-9"}))
+    (config / "service-account.json").write_text(json.dumps({"type": "service_account", "client_email": "e@x.iam", "private_key": "k"}))
+    (config / "sites.json").write_text(json.dumps({"allowed_sites": ["https://example.com"]}))
+    drive, sites = _run_host(tmp_path, [{"type": "pastex-read-config"}, {"type": "pastex-read-sites"}])
+    assert drive["drive"]["folderId"] == "1AbC_xyz-9"
+    assert drive["serviceAccount"]["client_email"] == "e@x.iam"
+    assert sites["allowedSites"] == ["https://example.com"]
 
 
-def test_native_host_rejects_bad_requests(tmp_path):
-    responses = _run_host(
-        tmp_path,
-        [
-            {"type": "bogus"},
-            {"type": "pastex-write-service-account", "key": {"client_email": "e"}},
-            {"type": "pastex-read-config"},
-        ],
-    )
-    assert responses[0]["ok"] is False
-    assert responses[1]["ok"] is False
-    assert responses[2]["ok"] is True
-    assert responses[2]["serviceAccount"] is None
-    assert responses[2]["drive"] is None
+def test_native_host_rejects_bad_requests_and_sites(tmp_path):
+    _run_host(tmp_path, [{"type": "pastex-status"}])
+    config = tmp_path / ".config" / "pastex"
+    (config / "sites.json").write_text('{"allowed_sites": "https://example.com"}')
+    unknown, sites = _run_host(tmp_path, [{"type": "bogus"}, {"type": "pastex-read-sites"}])
+    assert not unknown["ok"] and not sites["ok"]
 
 
 def test_native_host_reads_key_without_folder_and_handles_invalid_json_objects(tmp_path):
-    responses = _run_host(tmp_path, [
-        {"type": "pastex-write-service-account", "key": {
-            "type": "service_account", "client_email": "e@x.iam", "private_key": "k"}},
-        {"type": "pastex-read-config"},
-    ])
-    assert responses[1]["serviceAccount"]["client_email"] == "e@x.iam"
-    assert responses[1]["drive"] is None
+    _run_host(tmp_path, [{"type": "pastex-status"}])
+    config = tmp_path / ".config" / "pastex"
+    (config / "service-account.json").write_text(json.dumps({"type": "service_account", "client_email": "e@x.iam", "private_key": "k"}))
+    responses = _run_host(tmp_path, [{"type": "pastex-read-config"}])
+    assert responses[0]["serviceAccount"]["client_email"] == "e@x.iam"
+    assert responses[0]["drive"] is None
     config = tmp_path / ".config" / "pastex"
     (config / "google-drive.json").write_text('[]')
     (config / "service-account.json").write_text('[1]')

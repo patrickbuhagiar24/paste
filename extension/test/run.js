@@ -11,7 +11,7 @@ globalThis.test = function test(name, fn) {
 };
 
 (async function main() {
-  for (const file of ["store.test.js", "drive.test.js", "native.test.js"]) {
+  for (const file of ["store.test.js", "drive.test.js", "native.test.js", "sites.test.js", "background.test.js"]) {
     require(path.join(__dirname, file));
   }
   let passed = 0;

@@ -5,5 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ./scripts/build-deb.sh
-sudo apt install -y ./dist/*.deb
+version="$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+sudo apt install -y "./dist/pastex_${version}-1_all.deb"
 echo "Done. Launch Chrome/Chromium and enable Pastex when the browser asks."

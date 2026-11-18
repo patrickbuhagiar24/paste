@@ -1,93 +1,8 @@
-"""Static tests: catch NameError without running the GUI.
+"""Packaging and deployment checks for the browser extension."""
 
-v1.0.3 regression: app.py used `threading` without importing it, so the
-Copy/Paste buttons raised NameError on a user machine — while every test
-passed, because the GUI path is not exercised without a display.
-"""
-
-import ast
-import builtins
 from pathlib import Path
 
-PKG = Path(__file__).resolve().parent.parent / "pastex"
-
-
-def _bound_names(tree: ast.AST) -> set[str]:
-    """Every name bound in a module: imports, definitions, assignment targets."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add((alias.asname or alias.name).split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                names.add(alias.asname or alias.name)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, (ast.Name,)) and isinstance(node.ctx, ast.Store):
-            names.add(node.id)
-        elif isinstance(node, ast.arg):
-            names.add(node.arg)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            names.add(node.name)
-        elif isinstance(node, ast.comprehension):
-            for sub in ast.walk(node.target):
-                if isinstance(sub, ast.Name):
-                    names.add(sub.id)
-        elif isinstance(node, (ast.Global, ast.Nonlocal)):
-            names.update(node.names)
-    return names
-
-
-def _used_names(tree: ast.AST) -> set[str]:
-    return {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-    }
-
-
-def test_no_undefined_names_in_package():
-    known_builtins = set(dir(builtins)) | {
-        "__file__",
-        "__name__",
-        "__doc__",
-        "__package__",
-        "self",
-        "cls",
-        "annotations",
-    }
-    problems = {}
-    for path in sorted(PKG.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        missing = _used_names(tree) - _bound_names(tree) - known_builtins
-        if missing:
-            problems[path.name] = sorted(missing)
-    assert not problems, f"undefined names: {problems}"
-
-
-def test_app_module_imports_threading():
-    """The Copy/Paste buttons use a background thread."""
-    from pastex import app
-
-    assert hasattr(app, "threading")
-
-
-def test_modules_import_cleanly_without_display(monkeypatch):
-    """Every module must import without X/Wayland (no display at import time)."""
-    monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    import importlib
-
-    import pastex
-
-    for name in ("app", "clipboard", "snippets", "uinput"):
-        importlib.import_module(f"pastex.{name}")
-    assert pastex.__version__
-
-
-# --- Konsistensi metadata paket -------------------------------------------
-ROOT = PKG.parent
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _control_field(text: str, field: str) -> list[str]:
@@ -190,19 +105,6 @@ def test_extension_payload_is_registered_for_autodetection():
         assert required in rules, f"rules misses {required!r}"
     for legacy in ("usr/bin/pastex", "pastex.desktop", "pastex-uinput-group"):
         assert legacy not in rules, f"rules still ships desktop file {legacy}"
-
-
-def test_helper_activates_the_templates_only_when_called():
-    from pastex import uinput
-
-    helper = (ROOT / "usr" / "lib" / "pastex" / "pastex-uinput-group").read_text(
-        encoding="utf-8"
-    )
-    assert uinput.RULE_TEMPLATE == "/usr/lib/pastex/70-pastex-uinput.rules"
-    assert uinput.UNIT_TEMPLATE == "/usr/lib/pastex/ydotoold.service"
-    assert helper.count(uinput.RULE_TEMPLATE) >= 1
-    assert uinput.UDEV_RULE in helper  # the template is copied to the active path
-    assert uinput.GROUP in helper
 
 
 # --- the generated control file must be shell-proof -----------------------
