@@ -2982,3 +2982,89 @@ def test_a_slow_tree_refresh_is_logged(monkeypatch):
 
     assert logged and "the refresh took" in logged[0]
     assert "800 ms" in logged[0]
+
+
+def _ewmh_app(monkeypatch, *, winfo_id=41943043):
+    """Test double with a real-looking X11 window id and no Tk blocking calls."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    calls = []
+    app = PastexApp.__new__(PastexApp)
+    app.status_var = type("V", (), {"set": staticmethod(lambda _v: None)})()
+    app._paste_clicked_at = 0.0
+    app.winfo_id = lambda: winfo_id
+    app.iconify = lambda: calls.append("iconify")
+    app.deiconify = lambda: calls.append("deiconify")
+    app.lift = lambda: calls.append("lift")
+    app.update_idletasks = lambda: calls.append("idle")
+    app.state = lambda *a: calls.append(("state", a)) or "normal"
+    app.after = lambda *a, **k: "id"
+    monkeypatch.setattr(
+        app_module, "shutil", type("S", (), {"which": staticmethod(lambda n: "/usr/bin/x" + n)})
+    )
+    return app, calls
+
+
+def test_the_window_is_minimized_through_the_window_manager(monkeypatch):
+    """Tk's iconify() blocks 2 s when the WM does not report the change."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    threads = []
+    app, calls = _ewmh_app(monkeypatch)
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda fn, *a, **k: threads.append((fn, a))
+    )
+
+    assert PastexApp._hide_for_paste(app) is True
+
+    assert app._paste_hide_via_x11 is True
+    assert calls == []  # no iconify(), no state(), no update_idletasks()
+    assert threads == [(app_module.force_minimize_window, ("0x2800003",))]
+
+
+def test_the_window_is_shown_through_the_window_manager(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    threads = []
+    app, calls = _ewmh_app(monkeypatch)
+    app._paste_hide_via_x11 = True
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda fn, *a, **k: threads.append((fn, a))
+    )
+
+    PastexApp._restore_window(app)
+
+    assert calls == []  # deiconify() would block the GUI thread
+    assert threads[0][0] is PastexApp._restore_window_worker
+    assert threads[0][1] == (app, "0x2800003")
+
+
+def test_the_tk_restore_is_used_when_the_window_manager_was_not_asked(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _ewmh_app(monkeypatch)
+    app._paste_hide_via_x11 = False
+    monkeypatch.setattr(PastexApp, "_wait_for_the_restore", lambda self: None)
+
+    PastexApp._restore_window(app)
+
+    assert "deiconify" in calls
+
+
+def test_a_click_without_xdotool_falls_back_to_tk(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _ewmh_app(monkeypatch)
+    monkeypatch.setattr(
+        app_module, "shutil", type("S", (), {"which": staticmethod(lambda n: None)})
+    )
+
+    assert PastexApp._hide_for_paste(app) is True
+    assert app._paste_hide_via_x11 is False
+    # The old Tk path: it asks the state (to unzoom), then iconifies.
+    assert calls == [("state", ()), "iconify", "idle"]

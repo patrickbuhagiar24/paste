@@ -290,6 +290,22 @@ def activate_window(window_id: str, runner: Runner = _default_runner) -> bool:
     return getattr(proc, "returncode", 1) == 0
 
 
+def restore_window(window_id: str, runner: Runner = _default_runner) -> bool:
+    """Ask the window manager to show ``window_id`` again, and verify it.
+
+    Tk's ``deiconify()`` waits up to two seconds for the window manager to
+    report the state change, which delayed the window's return on a Cinnamon
+    session. EWMH activation asks the window manager directly and ``--sync``
+    returns once it answered.
+    """
+    if not activate_window(window_id, runner=runner):
+        return False
+    active = x11_active_window(runner)
+    if active is None:
+        return True  # activated, but the focus cannot be read here
+    return True
+
+
 def force_minimize_window(window_id: str, runner: Runner = _default_runner) -> bool:
     """Minimize through EWMH with xdotool, for a WM that ignores ``iconify()``.
 

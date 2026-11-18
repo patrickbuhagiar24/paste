@@ -1049,3 +1049,28 @@ def test_the_typing_timeout_grows_with_the_text(monkeypatch):
 
     assert clipboard.type_text_x11("x" * 5000, runner=runner).ok is True
     assert timeouts and timeouts[0] > 10
+
+
+def test_restore_window_asks_the_window_manager(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = []
+
+    def runner(cmd, **kwargs):
+        captured.append(list(cmd))
+        if cmd[:2] == ["xdotool", "getactivewindow"]:
+            return SimpleNamespace(returncode=0, stdout="0x2800003\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert clipboard.restore_window("0x2800003", runner=runner) is True
+    assert ["xdotool", "windowactivate", "--sync", "0x2800003"] in captured
+
+
+def test_restore_window_reports_a_refusing_window_manager(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert (
+        clipboard.restore_window(
+            "0x2800003",
+            runner=lambda cmd, **k: SimpleNamespace(returncode=1, stdout="", stderr=""),
+        )
+        is False
+    )
