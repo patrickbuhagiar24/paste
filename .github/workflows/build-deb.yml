@@ -27,11 +27,9 @@ jobs:
           fetch-depth: 0
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg gpgv python3-tk python3-pytest xvfb xauth x11-utils
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg gpgv python3-pytest
 
       - name: Run tests
-        env:
-          PASTE_REQUIRE_X11_TEST: "1"
         run: |
           set -o pipefail
           if ! python3 -m pytest tests/ -q 2>&1 | tee pytest.log; then

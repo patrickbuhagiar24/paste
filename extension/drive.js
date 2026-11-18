@@ -357,13 +357,6 @@
     });
   }
 
-  async function aboutUser(token, fetchImpl) {
-    return driveFetch(token, "/about", {
-      query: { fields: "user(displayName,emailAddress)" },
-      fetchImpl: fetchImpl,
-    });
-  }
-
   // --- sync planning (pure; the caller applies the ops with progress) ---
   //
   // localEntries:  [{path, updatedAt}]            (from PastexStore)
@@ -446,7 +439,6 @@
     ensureFolderPath: ensureFolderPath,
     uploadNew: uploadNew,
     updateText: updateText,
-    aboutUser: aboutUser,
     planSync: planSync,
     planUploadAll: planUploadAll,
     planDownloadAll: planDownloadAll,

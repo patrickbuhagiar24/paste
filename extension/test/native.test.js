@@ -75,13 +75,11 @@ test("helpers send the right message types", async () => {
   try {
     Native.resetCache();
     await Native.readConfig();
-    await Native.writeDriveConfig("fid", "url");
-    await Native.writeServiceAccount({ client_email: "e" });
+    await Native.readSites();
     assert.deepEqual(
       calls.map((c) => c.message.type),
-      ["pastex-read-config", "pastex-write-drive-config", "pastex-write-service-account"]
+      ["pastex-read-config", "pastex-read-sites"]
     );
-    assert.equal(calls[1].message.folderId, "fid");
   } finally {
     uninstallStub();
   }

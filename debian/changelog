@@ -1,3 +1,17 @@
+pastex (2.1.0-1) unstable; urgency=medium
+
+  * Configure Drive and allowed websites using per-user files, without a settings page.
+  * Remove the obsolete desktop application and its launcher.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 03:00:00 +0000
+
+pastex (2.0.1-1) unstable; urgency=medium
+
+  * Initialize user config on extension startup and accept Chrome's native host arguments.
+  * Refresh the extension icon.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 02:30:00 +0000
+
 pastex (2.0.0-1) unstable; urgency=medium
 
   * Ship the Pastex browser extension and Drive configuration native host.

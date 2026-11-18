@@ -16,9 +16,8 @@
   var settings = Store.defaultSettings();
   var drive = Store.defaultDrive();
   // Credentials from ~/.config/pastex via the native host (apt installs).
-  // When the host is absent, the browser-storage form is used instead.
+  // Drive configuration comes only from the per-user files.
   var fileFolderId = "";
-  var fileSaEmail = "";
   var syncFolderId = "";
   var selectedId = "";
   var query = "";
@@ -234,6 +233,10 @@
       setStatus("Inserted into the page.");
       return;
     }
+    if (response && response.reason === "site-not-allowed") {
+      setStatus("Site not allowed. See ~/.config/pastex/sites.json and README.");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(node.text || "");
       setStatus("No editable field focused — copied. Press Ctrl+V.");
@@ -365,45 +368,26 @@
 
   // --- Google Drive sync ---
 
-  function viaFiles() {
-    return !!fileFolderId;
-  }
-
   function effectiveFolderId() {
-    return fileFolderId || drive.folderId;
+    return fileFolderId;
   }
 
   async function refreshNative() {
     fileFolderId = "";
-    fileSaEmail = "";
     try {
       var status = await Native.status();
       if (status && status.drive && status.drive.configured) {
         fileFolderId = status.drive.folderId || "";
       }
-      if (status && status.serviceAccount && status.serviceAccount.configured) {
-        fileSaEmail = status.serviceAccount.email || "";
-      }
     } catch (err) {
-      /* host absent: browser storage is used */
+      /* Sync requires the native host and configuration files. */
     }
     renderDriveBar();
   }
 
-  // Service account: ~/.config/pastex first, browser storage as fallback.
   async function resolveServiceAccount() {
-    try {
-      var config = await Native.readConfig();
-      if (config && config.serviceAccount && config.serviceAccount.client_email) {
-        return { sa: config.serviceAccount, viaFiles: true };
-      }
-    } catch (err) {
-      /* fall through to browser storage */
-    }
-    var stored = await Store.loadServiceAccount().catch(function () {
-      return null;
-    });
-    return { sa: stored, viaFiles: false };
+    var config = await Native.readConfig();
+    return config && config.serviceAccount ? Drive.parseServiceAccount(JSON.stringify(config.serviceAccount)) : null;
   }
 
   function driveStatusLine() {
@@ -413,17 +397,16 @@
     if (!effectiveFolderId()) {
       return "Drive: not connected.";
     }
-    var via = viaFiles() ? "files" : "browser";
     if (drive.lastSyncAt) {
       var when = drive.lastSyncAt.slice(0, 16).replace("T", " ");
-      return "Drive (" + via + "): synced " + when + (drive.lastSummary ? " (" + drive.lastSummary + ")" : "");
+      return "Drive (files): synced " + when + (drive.lastSummary ? " (" + drive.lastSummary + ")" : "");
     }
-    return "Drive (" + via + "): connected, never synced.";
+    return "Drive (files): connected, never synced.";
   }
 
   function renderDriveBar() {
     $("drive-status").textContent = driveStatusLine();
-    $("drive-status").title = drive.folderName ? "Folder: " + drive.folderName : "";
+    $("drive-status").title = fileFolderId ? "Folder ID: " + fileFolderId : "";
     var busy = syncing;
     $("btn-sync").disabled = busy;
     $("btn-upload-all").disabled = busy;
@@ -435,17 +418,18 @@
       return;
     }
     await refreshNative();
-    var resolved = await resolveServiceAccount();
-    if (!resolved.sa) {
-      setStatus("Connect a service account in Settings first.");
-      chrome.runtime.openOptionsPage();
+    var sa;
+    try { sa = await resolveServiceAccount(); } catch (err) {
+      setStatus("Cannot read service-account.json; see README: " + (err.message || err));
       return;
     }
-    var sa = resolved.sa;
+    if (!sa) {
+      setStatus("Configure ~/.config/pastex/service-account.json; see README.");
+      return;
+    }
     var folderId = effectiveFolderId();
     if (!folderId) {
-      setStatus("Choose a Drive folder in Settings first.");
-      chrome.runtime.openOptionsPage();
+      setStatus("Configure ~/.config/pastex/google-drive.json; see README.");
       return;
     }
     syncFolderId = folderId;
@@ -571,10 +555,6 @@
     openEditor("new-text", null);
   });
 
-  $("btn-options").addEventListener("click", function () {
-    chrome.runtime.openOptionsPage();
-  });
-
   $("btn-sync").addEventListener("click", function () {
     runDriveSync("sync");
   });
@@ -621,7 +601,7 @@
     if (changes[Store.TREE_KEY]) {
       refresh();
     }
-    if (changes[Store.DRIVE_KEY] || changes[Store.SA_KEY]) {
+    if (changes[Store.DRIVE_KEY]) {
       Store.loadDrive().then(function (loaded) {
         drive = loaded;
         renderDriveBar();
@@ -631,8 +611,7 @@
 
   // --- init ---
 
-  // The Settings page may rewrite the config files while the panel sits
-  // open; re-probe the native host whenever the panel regains focus.
+  // The user may edit config files while the panel sits open.
   window.addEventListener("focus", function () {
     refreshNative();
   });

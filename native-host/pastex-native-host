@@ -10,12 +10,11 @@ Protocol: Chrome native messaging (4-byte LE length + JSON) on stdio.
 Requests (responses always carry "ok"):
   {"type": "pastex-status"}                          files present? (no secrets)
   {"type": "pastex-read-config"}                     full SA key + drive config
-  {"type": "pastex-write-drive-config", ...}         save folder id/url
-  {"type": "pastex-write-service-account", "key": {...}}  save SA key
+  {"type": "pastex-read-sites"}                      configured site allowlist
 
 Usage:
-  pastex-native-host                 # serve one Chrome session on stdio
-  pastex-native-host --init-only     # only ensure dir + templates, print dir
+  pastex-native-host [chrome-extension://<id>/]  # serve Chrome on stdio
+  pastex-native-host --init-only                 # ensure dir + templates
 """
 
 from __future__ import annotations
@@ -25,13 +24,13 @@ import os
 import re
 import struct
 import sys
-import tempfile
 from pathlib import Path
 
 HOST_NAME = "com.pastex.native"
 CONFIG_DIR_NAME = "pastex"
 DRIVE_FILE = "google-drive.json"
 SA_FILE = "service-account.json"
+SITES_FILE = "sites.json"
 README_FILE = "README.txt"
 
 FOLDER_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
@@ -39,8 +38,10 @@ FOLDER_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
 README_TEXT = """Pastex configuration.
 - google-drive.json: the shared Drive folder (folder_id or folder_url).
 - service-account.json: the Google Cloud JSON key for Drive sync.
-Both are managed from the Pastex Settings page; this folder is created
-automatically on login and on first use.
+- sites.json: allowed_sites lists allowed HTTP(S) site origins.
+Edit these files directly. Restart the browser and reload open pages after
+changing sites.json. Setup instructions: /usr/share/doc/pastex/README.md.gz.
+The folder is created automatically on login and on extension startup.
 """
 
 DRIVE_TEMPLATE = {
@@ -73,6 +74,7 @@ def ensure_configured() -> Path:
     defaults = {
         DRIVE_FILE: DRIVE_TEMPLATE,
         SA_FILE: SA_TEMPLATE,
+        SITES_FILE: {"allowed_sites": []},
     }
     for name, template in defaults.items():
         path = directory / name
@@ -91,22 +93,14 @@ def ensure_configured() -> Path:
         except OSError:
             pass
     readme = directory / README_FILE
-    if not readme.exists():
+    old_readme = ("Pastex configuration.\n"
+                  "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
+                  "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
+                  "Both are managed from the Pastex Settings page; this folder is created\n"
+                  "automatically on login and on first use.\n")
+    if not readme.exists() or readme.read_text(encoding="utf-8") == old_readme:
         readme.write_text(README_TEXT, encoding="utf-8")
     return directory
-
-
-def _write_json(path: Path, data: dict) -> None:
-    # Never leave a half-written credential file if a write is interrupted.
-    fd, temporary = tempfile.mkstemp(prefix=".pastex-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, indent=2)
-            stream.write("\n")
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def _read_json(path: Path):
@@ -173,6 +167,15 @@ def handle(message: dict, directory: Path) -> dict:
             "drive": drive_status(directory),
             "serviceAccount": sa_status(directory),
         }
+    if kind == "pastex-read-sites":
+        try:
+            data = _read_json(directory / SITES_FILE)
+            sites = data.get("allowed_sites") if data else None
+            if not isinstance(sites, list) or not all(isinstance(site, str) for site in sites):
+                raise ValueError("allowed_sites must be an array of site origins")
+            return {"ok": True, "allowedSites": sites}
+        except ValueError as exc:
+            return {"ok": False, "error": f"{SITES_FILE}: {exc}"}
     if kind == "pastex-read-config":
         drive = drive_status(directory)
         sa = sa_status(directory)
@@ -188,40 +191,6 @@ def handle(message: dict, directory: Path) -> dict:
                 "private_key": data["private_key"],
             } if data else None,
         }
-    if kind == "pastex-write-drive-config":
-        folder_id = str(message.get("folderId") or "").strip()
-        folder_url = str(message.get("folderUrl") or "").strip()
-        if not folder_id and folder_url:
-            match = FOLDER_ID_RE.search(folder_url)
-            folder_id = match.group(1) if match else ""
-        payload = dict(DRIVE_TEMPLATE)
-        payload["folder_id"] = folder_id
-        payload["folder_url"] = folder_url
-        path = directory / DRIVE_FILE
-        _write_json(path, payload)
-        return {"ok": True, "folderId": folder_id}
-    if kind == "pastex-write-service-account":
-        key = message.get("key")
-        if isinstance(key, str):
-            try:
-                key = json.loads(key)
-            except ValueError:
-                return {"ok": False, "error": "that is not valid JSON"}
-        if not isinstance(key, dict) or not key.get("client_email") or not key.get("private_key"):
-            return {"ok": False, "error": "the key needs client_email and private_key fields"}
-        if key.get("type") and key.get("type") != "service_account":
-            return {"ok": False, "error": "that is not a service-account key"}
-        payload = {
-            "type": "service_account",
-            "client_email": key["client_email"],
-            "private_key": key["private_key"],
-        }
-        for extra in ("project_id", "private_key_id", "client_id"):
-            if key.get(extra):
-                payload[extra] = key[extra]
-        path = directory / SA_FILE
-        _write_json(path, payload)
-        return {"ok": True, "email": key["client_email"]}
     return {"ok": False, "error": f"unknown request type: {kind!r}"}
 
 
@@ -269,10 +238,17 @@ def main(argv: list[str]) -> int:
     if len(argv) == 2 and argv[1] == "--init-only":
         print(ensure_configured())
         return 0
-    if len(argv) != 1:
-        print(f"usage: {Path(argv[0]).name} [--init-only]", file=sys.stderr)
-        return 2
-    return serve()
+    # Chrome passes the calling extension origin as argv[1]. The native host
+    # manifest enforces the allowed origin; this argument is not an option.
+    # Some platforms also pass --parent-window=<handle>.
+    if len(argv) == 1 or (
+        len(argv) in (2, 3)
+        and re.fullmatch(r"chrome-extension://[a-p]{32}/", argv[1])
+        and (len(argv) == 2 or re.fullmatch(r"--parent-window=\d+", argv[2]))
+    ):
+        return serve()
+    print(f"usage: {Path(argv[0]).name} [--init-only | chrome-extension://<id>/]", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

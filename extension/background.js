@@ -7,7 +7,35 @@
  *    open when the extension was installed or updated.
  */
 
-importScripts("store.js");
+importScripts("store.js", "native.js", "sites.js");
+
+var CONTENT_SCRIPT_ID = "pastex-allowed-sites";
+
+async function allowedSitePatterns() {
+  var data = await PastexNative.readSites();
+  return PastexSites.parse(data.allowedSites);
+}
+
+// Register only user-approved origins. Empty or invalid configuration and
+// native host errors are fail-closed: no scripts or menus are registered.
+async function configureSites() {
+  var patterns = [];
+  PastexNative.resetCache();
+  try {
+    patterns = await allowedSitePatterns();
+  } catch (err) {
+    console.warn("Pastex site configuration unavailable:", err.message);
+  }
+  var existing = await chrome.scripting.getRegisteredContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+  if (patterns.length) {
+    await chrome.scripting.registerContentScripts([{
+      id: CONTENT_SCRIPT_ID, matches: patterns, js: ["content.js"], css: ["content.css"],
+      runAt: "document_idle", persistAcrossSessions: false,
+    }]);
+  }
+  await rebuildContextMenu(patterns);
+}
 
 var MENU_ROOT = "pastex-insert-root";
 var MENU_BROWSE = "pastex-browse";
@@ -23,6 +51,12 @@ function activeTab() {
 // Send a message to the tab's content script, injecting it first when the
 // tab predates the installation (chrome:// pages cannot be injected).
 async function messageTab(tabId, message) {
+  var tab = await chrome.tabs.get(tabId);
+  var patterns;
+  try { patterns = await allowedSitePatterns(); } catch (err) { patterns = []; }
+  if (!tab || !PastexSites.allows(patterns, tab.url)) {
+    throw new Error("site-not-allowed");
+  }
   try {
     return await chrome.tabs.sendMessage(tabId, message);
   } catch (firstErr) {
@@ -70,12 +104,16 @@ function shortTitle(path, maxLen) {
   return "…" + path.slice(path.length - maxLen + 1);
 }
 
-async function rebuildContextMenu() {
+async function rebuildContextMenu(patterns) {
+  if (!patterns) {
+    try { patterns = await allowedSitePatterns(); } catch (err) { patterns = []; }
+  }
   try {
     await chrome.contextMenus.removeAll();
   } catch (ignored) {
     /* nothing to remove */
   }
+  if (!patterns.length) return;
   var tree = [];
   var recent = [];
   try {
@@ -88,6 +126,7 @@ async function rebuildContextMenu() {
     id: MENU_ROOT,
     title: "Paste snippet",
     contexts: ["editable"],
+    documentUrlPatterns: patterns,
   });
   var shown = 0;
   for (var i = 0; i < recent.length && shown < MAX_MENU_RECENTS; i++) {
@@ -124,13 +163,14 @@ function scheduleMenuRebuild() {
 
 // --- events ---
 
-chrome.runtime.onInstalled.addListener(function () {
-  rebuildContextMenu();
-});
+function initializeUserConfig() {
+  configureSites().catch(function (err) {
+    console.warn("Pastex site registration failed:", err.message);
+  });
+}
 
-chrome.runtime.onStartup.addListener(function () {
-  rebuildContextMenu();
-});
+chrome.runtime.onInstalled.addListener(initializeUserConfig);
+chrome.runtime.onStartup.addListener(initializeUserConfig);
 
 chrome.storage.onChanged.addListener(function (changes, area) {
   if (area !== "local") {
@@ -174,8 +214,15 @@ chrome.action.onClicked.addListener(async function (tab) {
   }
 });
 
-// Side panel and options page ask the worker to insert/copy.
+// Content scripts re-check the current allowlist before showing or using the
+// picker. This also disables an already-open page when its site is removed.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (message && message.type === "pastex-site-allowed") {
+    allowedSitePatterns().then(function (patterns) {
+      sendResponse({ allowed: !!(sender.tab && PastexSites.allows(patterns, sender.url)) });
+    }).catch(function () { sendResponse({ allowed: false }); });
+    return true;
+  }
   if (!message || message.type !== "pastex-sidepanel-insert") {
     return false;
   }
