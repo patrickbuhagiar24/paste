@@ -74,7 +74,7 @@ def test_app_module_imports_threading():
 
 
 def test_modules_import_cleanly_without_display(monkeypatch):
-    """Every module must import without X/Wayland (so the CLI still works)."""
+    """Every module must import without X/Wayland (no display at import time)."""
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     import importlib
@@ -109,37 +109,14 @@ def test_build_deb_recommends_matches_debian_control():
         assert control == script, f"{field}: control={control} build-deb={script}"
 
 
-def test_reader_tools_declared_in_package_metadata():
-    """Every clipboard tool the code calls must be suggested as a package, so
-    users do not hit a dead feature without any hint."""
-    from pastex.clipboard import READER_TOOLS
-
+def test_browser_is_recommended_and_desktop_tools_are_gone():
+    """2.x ships a Chrome extension: `apt install pastex` suggests a browser
+    and no longer pulls the desktop clipboard stack."""
     control = (ROOT / "debian" / "control").read_text()
-    declared = set(_control_recommends(control)) | set(_control_field(control, "Suggests"))
-    # command name -> Debian package
-    package_of = {
-        "wl-paste": "wl-clipboard",
-        "wl-copy": "wl-clipboard",
-        "xclip": "xclip",
-        "xsel": "xsel",
-        "xdotool": "xdotool",
-        "ydotool": "ydotool",
-    }
-    needed = {package_of[t] for t in READER_TOOLS if t in package_of}
-    needed |= {"wl-clipboard", "ydotool"}  # copy + paste on Wayland
-    missing = needed - declared
-    assert not missing, f"packages missing from Recommends/Suggests: {sorted(missing)}"
-
-
-def test_x11_tools_are_recommended_and_wayland_tools_only_suggested():
-    """Linux Mint's default session is X11: `apt install pastex` must not pull
-    the Wayland-only helpers, which are inert until the user opts in."""
-    control = (ROOT / "debian" / "control").read_text()
-    recommends = set(_control_recommends(control))
-    suggests = set(_control_field(control, "Suggests"))
-    assert {"xclip", "xsel", "xdotool"} <= recommends
-    assert not ({"wl-clipboard", "ydotool", "python3-dbus"} & recommends)
-    assert {"wl-clipboard", "ydotool", "python3-dbus"} <= suggests
+    recommends = _control_recommends(control)
+    assert any("google-chrome" in entry or "chromium" in entry for entry in recommends)
+    for legacy in ("xclip", "xsel", "xdotool", "wl-clipboard", "ydotool", "python3-tk", "python3-dbus"):
+        assert legacy not in control, f"control still mentions {legacy}"
 
 
 def test_docs_do_not_promise_removed_tk_clipboard():
@@ -183,30 +160,36 @@ def test_package_description_matches_between_sources():
 
 
 def test_postinst_does_not_touch_accounts_or_services():
-    """Mint's X11 session needs no group, udev rule or daemon, so installing
-    the package must not add accounts, reload udev or enable services."""
+    """2.x only registers browser files, so installing the package must not
+    add accounts, reload udev or enable services."""
     text = (ROOT / "debian" / "postinst").read_text(encoding="utf-8")
     code = "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
     for forbidden in ("usermod", "groupadd", "udevadm", "systemctl", "chgrp", "chmod"):
         assert forbidden not in code, f"postinst still runs {forbidden}"
-    assert "--enable-permissions" in text  # it points at the opt-in instead
+    assert "README" in text  # it points at the setup docs instead
 
 
-def test_wayland_helpers_are_shipped_as_inert_templates():
-    """The udev rule and the ydotool unit must not land in the active
-    directories; only `pastex --enable-permissions` copies them there."""
+def test_extension_payload_is_registered_for_autodetection():
+    """debian/rules must ship the unpacked extension, the signed .crx, and
+    the external-install JSON for Chrome and Chromium (2.x payload)."""
     rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
-    # Only the comment may mention the active directories.
-    code = "\n".join(
-        line for line in rules.splitlines() if not line.lstrip().startswith("#")
-    )
-    assert "/usr/lib/udev" not in code
-    assert "/usr/lib/systemd" not in code
-    for template in ("70-pastex-uinput.rules", "ydotoold.service"):
-        assert (ROOT / "usr" / "lib" / "pastex" / template).is_file()
-        assert f"usr/lib/pastex/{template}" in rules
+    for required in (
+        "cp -r extension debian/pastex/usr/share/pastex/extension",
+        "scripts/pack-crx.py",
+        "external_crx",
+        "/usr/share/google-chrome/extensions",
+        "/usr/share/chromium/extensions",
+        "native-host/pastex-native-host",
+        "native-messaging-hosts",
+        "pastex-setup.desktop",
+        "/etc/xdg/autostart",
+        "extension/README.md",
+    ):
+        assert required in rules, f"rules misses {required!r}"
+    for legacy in ("usr/bin/pastex", "pastex.desktop", "pastex-uinput-group"):
+        assert legacy not in rules, f"rules still ships desktop file {legacy}"
 
 
 def test_helper_activates_the_templates_only_when_called():
@@ -248,13 +231,13 @@ def test_rendered_control_keeps_the_description_text():
     body = _control_heredoc()
     rendered = (
         body.replace("@PKG@", "pastex")
-        .replace("@VERSION@", "1.10.0")
+        .replace("@VERSION@", "2.0.0")
         .replace("@ARCH@", "all")
     )
     assert "Package: pastex" in rendered
-    assert "Version: 1.10.0-1" in rendered
+    assert "Version: 2.0.0-1" in rendered
     description = rendered.split("Description:", 1)[1]
-    assert "pastex --enable-permissions" in description
+    assert "service account" in description
     assert "`" not in description
     assert "$" not in description
 

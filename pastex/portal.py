@@ -50,7 +50,7 @@ _token = 0
 
 
 def reset_session() -> None:
-    """Forget the cached session (used by tests and by ``--check``)."""
+    """Forget the cached session (used by tests)."""
     global _session_handle, _token
     _session_handle = None
     _token = 0

@@ -1,7 +1,7 @@
 """Scan and manage hierarchical .txt snippet files.
 
 This module contains filesystem logic only, so it can be tested and reused by
-both the CLI and GUI. The folder structure defines the hierarchy:
+the GUI. The folder structure defines the hierarchy:
 
     snippets/
       General/

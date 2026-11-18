@@ -28,7 +28,7 @@ GROUP = "pastex"
 HELPER = "/usr/lib/pastex/pastex-uinput-group"
 UDEV_RULE = "/usr/lib/udev/rules.d/70-pastex-uinput.rules"
 # The package ships the rule and the user unit as *templates* next to the
-# helper; only `pastex --enable-permissions` installs them. Linux Mint's default
+# helper; only the setup helper installs them. Linux Mint's default
 # X11 session needs neither, because xdotool sends Ctrl+V through XTEST.
 RULE_TEMPLATE = "/usr/lib/pastex/70-pastex-uinput.rules"
 UNIT_TEMPLATE = "/usr/lib/pastex/ydotoold.service"
@@ -48,13 +48,14 @@ MANUAL_COMMAND = (
     "# then log out and back in"
 )
 
-# Since 1.5.0, permissions are managed from the CLI rather than a GUI button.
-# This text is shown by --permissions, --check, and paste-failure dialogs so users
-# know which command to run without searching the documentation.
-CLI_HINT = (
-    "Run in a terminal:\n"
-    "  pastex --permissions            # show permission status\n"
-    "  pastex --enable-permissions   # enable (administrator password required)"
+# Since 1.5.0, permissions are managed through the first-run setup dialog
+# and the paste-failure dialog rather than a GUI button. This text is shown
+# in paste-failure dialogs so users know the manual steps without searching
+# the documentation.
+MANUAL_HINT = (
+    "Manual setup in a terminal:\n"
+    "  pkexec /usr/lib/pastex/pastex-uinput-group $USER  # administrator password required\n"
+    "  # then log out and back in"
 )
 
 
@@ -311,8 +312,8 @@ class UinputStatus:
             group_detail = "not a member yet"
         else:
             group_detail = (
-                "not created yet — run `pastex --enable-permissions` "
-                "in a Wayland session"
+                "not created yet — install the setup helper manually "
+                "in a Wayland session (see README)"
             )
 
         if self.acl_granted and not self.account_ready:
@@ -335,7 +336,7 @@ class UinputStatus:
         elif not self.rule:
             device_detail = (
                 f"{DEVICE} is not writable — the udev rule is not installed "
-                "(`pastex --enable-permissions`)"
+                "(install it manually, see README)"
             )
         elif self.needs_relogin:
             device_detail = f"{DEVICE} is not writable — a new login is required"
@@ -477,8 +478,8 @@ def explain(st: UinputStatus | None = None) -> str:
     steps: list[str] = []
     if not st.account_ready:
         steps.append(
-            f"Account '{st.user}' is not a member of group '{GROUP}'. Run "
-            "`pastex --enable-permissions` (or follow the manual steps in the README)."
+            f"Account '{st.user}' is not a member of group '{GROUP}'. "
+            "Run the setup helper manually (see the manual steps in the README)."
         )
     if st.needs_relogin:
         steps.append(
@@ -494,9 +495,9 @@ def explain(st: UinputStatus | None = None) -> str:
     if st.in_session and not st.device_writable and not st.needs_relogin:
         if not st.rule:
             steps.append(
-                "The 'pastex' udev rule is not installed. Run "
-                "`pastex --enable-permissions` to install it (the package "
-                "ships it as a template, so nothing is activated by installing)."
+                "The 'pastex' udev rule is not installed. Install it "
+                "manually (the package ships it as a template, so nothing "
+                "is activated by installing)."
             )
         else:
             steps.append(
@@ -505,5 +506,5 @@ def explain(st: UinputStatus | None = None) -> str:
                 "sudo udevadm trigger --sysname-match=uinput"
             )
     if not steps:  # pragma: no cover - jaring pengaman
-        steps.append("Run `pastex --check` for details.")
+        steps.append("See the log for details.")
     return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))

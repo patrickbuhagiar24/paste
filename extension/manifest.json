@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Pastex",
+  "version": "2.0.0",
+  "description": "One-click text snippet manager: Side Panel library, in-page picker, Google Drive sync.",
+  "minimum_chrome_version": "114",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Open Pastex",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "sidePanel", "contextMenus", "scripting", "activeTab", "clipboardWrite", "nativeMessaging"],
+  "host_permissions": ["https://www.googleapis.com/", "https://oauth2.googleapis.com/"],
+  "commands": {
+    "toggle-picker": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+V"
+      },
+      "description": "Open the snippet picker here"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Pastex CLI tests (no GUI or display)."""
+"""Pastex GUI logic tests (no display; the CLI was removed)."""
 
 import sys
 from pathlib import Path
@@ -6,29 +6,6 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from pastex.app import run_cli
-
-
-def test_version(capsys):
-    assert run_cli(["--version"]) == 0
-    assert "pastex" in capsys.readouterr().out
-
-
-def test_check(capsys):
-    assert run_cli(["--check"]) == 0
-    out = capsys.readouterr().out
-    assert "Python:" in out
-    assert "tkinter:" in out
-    assert "Snippet folders:" in out
-
-
-def test_list(tmp_path, capsys):
-    (tmp_path / "General").mkdir()
-    (tmp_path / "General" / "Greeting.txt").write_text("hello", encoding="utf-8")
-    assert run_cli(["--dir", str(tmp_path), "--list"]) == 0
-    out = capsys.readouterr().out
-    assert "General" in out and "Greeting" in out
 
 
 class _FakeTree:
@@ -108,46 +85,6 @@ def test_startup_setup_reports_wayland_permission_and_daemon_gaps():
     assert any("/dev/uinput" in issue for issue in issues)
     assert any("ydotoold" in issue for issue in issues)
     assert can_enable is True
-
-
-def test_check_reports_clipboard(capsys):
-    """--check must exercise the clipboard, not just list the tools."""
-    assert run_cli(["--check"]) == 0
-    out = capsys.readouterr().out
-    assert "Clipboard:" in out
-    assert "tool:" in out
-
-
-def test_clipboard_status_without_session(monkeypatch):
-    from pastex import app
-
-    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("pastex.clipboard.shutil.which", lambda n: None)
-    lines = app.clipboard_status()
-    assert any("session detected" in line for line in lines)
-
-
-def test_test_paste_flag_exists():
-    from pastex import app
-
-    status = {"called": False}
-
-    def fake(**kw):
-        status["called"] = True
-        status.update(kw)
-        return 0
-
-    original = app.run_test_paste
-    app.run_test_paste = fake
-    try:
-        assert app.run_cli(["--test-paste"]) == 0
-        assert status["called"] is True
-        assert status["ctrl_v"] is False
-        app.run_cli(["--test-paste", "--ctrl-v"])
-        assert status["ctrl_v"] is True
-    finally:
-        app.run_test_paste = original
 
 
 def _snippet(tmp_path, text="Halo"):
@@ -1429,7 +1366,7 @@ def test_open_picker_reports_a_missing_display(monkeypatch):
     assert statuses == ["The picker needs a display."]
 
 
-def test_cli_forwards_show_to_a_running_instance(monkeypatch):
+def test_gui_forwards_show_to_a_running_instance(monkeypatch):
     from pastex import app as app_module
 
     seen = []
@@ -1443,29 +1380,11 @@ def test_cli_forwards_show_to_a_running_instance(monkeypatch):
         app_module, "PastexApp", lambda *a, **k: (_ for _ in ()).throw(AssertionError())
     )
 
-    assert app_module.run_cli([]) == 0
+    assert app_module.run_gui() == 0
     assert seen == ["show"]
 
 
-def test_cli_pick_forwards_pick_and_never_starts_a_window(monkeypatch):
-    from pastex import app as app_module
-
-    seen = []
-    monkeypatch.setattr(app_module, "tk", object())
-    monkeypatch.setattr(
-        app_module,
-        "send_command",
-        lambda command: seen.append(command) or {"ok": True},
-    )
-    monkeypatch.setattr(
-        app_module, "PastexApp", lambda *a, **k: (_ for _ in ()).throw(AssertionError())
-    )
-
-    assert app_module.run_cli(["--pick"]) == 0
-    assert seen == ["pick"]
-
-
-def test_cli_starts_a_window_when_no_instance_answers(monkeypatch):
+def test_gui_starts_a_window_when_no_instance_answers(monkeypatch):
     from pastex import app as app_module
 
     started = []
@@ -1490,39 +1409,8 @@ def test_cli_starts_a_window_when_no_instance_answers(monkeypatch):
         )(),
     )
 
-    assert app_module.run_cli([]) == 0
+    assert app_module.run_gui() == 0
     assert started == ["app", "loop"]
-
-
-def test_cli_dir_sessions_are_never_forwarded(monkeypatch, tmp_path):
-    from pastex import app as app_module
-
-    seen = []
-
-    class FakeApp:
-        def __init__(self, roots=None, *, transient_roots=False):
-            pass
-
-        def mainloop(self):
-            pass
-
-    monkeypatch.setattr(app_module, "tk", object())
-    monkeypatch.setattr(
-        app_module, "send_command", lambda command: seen.append(command) or {"ok": True}
-    )
-    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
-    monkeypatch.setattr(
-        app_module,
-        "SingleInstance",
-        lambda handler: type(
-            "I",
-            (),
-            {"claim": lambda self: False, "serve": lambda self: True, "stop": lambda self: None},
-        )(),
-    )
-
-    assert app_module.run_cli(["--dir", str(tmp_path)]) == 0
-    assert seen == []
 
 
 def test_search_repaints_from_the_cache_after_the_debounce():
@@ -1830,34 +1718,6 @@ def test_prewarm_only_starts_the_owner_when_asked(gui, monkeypatch):
     assert owner.started == 1
 
 
-def test_wayland_clipboard_flag_saves_the_choice(tmp_path, monkeypatch):
-    from pastex import app as app_module
-
-    saved = []
-    monkeypatch.setattr(app_module, "load_settings", lambda: dict(app_module.DEFAULT_SETTINGS))
-    monkeypatch.setattr(app_module, "save_settings", saved.append)
-    monkeypatch.setattr(app_module, "tk", object())
-    monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
-
-    class FakeApp:
-        def __init__(self, roots=None, transient_roots=False):
-            self.roots = roots
-
-        def mainloop(self):
-            pass
-
-    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
-    assert app_module.run_cli(["--wayland-clipboard"]) == 0
-    assert saved and saved[0]["clipboard_owner"] is True
-
-
-def test_check_reports_the_clipboard_owner(capsys):
-    assert run_cli(["--check"]) == 0
-    out = capsys.readouterr().out
-    assert "Clipboard owner:" in out
-    assert "--wayland-clipboard" in out
-
-
 def test_closing_the_main_loop_releases_the_owner(monkeypatch):
     """Every exit path must release the clipboard owner."""
     from pastex import app as app_module
@@ -1878,7 +1738,7 @@ def test_closing_the_main_loop_releases_the_owner(monkeypatch):
     monkeypatch.setattr(app_module, "PastexApp", FakeApp)
     monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
 
-    assert app_module.run_cli([]) == 0
+    assert app_module.run_gui() == 0
     assert released == ["loop-ended", "owner-released"]
 
 
@@ -1904,7 +1764,7 @@ def test_a_crashing_main_loop_still_releases_the_owner(monkeypatch):
     monkeypatch.setattr(app_module, "SingleInstance", lambda handler: None)
 
     with pytest.raises(RuntimeError):
-        app_module.run_cli([])
+        app_module.run_gui()
     assert released == ["owner-released"]
 
 

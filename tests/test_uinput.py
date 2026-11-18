@@ -186,9 +186,9 @@ def test_explain_mentions_udev_when_rule_missing():
     text = uinput.explain(
         _status(in_group=True, session={"tester", "pastex"}, rule=False)
     )
-    # The rule ships as a template, so activation is `--enable-permissions`,
+    # The rule ships as a template, so the fix is a manual install,
     # never "reinstall the package".
-    assert "--enable-permissions" in text
+    assert "manually" in text
     assert "reinstall" not in text
 
 
@@ -207,7 +207,7 @@ def test_x11_session_does_not_need_uinput_permissions():
 def test_x11_explain_points_at_xdotool_not_permissions():
     text = uinput.explain(_status(session_kind="x11"))
     assert "X11" in text and "xdotool" in text
-    assert "--enable-permissions" not in text
+    assert "pastex-uinput-group" not in text
 
 
 def test_wayland_session_still_needs_uinput_permissions():

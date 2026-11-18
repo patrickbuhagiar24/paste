@@ -1,6 +1,6 @@
 """A small snippet picker that pastes without touching the main window.
 
-Bind ``pastex --pick`` to a keyboard shortcut (for example Super+V) and the
+Open the picker from the main window and the
 list appears where the pointer is. Choosing a snippet copies it and sends
 Ctrl+V to the application that kept the focus, because the picker is a
 frameless popup:

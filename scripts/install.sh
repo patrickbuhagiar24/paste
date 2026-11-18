@@ -6,4 +6,4 @@ cd "$(dirname "$0")/.."
 
 ./scripts/build-deb.sh
 sudo apt install -y ./dist/*.deb
-echo "Done. Run `pastex` or find Pastex in the Applications menu."
+echo "Done. Launch Chrome/Chromium and enable Pastex when the browser asks."

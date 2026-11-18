@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Pastex native-messaging host: bridge between the Chrome extension and
+~/.config/pastex/*.json (the browser cannot read local files by itself).
+
+Config files (created with templates on first run):
+  ~/.config/pastex/google-drive.json     {"folder_id": ..., "folder_url": ...}
+  ~/.config/pastex/service-account.json  Google Cloud JSON key (client_email + private_key)
+
+Protocol: Chrome native messaging (4-byte LE length + JSON) on stdio.
+Requests (responses always carry "ok"):
+  {"type": "pastex-status"}                          files present? (no secrets)
+  {"type": "pastex-read-config"}                     full SA key + drive config
+  {"type": "pastex-write-drive-config", ...}         save folder id/url
+  {"type": "pastex-write-service-account", "key": {...}}  save SA key
+
+Usage:
+  pastex-native-host                 # serve one Chrome session on stdio
+  pastex-native-host --init-only     # only ensure dir + templates, print dir
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import struct
+import sys
+import tempfile
+from pathlib import Path
+
+HOST_NAME = "com.pastex.native"
+CONFIG_DIR_NAME = "pastex"
+DRIVE_FILE = "google-drive.json"
+SA_FILE = "service-account.json"
+README_FILE = "README.txt"
+
+FOLDER_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
+
+README_TEXT = """Pastex configuration.
+- google-drive.json: the shared Drive folder (folder_id or folder_url).
+- service-account.json: the Google Cloud JSON key for Drive sync.
+Both are managed from the Pastex Settings page; this folder is created
+automatically on login and on first use.
+"""
+
+DRIVE_TEMPLATE = {
+    "folder_id": "",
+    "folder_url": "",
+    "_note": "Paste the shared Drive folder link as folder_url, or just its ID as folder_id.",
+}
+
+SA_TEMPLATE = {
+    "type": "service_account",
+    "client_email": "",
+    "private_key": "",
+    "_note": "Replace this file with the JSON key downloaded from Google Cloud Console.",
+}
+
+
+def config_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / CONFIG_DIR_NAME
+
+
+def ensure_configured() -> Path:
+    """Create ~/.config/pastex with templates; tighten permissions. Idempotent."""
+    directory = config_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    defaults = {
+        DRIVE_FILE: DRIVE_TEMPLATE,
+        SA_FILE: SA_TEMPLATE,
+    }
+    for name, template in defaults.items():
+        path = directory / name
+        try:
+            # Exclusive creation avoids clobbering user configuration if
+            # login setup and the browser host start at the same time.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(template, stream, indent=2)
+                stream.write("\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    readme = directory / README_FILE
+    if not readme.exists():
+        readme.write_text(README_TEXT, encoding="utf-8")
+    return directory
+
+
+def _write_json(path: Path, data: dict) -> None:
+    # Never leave a half-written credential file if a write is interrupted.
+    fd, temporary = tempfile.mkstemp(prefix=".pastex-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _read_json(path: Path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        return data
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{path.name} is not valid JSON ({exc})")
+
+
+def resolve_folder_id(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    folder_id = str(data.get("folder_id") or "").strip()
+    if folder_id:
+        return folder_id
+    url = str(data.get("folder_url") or "")
+    match = FOLDER_ID_RE.search(url)
+    return match.group(1) if match else ""
+
+
+def drive_status(directory: Path) -> dict:
+    try:
+        data = _read_json(directory / DRIVE_FILE)
+    except ValueError as exc:
+        return {"configured": False, "folderId": "", "folderUrl": "", "error": str(exc)}
+    if not data:
+        return {"configured": False, "folderId": "", "folderUrl": "", "error": f"{DRIVE_FILE} is missing"}
+    folder_id = resolve_folder_id(data)
+    return {
+        "configured": bool(folder_id),
+        "folderId": folder_id,
+        "folderUrl": str(data.get("folder_url") or ""),
+        "error": "" if folder_id else f"set folder_id or folder_url in {DRIVE_FILE}",
+    }
+
+
+def sa_status(directory: Path) -> dict:
+    try:
+        data = _read_json(directory / SA_FILE)
+    except ValueError as exc:
+        return {"configured": False, "email": "", "error": str(exc)}
+    if not data:
+        return {"configured": False, "email": "", "error": f"{SA_FILE} is missing"}
+    email = str(data.get("client_email") or "")
+    key = str(data.get("private_key") or "")
+    if data.get("type") and data.get("type") != "service_account":
+        return {"configured": False, "email": email, "error": f"{SA_FILE} is not a service-account key"}
+    if not email or not key:
+        return {"configured": False, "email": email, "error": f"{SA_FILE} has an empty client_email or private_key"}
+    return {"configured": True, "email": email, "error": ""}
+
+
+def handle(message: dict, directory: Path) -> dict:
+    kind = message.get("type") if isinstance(message, dict) else None
+    if kind == "pastex-status":
+        return {
+            "ok": True,
+            "configDir": str(directory),
+            "drive": drive_status(directory),
+            "serviceAccount": sa_status(directory),
+        }
+    if kind == "pastex-read-config":
+        drive = drive_status(directory)
+        sa = sa_status(directory)
+        # Each file is independent: a key is needed to verify a folder even
+        # before the folder file is configured, and vice versa.
+        data = _read_json(directory / SA_FILE) if sa["configured"] else None
+        return {
+            "ok": True,
+            "configDir": str(directory),
+            "drive": {"folderId": drive["folderId"], "folderUrl": drive["folderUrl"]} if drive["configured"] else None,
+            "serviceAccount": {
+                "client_email": data["client_email"],
+                "private_key": data["private_key"],
+            } if data else None,
+        }
+    if kind == "pastex-write-drive-config":
+        folder_id = str(message.get("folderId") or "").strip()
+        folder_url = str(message.get("folderUrl") or "").strip()
+        if not folder_id and folder_url:
+            match = FOLDER_ID_RE.search(folder_url)
+            folder_id = match.group(1) if match else ""
+        payload = dict(DRIVE_TEMPLATE)
+        payload["folder_id"] = folder_id
+        payload["folder_url"] = folder_url
+        path = directory / DRIVE_FILE
+        _write_json(path, payload)
+        return {"ok": True, "folderId": folder_id}
+    if kind == "pastex-write-service-account":
+        key = message.get("key")
+        if isinstance(key, str):
+            try:
+                key = json.loads(key)
+            except ValueError:
+                return {"ok": False, "error": "that is not valid JSON"}
+        if not isinstance(key, dict) or not key.get("client_email") or not key.get("private_key"):
+            return {"ok": False, "error": "the key needs client_email and private_key fields"}
+        if key.get("type") and key.get("type") != "service_account":
+            return {"ok": False, "error": "that is not a service-account key"}
+        payload = {
+            "type": "service_account",
+            "client_email": key["client_email"],
+            "private_key": key["private_key"],
+        }
+        for extra in ("project_id", "private_key_id", "client_id"):
+            if key.get(extra):
+                payload[extra] = key[extra]
+        path = directory / SA_FILE
+        _write_json(path, payload)
+        return {"ok": True, "email": key["client_email"]}
+    return {"ok": False, "error": f"unknown request type: {kind!r}"}
+
+
+def _read_exact(stream, count: int) -> bytes:
+    data = b""
+    while len(data) < count:
+        chunk = stream.read(count - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def serve() -> int:
+    directory = ensure_configured()
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    while True:
+        header = _read_exact(stdin, 4)
+        if len(header) < 4:
+            return 0  # EOF: Chrome went away
+        (length,) = struct.unpack("<I", header)
+        if length > 64 * 1024 * 1024:
+            return 1
+        body = _read_exact(stdin, length)
+        if len(body) < length:
+            return 0
+        try:
+            message = json.loads(body.decode("utf-8"))
+        except ValueError:
+            message = None
+        if not isinstance(message, dict):
+            response = {"ok": False, "error": "request must be a JSON object"}
+        else:
+            try:
+                response = handle(message, directory)
+            except (OSError, ValueError) as exc:
+                response = {"ok": False, "error": str(exc)}
+        payload = json.dumps(response).encode("utf-8")
+        stdout.write(struct.pack("<I", len(payload)) + payload)
+        stdout.flush()
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[1] == "--init-only":
+        print(ensure_configured())
+        return 0
+    if len(argv) != 1:
+        print(f"usage: {Path(argv[0]).name} [--init-only]", file=sys.stderr)
+        return 2
+    return serve()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

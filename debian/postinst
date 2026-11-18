@@ -1,14 +1,11 @@
 #!/bin/sh
-# Pastex post-installation note.
+# Pastex post-installation note: the package registers a Chrome extension.
 #
-# Installing Pastex changes nothing on the system. Linux Mint's default X11
-# session needs no setup at all: xclip/xsel own the clipboard and xdotool types
-# Ctrl+V through XTEST, so there is no /dev/uinput access, no 'pastex' group and
-# no ydotoold daemon.
-#
-# The Wayland helpers (udev rule, 'pastex' group, per-user ydotool unit) ship as
-# templates under /usr/lib/pastex and are only installed by
-# `pastex --enable-permissions`, which the user runs in a Wayland session.
+# No daemons, groups, or system services are used. Chrome and Chromium pick
+# up /usr/share/<browser>/extensions/*.json on launch and offer to enable
+# the extension with one click. The per-user config folder ~/.config/pastex/
+# is created automatically on login (and on first use); a .deb cannot create
+# per-user files at install time.
 set -eu
 
 NOTE_DIR="/var/lib/pastex"
@@ -20,9 +17,10 @@ case "${1:-}" in
     configure)
         # One-time only: apt passes "configure" on every upgrade as well.
         if [ ! -e "$NOTE_MARKER" ]; then
-            say "nothing to configure: the X11 clipboard and xdotool need no permissions."
-            say "a Wayland session can add the optional helpers later with:"
-            say "  pastex --enable-permissions"
+            say "the Pastex extension is registered with Chrome and Chromium."
+            say "launch the browser and enable Pastex when it asks."
+            say "~/.config/pastex/ is created on login; setup (Drive sync"
+            say "keys) is described in the README under /usr/share/doc/pastex/."
             install -d -m 0755 "$NOTE_DIR" >/dev/null 2>&1 || true
             : > "$NOTE_MARKER" 2>/dev/null || true
         fi

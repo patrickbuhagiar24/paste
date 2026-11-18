@@ -1,8 +1,8 @@
 """Refresh the snippet tree from inotify events instead of constant rescans.
 
 The GUI used to discover changes only through F5 or its own edits. Watching
-the source folders means a file dropped in by an editor, a sync client, or
-``pastex --copy`` shows up immediately, and the tree no longer has to be
+the source folders means a file dropped in by an editor or a sync client
+shows up immediately, and the tree no longer has to be
 re-walked "just in case".
 
 Everything here is best-effort: if inotify is unavailable (a low
