@@ -13,6 +13,7 @@ without access to a real clipboard.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import subprocess
@@ -351,6 +352,79 @@ def restore_window(
     # The window manager never said it showed the window; report whether the
     # request itself was accepted so the caller can decide about a fallback.
     return bool(mapped) and window_is_shown(window_id, runner) is not False
+
+
+def normalize_window_id(value: str) -> str | None:
+    """Return a window id in 0x-hex form, or None when it cannot be parsed."""
+    return _window_id(str(value))
+
+
+def focus_window(window_id: str, runner: Runner = _default_runner) -> bool:
+    """Give ``window_id`` the input focus with XSetInputFocus (xdotool windowfocus).
+
+    Unlike minimizing or activating, this does not need the window manager to
+    agree: it is a direct X request, which is what makes it the fallback when a
+    window manager ignores every minimize it is sent.
+    """
+    return _ask_the_window_manager(window_id, "windowfocus", runner)
+
+
+def window_below(window_id: str, runner: Runner = _default_runner) -> str | None:
+    """Return the window the user was in before Pastex, from the stacking order.
+
+    Pastex is on top when a snippet is clicked, so the window directly below it
+    in ``_NET_CLIENT_LIST_STACKING`` is the application the click is meant to
+    paste into. Only a mapped window in the ``normal`` state is accepted.
+    """
+    if shutil.which("xprop") is None:
+        return None
+    try:
+        proc = _run_with_timeout(
+            runner,
+            ["xprop", "-root", "_NET_CLIENT_LIST_STACKING"],
+            X11_QUERY_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    order = re.findall(r"0x[0-9a-fA-F]+", f"{getattr(proc, 'stdout', '') or ''}")
+    ours = _window_id(str(window_id))
+    below = order[: order.index(ours)] if ours in order else order
+    for candidate in reversed(below):
+        if candidate == ours:
+            continue
+        if x11_wm_state(candidate, runner) != "normal":
+            continue
+        if window_is_shown(candidate, runner) is False:
+            continue
+        return candidate
+    return None
+
+
+def focus_the_window_below(
+    window_id: str, runner: Runner = _default_runner
+) -> str | None:
+    """Move the input focus off ``window_id`` to the app behind it.
+
+    Returns the window that took the focus, or None when there is nothing to
+    hand it to. This is the fallback for a window manager that ignores
+    minimize requests: the text then goes to the application the user was in,
+    which is what the click is for.
+    """
+    target = window_below(window_id, runner)
+    if target is None:
+        return None
+    if not focus_window(target, runner):
+        return None
+    if x11_active_window(runner) not in {target, None}:
+        # XSetInputFocus was refused or immediately overridden; ask the window
+        # manager for the same thing before giving up.
+        _ask_the_window_manager(target, "windowactivate", runner)
+    if x11_active_window(runner) not in {target, None}:
+        return None
+    _ask_the_window_manager(target, "windowraise", runner)
+    return target
 
 
 def _ask_the_window_manager(

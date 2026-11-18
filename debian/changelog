@@ -1,3 +1,22 @@
+pastex (1.10.11-1) unstable; urgency=medium
+
+  * Paste even when the window manager refuses to minimize. The 1.10.10 log
+    shows Muffin ignoring every minimize request it was sent: the window stayed
+    focused for the whole 900 ms budget (focus=ours, tk=normal), Ctrl+V was
+    never sent, and nothing was pasted at all. Waiting longer can never help a
+    request that is being dropped, so after 200 ms the click now hands the
+    focus to the application behind Pastex -- the topmost mapped window below
+    it in _NET_CLIENT_LIST_STACKING -- with xdotool windowfocus, a plain
+    XSetInputFocus that no window manager can refuse -- and raises it. The text
+    then goes where the click meant it to go, the window is never minimized,
+    and after the paste the focus returns to Pastex if it is still on that
+    window.
+  * Log the outcome of the minimize request (minimized / did not minimize, with
+    its duration) so a refusing window manager is visible in error.log instead
+    of looking like a mystery.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 02:10:00 +0700
+
 pastex (1.10.10-1) unstable; urgency=medium
 
   * Remove the last two-second stall in a click. The window is now minimized

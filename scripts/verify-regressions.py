@@ -1256,8 +1256,8 @@ MUTATIONS = [
     (
         "the tk restore runs even after the wm showed the window",
         "pastex/app.py",
-        "        if ok:\n            return",
-        "        if False:\n            return",
+        "        if ok:\n            PastexApp._take_the_focus_back(self, window_id)\n            return",
+        "        if False:\n            PastexApp._take_the_focus_back(self, window_id)\n            return",
         ["tests/test_app.py::test_the_tk_restore_is_skipped_when_the_window_manager_shows_the_window"],
     ),
     (
@@ -1287,6 +1287,48 @@ MUTATIONS = [
         "        if attempt + 1 < polls:\n            sleep(RESTORE_POLL_S)",
         "        if False:\n            sleep(RESTORE_POLL_S)",
         ["tests/test_clipboard.py::test_restore_window_keeps_polling_a_hidden_window"],
+    ),
+    (
+        "the focus is never handed to the window behind pastex",
+        "pastex/app.py",
+        '            and self.__dict__.get("_focus_state") == "ours"',
+        '            and self.__dict__.get("_focus_state") == "moved"',
+        ["tests/test_app.py::test_the_focus_is_handed_to_the_window_behind_pastex"],
+    ),
+    (
+        "the focus is handed over before the minimize had a chance",
+        "pastex/app.py",
+        "            waited >= MINIMIZE_FOCUS_TRANSFER_AT_MS",
+        "            waited >= 0",
+        ["tests/test_app.py::test_the_focus_is_left_alone_while_the_minimize_may_still_work"],
+    ),
+    (
+        "a moved focus does not count as hidden",
+        "pastex/app.py",
+        '        if self.__dict__.get("_focus_elsewhere", False):\n            # The window manager refused to minimize',
+        '        if False:\n            # The window manager refused to minimize',
+        ["tests/test_app.py::test_the_text_is_sent_once_the_focus_moved"],
+    ),
+    (
+        "the focus is taken back from any window at all",
+        "pastex/app.py",
+        "        if x11_active_window() != normalize_window_id(target):\n            return",
+        "        if False:\n            return",
+        ["tests/test_app.py::test_the_focus_is_taken_back_only_from_the_window_it_was_given_to"],
+    ),
+    (
+        "the focus transfer ignores whether xsetinputfocus worked",
+        "pastex/clipboard.py",
+        "    if x11_active_window(runner) not in {target, None}:\n        return None",
+        "    if False:\n        return None",
+        ["tests/test_clipboard.py::test_no_focus_transfer_when_xsetinputfocus_is_overridden"],
+    ),
+    (
+        "an iconified window below is offered the focus",
+        "pastex/clipboard.py",
+        '        if x11_wm_state(candidate, runner) != "normal":\n            continue',
+        "        if False:\n            continue",
+        ["tests/test_clipboard.py::test_an_iconified_window_below_is_skipped"],
     ),
 ]
 

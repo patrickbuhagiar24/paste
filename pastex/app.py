@@ -31,6 +31,10 @@ from .clipboard import (
     read_text_from_clipboard,
     set_clipboard_owner,
     activate_window,
+    focus_the_window_below,
+    focus_window,
+    normalize_window_id,
+    x11_active_window,
     restore_window,
     simulate_paste,
     can_type_text,
@@ -125,6 +129,11 @@ RESTORE_REPEAT_MS = 400
 RESTORE_ACTIVATE_AT_MS = 240
 # Some compositors need a second request before they hide the window.
 MINIMIZE_REHIDE_AT_MS = 120
+# Some window managers ignore every minimize they are sent -- Muffin did, and
+# the click then sat for 900 ms and gave up with nothing pasted. After this
+# long with the focus still on Pastex, the focus is handed to the window behind
+# it instead: that cannot be refused, and the text then goes where it belongs.
+MINIMIZE_FOCUS_TRANSFER_AT_MS = 200
 
 # Hard deadline for the "send Ctrl+V" half of a click. Every tool call has its
 # own timeout, but a wedged daemon or an unanswered portal consent dialog could
@@ -1820,6 +1829,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         self._x11_hide_checked = False
         self._x11_checked_ms = None
         self._focus_state = None
+        self._focus_elsewhere = False
+        self._focus_moved_to = None
+        self._focus_transfer_started = False
         self._hide_signal = None
         self._force_minimize_tried = False
         self._paste_hide_via_x11 = False
@@ -2109,6 +2121,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             + f" in {took} ms ({PastexApp._since_click(self)})"
         )
         if ok:
+            PastexApp._take_the_focus_back(self, window_id)
             return
         # The window manager kept the request: hand it back to Tk, which retries
         # deiconify() every RESTORE_RETRY_MS. This is the 1.10.8 path that did
@@ -2214,6 +2227,65 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         log_error(f"[paste] asking the window manager to show {window_id} again")
         _run_in_thread(activate_window, window_id)
 
+    def _hide_worker(self, window_id: str) -> None:
+        """Minimize through the window manager and report whether it obeyed."""
+        started = time.monotonic()
+        ok = force_minimize_window(window_id)
+        took = int((time.monotonic() - started) * 1000)
+        log_error(
+            "[paste] the window manager "
+            + ("minimized the window" if ok else "did not minimize the window")
+            + f" in {took} ms ({PastexApp._since_click(self)})"
+        )
+
+    def _transfer_the_focus(self) -> None:
+        """Hand the focus to the app behind Pastex when minimizing is ignored.
+
+        A window manager that will not minimize still has to give another
+        window the focus: ``xdotool windowfocus`` is a plain XSetInputFocus, so
+        the text is typed where the user meant it to go instead of being lost.
+        """
+        if self.__dict__.get("_focus_transfer_started", False):
+            return
+        self._focus_transfer_started = True
+        window_id = PastexApp._window_id(self)
+        if window_id is None:
+            return
+        log_error(
+            "[paste] the window is still focused; handing the focus to the "
+            f"window behind it ({PastexApp._since_click(self)})"
+        )
+        _run_in_thread(PastexApp._transfer_the_focus_worker, self, window_id)
+
+    def _transfer_the_focus_worker(self, window_id: str) -> None:
+        target = focus_the_window_below(window_id)
+        if target is None:
+            log_error(
+                f"[paste] there is no window behind Pastex to hand the focus to "
+                f"({PastexApp._since_click(self)})"
+            )
+            return
+        self._focus_moved_to = target
+        self._focus_elsewhere = True
+        log_error(
+            f"[paste] the focus went to {target}; the text goes there "
+            f"({PastexApp._since_click(self)})"
+        )
+        try:
+            self.after(0, lambda app=self: PastexApp._send_paste_now(app))
+        except TK_ERRORS:  # pragma: no cover - shutting down
+            pass
+
+    def _take_the_focus_back(self, window_id: str) -> None:
+        """Give Pastex the focus again, but only if it is still on the target."""
+        target = self.__dict__.get("_focus_moved_to")
+        if target is None:
+            return
+        if x11_active_window() != normalize_window_id(target):
+            return
+        if focus_window(window_id):
+            log_error("[paste] the focus is back on Pastex")
+
     def _hide_for_paste(self) -> bool:
         """Minimize Pastex, keeping its panel entry, and report whether it worked.
 
@@ -2244,7 +2316,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 f"[paste] minimizing through the window manager ({window_id}, "
                 f"{PastexApp._since_click(self)})"
             )
-            _run_in_thread(force_minimize_window, window_id)
+            _run_in_thread(PastexApp._hide_worker, self, window_id)
             return True
         self._paste_hide_via_x11 = False
         # Tk/X11 drops iconify() for a maximized window, so the fallback (no
@@ -2275,6 +2347,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         stays visible on purpose, so its state must not be consulted there.
         """
         if self.__dict__.get("_paste_hide_widget") is not None:
+            return True
+        if self.__dict__.get("_focus_elsewhere", False):
+            # The window manager refused to minimize, so the focus was handed
+            # to the app behind Pastex: the text goes to the same place.
             return True
         if self.__dict__.get("_window_unmapped", False):
             return True
@@ -2391,6 +2467,12 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                 except TK_ERRORS:  # pragma: no cover - interpreter already gone
                     pass
                 PastexApp._force_minimize(self)
+        if (
+            waited >= MINIMIZE_FOCUS_TRANSFER_AT_MS
+            and self.__dict__.get("_focus_state") == "ours"
+            and not self.__dict__.get("_focus_elsewhere", False)
+        ):
+            PastexApp._transfer_the_focus(self)
         checked = self.__dict__.get("_x11_checked_ms")
         if waited >= MINIMIZE_FOCUS_CHECK_AT_MS and (
             checked is None or waited - checked >= MINIMIZE_FOCUS_RETRY_MS

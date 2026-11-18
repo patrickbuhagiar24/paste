@@ -3021,7 +3021,8 @@ def test_the_window_is_minimized_through_the_window_manager(monkeypatch):
 
     assert app._paste_hide_via_x11 is True
     assert calls == []  # no iconify(), no state(), no update_idletasks()
-    assert threads == [(app_module.force_minimize_window, ("0x2800003",))]
+    assert threads[0][0] is PastexApp._hide_worker
+    assert threads[0][1] == (app, "0x2800003")
 
 
 def test_the_window_is_shown_through_the_window_manager(monkeypatch):
@@ -3141,3 +3142,109 @@ def test_the_tk_restore_is_skipped_when_the_window_manager_shows_the_window(monk
 
     assert scheduled == []
     assert calls == []
+
+
+def _waiting_app(monkeypatch, waited_tail, focus_state="ours"):
+    """App double that is in the middle of waiting for the window to hide."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _ewmh_app(monkeypatch)
+    app._paste_hide_via_x11 = True
+    app._rehide_done = True
+    app._minimize_waited_ms = app_module.MINIMIZE_FOCUS_TRANSFER_AT_MS - waited_tail
+    app._focus_state = focus_state
+    app._x11_checked_ms = None
+    monkeypatch.setattr(PastexApp, "_tk_ready", lambda self: True)
+    monkeypatch.setattr(PastexApp, "_x11_confirm_hidden", lambda self, waited=0: None)
+    return app, calls
+
+
+def test_the_focus_is_handed_to_the_window_behind_pastex(monkeypatch):
+    """Muffin ignored every minimize: the focus must move instead."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _waiting_app(monkeypatch, app_module.MINIMIZE_RETRY_MS)
+    transferred = []
+    monkeypatch.setattr(
+        PastexApp, "_transfer_the_focus", lambda self: transferred.append(self)
+    )
+
+    assert PastexApp._wait_for_the_window_hiding(app) is True
+
+    assert transferred == [app]
+    assert calls == []  # Tk is not asked to iconify
+
+
+def test_the_focus_is_left_alone_while_the_minimize_may_still_work(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, _calls = _waiting_app(monkeypatch, app_module.MINIMIZE_RETRY_MS * 2)
+    transferred = []
+    monkeypatch.setattr(
+        PastexApp, "_transfer_the_focus", lambda self: transferred.append(self)
+    )
+
+    PastexApp._wait_for_the_window_hiding(app)
+
+    assert transferred == []
+
+
+def test_no_focus_transfer_when_the_focus_already_moved(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, _calls = _waiting_app(
+        monkeypatch, app_module.MINIMIZE_RETRY_MS, focus_state="moved"
+    )
+    transferred = []
+    monkeypatch.setattr(
+        PastexApp, "_transfer_the_focus", lambda self: transferred.append(self)
+    )
+
+    PastexApp._wait_for_the_window_hiding(app)
+
+    assert transferred == []
+
+
+def test_the_text_is_sent_once_the_focus_moved(monkeypatch):
+    from pastex.app import PastexApp
+
+    app, _calls = _ewmh_app(monkeypatch)
+    app._focus_state = "ours"
+    app._focus_elsewhere = True
+
+    assert PastexApp._paste_window_hidden(app) is True
+
+
+def _focus_app(monkeypatch, active):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _ewmh_app(monkeypatch)
+    app._focus_moved_to = "0x2200003"
+    monkeypatch.setattr(app_module, "x11_active_window", lambda: active)
+    return app, calls
+
+
+def test_the_focus_is_taken_back_only_from_the_window_it_was_given_to(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    focused = []
+    app, _calls = _focus_app(monkeypatch, "0x2200003")
+    monkeypatch.setattr(
+        app_module, "focus_window", lambda window_id: focused.append(window_id) or True
+    )
+    PastexApp._take_the_focus_back(app, "0x5600009")
+    assert focused == ["0x5600009"]
+
+    focused.clear()
+    app, _calls = _focus_app(monkeypatch, "0x9900001")
+    monkeypatch.setattr(
+        app_module, "focus_window", lambda window_id: focused.append(window_id) or True
+    )
+    PastexApp._take_the_focus_back(app, "0x5600009")
+    assert focused == []  # the user went somewhere else; leave them there
