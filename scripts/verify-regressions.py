@@ -20,29 +20,29 @@ MUTATIONS = [
     (
         "build-deb bundles sample data again",
         "scripts/build-deb.sh",
-        'install -m 644 usr/share/applications/pastex.desktop "$STAGE/usr/share/applications/"',
+        'cp -r extension "$STAGE/usr/share/pastex/extension"',
         (
             'cp -r data/snippets "$STAGE/usr/share/pastex/"\n'
-            'install -m 644 usr/share/applications/pastex.desktop "$STAGE/usr/share/applications/"'
+            'cp -r extension "$STAGE/usr/share/pastex/extension"'
         ),
         ["tests/test_v150_samples.py::test_build_deb_does_not_copy_samples"],
     ),
     (
         "debian/rules bundles sample data again",
         "debian/rules",
-        "\tcp -r pastex debian/pastex/usr/share/pastex/",
+        "\tcp -r extension debian/pastex/usr/share/pastex/extension",
         (
-            "\tcp -r pastex debian/pastex/usr/share/pastex/\n"
+            "\tcp -r extension debian/pastex/usr/share/pastex/extension\n"
             "\tcp -r data/snippets debian/pastex/usr/share/pastex/"
         ),
         ["tests/test_v150_samples.py::test_debian_rules_does_not_copy_samples"],
     ),
     (
-        "the empty-folder hint points at the removed --export-data",
-        "pastex/app.py",
-        '                "Choose a source folder in the GUI or pass --dir FOLDER.",',
-        '                "Choose a source folder in the GUI or run --export-data.",',
-        ["tests/test_v150_samples.py::test_list_hint_never_points_at_the_removed_option"],
+        "the packaging promises the removed --export-data again",
+        "debian/control",
+        " Snippets are stored locally in the browser; the optional Drive sync",
+        " Snippets are stored locally; run --export-data. The optional Drive sync",
+        ["tests/test_v150_samples.py::test_docs_and_packaging_do_not_promise_the_removed_option"],
     ),
     (
         "a repaint always inserts new rows instead of reusing them",
@@ -93,48 +93,11 @@ MUTATIONS = [
         ],
     ),
     (
-        "--permissions is missing from the CLI",
+        "Manual hint is missing from the failure dialog",
         "pastex/app.py",
-        "    if args.permissions:\n        return run_permission_info()",
-        "    if False:\n        return run_permission_info()",
-        [
-            "tests/test_v150_permissions.py::test_izin_flag_reports_status",
-            "tests/test_v150_permissions.py::test_izin_flag_points_to_activation_command",
-        ],
-    ),
-    (
-        "--enable-permissions is missing from the CLI",
-        "pastex/app.py",
-        "    if args.enable_permissions:\n        return run_enable_permission()",
-        "    if False:\n        return run_enable_permission()",
-        [
-            "tests/test_v150_permissions.py::test_aktifkan_izin_calls_helper",
-            "tests/test_v150_permissions.py::test_aktifkan_izin_without_pkexec_prints_manual_command",
-        ],
-    ),
-    (
-        "CLI hint is missing from the failure dialog",
-        "pastex/app.py",
-        "            + uinput.CLI_HINT",
+        "            + uinput.MANUAL_HINT",
         '            + ""',
-        ["tests/test_v150_permissions.py::test_paste_failure_dialog_mentions_cli"],
-    ),
-    (
-        "CLI hint is missing from --check",
-        "pastex/app.py",
-        (
-            "                # Keep permission information in --check even though the GUI\n"
-            "                # button was removed.\n"
-            '                print(f"\\n{uinput.CLI_HINT}")'
-        ),
-        (
-            "                # Keep permission information in --check even though the GUI\n"
-            "                # button was removed.\n"
-            "                pass"
-        ),
-        [
-            "tests/test_v150_permissions.py::test_check_still_reports_permission_and_cli_hint"
-        ],
+        ["tests/test_v150_permissions.py::test_paste_failure_dialog_mentions_manual_setup"],
     ),
     (
         "refresh_tree ignores collapsed folders",
@@ -186,18 +149,11 @@ MUTATIONS = [
         ["tests/test_v150_source_dir.py::test_source_dir_replaces_default_roots"],
     ),
     (
-        "--dir no longer takes precedence",
+        "transient roots no longer take precedence",
         "pastex/app.py",
         '        if getattr(self, "transient_roots", False) and roots:',
         "        if False and roots:",
-        ["tests/test_v150_source_dir.py::test_dir_argument_wins_over_saved_source"],
-    ),
-    (
-        "run_cli does not mark the --dir session",
-        "pastex/app.py",
-        "app = PastexApp(roots=roots, transient_roots=bool(args.dir))",
-        "app = PastexApp(roots=roots)",
-        ["tests/test_v150_source_dir.py::test_dir_argument_transient_flag_from_cli"],
+        ["tests/test_v150_source_dir.py::test_transient_roots_win_over_saved_source"],
     ),
     (
         "writes escape the source folder",
@@ -262,18 +218,11 @@ MUTATIONS = [
         ["tests/test_v150_icon.py::test_png_is_what_the_generator_produces"],
     ),
     (
-        "--check does not report the icon",
-        "pastex/app.py",
-        "    print(f\"Application icon: {ICON_NAME} (expected WM_CLASS '{WM_CLASS}')\")",
-        '    print("Application icon: (not reported)")',
-        ["tests/test_v150_icon.py::test_check_reports_icon_status"],
-    ),
-    (
-        "--list is silent when no text is found",
-        "pastex/app.py",
-        "        if not flatten_texts(nodes):",
-        "        if False:",
-        ["tests/test_v150_source_dir.py::test_cli_list_explains_when_nothing_found"],
+        "the desktop file reintroduces a CLI action",
+        "usr/share/applications/pastex.desktop",
+        "X-GNOME-Autostart-enabled=false\n",
+        "X-GNOME-Autostart-enabled=false\nActions=Pick;\n",
+        ["tests/test_v150_icon.py::test_desktop_file_has_no_cli_actions"],
     ),
     (
         "source folder is not saved",
@@ -588,17 +537,15 @@ MUTATIONS = [
     (
         "every launch starts a second window",
         "pastex/app.py",
-        '''    if not args.dir:
-        answer = send_command("pick" if args.pick else "show")
-        if answer is not None and answer.get("ok"):
-            return 0
+        '''    answer = send_command("show")
+    if answer is not None and answer.get("ok"):
+        return 0
 ''',
-        '''    if False:
-        answer = send_command("pick" if args.pick else "show")
-        if answer is not None and answer.get("ok"):
-            return 0
+        '''    answer = None
+    if answer is not None and answer.get("ok"):
+        return 0
 ''',
-        ["tests/test_app.py::test_cli_forwards_show_to_a_running_instance"],
+        ["tests/test_app.py::test_gui_forwards_show_to_a_running_instance"],
     ),
     (
         "the instance lock is not taken",
@@ -802,35 +749,56 @@ MUTATIONS = [
         ["tests/test_uinput.py::test_x11_session_does_not_need_uinput_permissions"],
     ),
     (
-        "the X11 report offers the Wayland permission setup",
+        "an X11 paste failure loses its X11 diagnosis",
         "pastex/app.py",
-        "    if not st.needed:\n        return X11_PERMISSION_NOTE",
-        "    if False:\n        return X11_PERMISSION_NOTE",
-        ["tests/test_v150_permissions.py::test_permissions_report_on_x11_says_not_needed"],
+        "        if not st.needed:\n",
+        "        if False:  # BUG - X11 falls through\n",
+        ["tests/test_v150_permissions.py::test_paste_failure_on_x11_does_not_blame_uinput"],
     ),
     (
-        "postinst configures the group and the ydotool unit again",
+        "postinst configures system accounts again",
         "debian/postinst",
-        '            say "nothing to configure: the X11 clipboard and xdotool need no permissions."',
+        '            say "the Pastex extension is registered with Chrome and Chromium."',
         '            usermod -aG pastex "$(id -un)"\n'
-        '            say "nothing to configure: the X11 clipboard and xdotool need no permissions."',
+        '            say "the Pastex extension is registered with Chrome and Chromium."',
         ["tests/test_static.py::test_postinst_does_not_touch_accounts_or_services"],
     ),
     (
-        "the udev rule is installed in the active directory again",
-        "debian/rules",
-        "\tinstall -m 644 usr/lib/pastex/70-pastex-uinput.rules debian/pastex/usr/lib/pastex/",
-        "\tinstall -m 644 usr/lib/pastex/70-pastex-uinput.rules "
-        "debian/pastex/usr/lib/udev/rules.d/",
-        ["tests/test_static.py::test_wayland_helpers_are_shipped_as_inert_templates"],
+        "the side panel points at a missing page",
+        "extension/manifest.json",
+        '"default_path": "sidepanel.html"',
+        '"default_path": "sidepanel-missing.html"',
+        ["tests/test_chrome_extension.py::test_manifest_entry_points_exist"],
     ),
     (
-        "Wayland-only tools are recommended on an X11-first package",
+        "the Drive host permissions are dropped",
+        "extension/manifest.json",
+        '"host_permissions": ["https://www.googleapis.com/", "https://oauth2.googleapis.com/"],',
+        '"host_permissions": [],',
+        ["tests/test_chrome_extension.py::test_manifest_permissions_are_minimal_and_documented"],
+    ),
+    (
+        "the Chromium registration is missing from the packaging",
+        "debian/rules",
+        (
+            "\tinstall -d debian/pastex/usr/share/chromium/extensions; \\\n"
+            "\tprintf '{\"external_crx\": \"/usr/share/pastex/pastex.crx\", \"external_version\": \"%s\"}\\n' \\\n"
+            "\t  \"$$EXT_VERSION\" >debian/pastex/usr/share/chromium/extensions/$$EXT_ID.json"
+        ),
+        (
+            "\tinstall -d debian/pastex/usr/share/chromium-stable/extensions; \\\n"
+            "\tprintf '{\"external_crx\": \"/usr/share/pastex/pastex.crx\", \"external_version\": \"%s\"}\\n' \\\n"
+            "\t  \"$$EXT_VERSION\" >debian/pastex/usr/share/chromium-stable/extensions/$$EXT_ID.json"
+        ),
+        ["tests/test_static.py::test_extension_payload_is_registered_for_autodetection"],
+    ),
+    (
+        "desktop tools creep back into the extension package",
         "debian/control",
-        "Recommends: xclip, xsel, xdotool",
-        "Recommends: xclip, xsel, xdotool, wl-clipboard",
+        "Recommends: google-chrome-stable | chromium",
+        "Recommends: google-chrome-stable | chromium, xdotool",
         [
-            "tests/test_static.py::test_x11_tools_are_recommended_and_wayland_tools_only_suggested"
+            "tests/test_static.py::test_browser_is_recommended_and_desktop_tools_are_gone"
         ],
     ),
     (
@@ -841,10 +809,10 @@ MUTATIONS = [
         ["tests/test_static.py::test_build_deb_control_heredoc_is_quoted"],
     ),
     (
-        "the description quotes the command with backticks again",
+        "the description quotes words with backticks again",
         "scripts/build-deb.sh",
-        " templates under /usr/lib/pastex, and only pastex --enable-permissions",
-        " templates under /usr/lib/pastex, and only `pastex --enable-permissions`",
+        " through a service account.",
+        " through a `service` account.",
         ["tests/test_static.py::test_rendered_control_keeps_the_description_text"],
     ),
     (

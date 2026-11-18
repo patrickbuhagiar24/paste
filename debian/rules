@@ -3,28 +3,40 @@
 	dh $@
 
 override_dh_auto_install:
-	install -d debian/pastex/usr/bin
-	install -m 755 bin/pastex debian/pastex/usr/bin/pastex
+	# The payload is the Chrome extension: ship it unpacked (auditable),
+	# plus a signed .crx registered for auto-detection by the browsers.
 	install -d debian/pastex/usr/share/pastex
-	cp -r pastex debian/pastex/usr/share/pastex/
-	# Since 1.5.0, sample data is not bundled (data/snippets/ was removed).
-	install -d debian/pastex/usr/share/applications
-	install -m 644 usr/share/applications/pastex.desktop debian/pastex/usr/share/applications/
-	install -d debian/pastex/usr/share/icons/hicolor/scalable/apps
-	install -m 644 usr/share/icons/hicolor/scalable/apps/pastex.svg debian/pastex/usr/share/icons/hicolor/scalable/apps/
-	for size in 64 128 256; do \
-	  install -d debian/pastex/usr/share/icons/hicolor/$${size}x$${size}/apps; \
-	  install -m 644 usr/share/icons/hicolor/$${size}x$${size}/apps/pastex.png \
-	    debian/pastex/usr/share/icons/hicolor/$${size}x$${size}/apps/; \
-	done
-	# The optional Wayland helpers are shipped as inert templates: only
-	# `pastex --enable-permissions` copies the udev rule into
-	# /usr/lib/udev/rules.d and enables the per-user ydotool unit. Linux Mint's
-	# default X11 session needs neither.
+	cp -r extension debian/pastex/usr/share/pastex/extension
+	rm -rf debian/pastex/usr/share/pastex/extension/test
 	install -d debian/pastex/usr/lib/pastex
-	install -m 755 usr/lib/pastex/pastex-uinput-group debian/pastex/usr/lib/pastex/
-	install -m 644 usr/lib/pastex/70-pastex-uinput.rules debian/pastex/usr/lib/pastex/
-	install -m 644 usr/lib/pastex/ydotoold.service debian/pastex/usr/lib/pastex/
+	install -m 755 native-host/pastex-native-host debian/pastex/usr/lib/pastex/pastex-native-host
+	install -d debian/pastex/etc/xdg/autostart
+	install -m 644 native-host/pastex-setup.desktop debian/pastex/etc/xdg/autostart/pastex-setup.desktop
+	install -d debian/pastex/etc/opt/chrome/native-messaging-hosts
+	install -d debian/pastex/etc/chromium/native-messaging-hosts
+	# One shell block on purpose: make runs each recipe line in its own
+	# shell, and the key, id, and version below belong together.
+	set -e; CRX_KEY="$${PASTEX_CRX_KEY:-}"; \
+	if [ -z "$$CRX_KEY" ] && [ -f debian/crx-key.pem ]; then CRX_KEY=debian/crx-key.pem; fi; \
+	if [ -n "$$CRX_KEY" ] && [ ! -f "$$CRX_KEY" ]; then echo "warning: CRX key missing; test build only"; CRX_KEY=""; fi; \
+	if [ -z "$$CRX_KEY" ]; then \
+	  CRX_KEY="$$(mktemp -d)/ephemeral-crx-key.pem"; \
+	  openssl genrsa -out "$$CRX_KEY" 2048 2>/dev/null; \
+	  echo "warning: ephemeral CRX key; test build only"; \
+	fi; \
+	EXT_ID="$$(python3 scripts/pack-crx.py --key "$$CRX_KEY" --src extension --out debian/pastex/usr/share/pastex/pastex.crx)"; \
+	python3 scripts/pack-crx.py --verify debian/pastex/usr/share/pastex/pastex.crx >/dev/null; \
+	EXT_VERSION="$$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"; \
+	install -d debian/pastex/usr/share/google-chrome/extensions; \
+	printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
+	  "$$EXT_VERSION" >debian/pastex/usr/share/google-chrome/extensions/$$EXT_ID.json; \
+	install -d debian/pastex/usr/share/chromium/extensions; \
+	printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
+	  "$$EXT_VERSION" >debian/pastex/usr/share/chromium/extensions/$$EXT_ID.json; \
+	for native_dir in debian/pastex/etc/opt/chrome/native-messaging-hosts debian/pastex/etc/chromium/native-messaging-hosts; do \
+	  printf '{"name": "com.pastex.native", "description": "Pastex config bridge", "path": "/usr/lib/pastex/pastex-native-host", "type": "stdio", "allowed_origins": ["chrome-extension://%s/"]}\n' \
+	    "$$EXT_ID" >$$native_dir/com.pastex.native.json; \
+	done
 	install -d debian/pastex/usr/share/doc/pastex
-	install -m 644 README.md debian/pastex/usr/share/doc/pastex/README.md
+	install -m 644 extension/README.md debian/pastex/usr/share/doc/pastex/README.md
 	install -m 644 LICENSE debian/pastex/usr/share/doc/pastex/copyright

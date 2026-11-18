@@ -1,33 +1,27 @@
 Source: pastex
-Section: utils
+Section: web
 Priority: optional
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 13)
+Build-Depends: debhelper-compat (= 13), python3, openssl
 Standards-Version: 4.6.2
 Homepage: https://github.com/patrickbuhagiar24/paste
 Rules-Requires-Root: no
 
 Package: pastex
 Architecture: all
-Depends: ${misc:Depends}, python3 (>= 3.10), python3-tk
+Depends: ${misc:Depends}, python3
 Conflicts: paste-teks
 Replaces: paste-teks
-Recommends: xclip, xsel, xdotool
-Suggests: wl-clipboard, ydotool, python3-dbus
-Description: One-click desktop text snippet manager for Linux Mint
- Pastex displays .txt files in a hierarchy of folders.
- Click a text file once to copy its contents and send Ctrl+V to the previously
- active app. A preview, search, and built-in editor are also included.
+Recommends: google-chrome-stable | chromium
+Description: One-click text snippet manager for Google Chrome
+ Pastex is a Chrome extension (Manifest V3): a snippet library in the
+ Side Panel, an in-page picker at the cursor, and Google Drive sync
+ through a service account.
  .
- Supports Linux Mint (Cinnamon, MATE and Xfce): on the default X11 session it
- uses xclip/xsel for the clipboard and xdotool for automatic paste, with no
- extra permissions; the Cinnamon Wayland session additionally uses
- wl-clipboard and ydotool (Suggests).
+ Installing the package registers the extension with Chrome and
+ Chromium: on the next launch the browser offers to enable Pastex
+ with one click. No daemons, groups, or system services are used.
  .
- Installing the package changes nothing on the system: the optional Wayland
- udev rule, the 'pastex' group and the per-user ydotoold unit ship as inert
- templates under /usr/lib/pastex, and only pastex --enable-permissions
- installs them.
- .
- Choose a source folder in the GUI. User snippets are stored under
- ~/.local/share/pastex/snippets and can be managed in the GUI.
+ Snippets are stored locally in the browser; the optional Drive sync
+ mirrors them as .txt files. Setup is described in the README under
+ /usr/share/doc/pastex/.

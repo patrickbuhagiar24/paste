@@ -51,7 +51,15 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build the Debian package
-        run: ./scripts/build-deb.sh
+        run: |
+          if [ -n "${{ secrets.PASTEX_CRX_KEY }}" ]; then
+            printf '%s' "${{ secrets.PASTEX_CRX_KEY }}" > "${{ runner.temp }}/pastex-crx-key.pem"
+            chmod 600 "${{ runner.temp }}/pastex-crx-key.pem"
+            echo "PASTEX_CRX_KEY=${{ runner.temp }}/pastex-crx-key.pem" >> "$GITHUB_ENV"
+          else
+            echo "::warning::PASTEX_CRX_KEY is not configured; the .crx gets an ephemeral id (test build)."
+          fi
+          ./scripts/build-deb.sh
 
       - name: Build the APT archive (pool + dists + Release)
         env:

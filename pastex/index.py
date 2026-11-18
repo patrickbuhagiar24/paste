@@ -76,7 +76,7 @@ class SnippetIndex:
         self._texts.pop(Path(path), None)
 
     def search(self, query: str) -> list[Node]:
-        """Match snippet names first, then cached contents, like the CLI does."""
+        """Match snippet names first, then cached contents."""
         nodes = self.nodes()
         query = query.strip().lower()
         if not query:

@@ -131,8 +131,6 @@ def test_png_is_what_the_generator_produces():
 
 def test_constants_agree_with_desktop_file():
     """Icon=/StartupWMClass= in .desktop must match what the app uses."""
-    # Only the [Desktop Entry] group: the file also carries a [Desktop Action]
-    # section for the snippet picker.
     entries = {}
     group = ""
     for line in DESKTOP.read_text(encoding="utf-8").splitlines():
@@ -148,13 +146,13 @@ def test_constants_agree_with_desktop_file():
     assert entries["Icon"] == app_module.ICON_NAME
     assert entries["StartupWMClass"] == app_module.WM_CLASS
     assert entries["Exec"].endswith("/pastex")
-    assert "Pick" in entries.get("Actions", ""), "the picker action must be registered"
 
 
-def test_desktop_action_opens_the_picker():
+def test_desktop_file_has_no_cli_actions():
+    """The GUI takes no options, so the .desktop file carries no actions."""
     text = DESKTOP.read_text(encoding="utf-8")
-    action = text.split("[Desktop Action Pick]", 1)[1]
-    assert "Exec=/usr/bin/pastex --pick" in action
+    assert "[Desktop Action" not in text
+    assert "Actions=" not in text
 
 
 def test_window_class_passed_to_tk():
@@ -254,14 +252,6 @@ def test_apply_window_icon_survives_broken_png(monkeypatch, tmp_path):
     assert app_module.apply_window_icon(FakeTk()) == []
 
 
-def test_check_reports_icon_status(capsys):
-    assert app_module.run_cli(["--check"]) == 0
-    out = capsys.readouterr().out
-    assert "Application icon:" in out
-    assert "pastex.png" in out
-    assert "(expected WM_CLASS 'Pastex')" in out
-
-
 def test_real_window_wm_class_matches_desktop(tmp_path):
     """Run the real launcher under Xvfb and check WM_CLASS through xprop.
 
@@ -286,8 +276,8 @@ def test_real_window_wm_class_matches_desktop(tmp_path):
 
     script = r"""
 import os, subprocess, sys, time
-launcher, folder, expected = sys.argv[1:]
-p = subprocess.Popen([launcher, "--dir", folder], stdout=subprocess.PIPE,
+launcher, expected = sys.argv[1:]
+p = subprocess.Popen([launcher], stdout=subprocess.PIPE,
                      stderr=subprocess.PIPE, text=True)
 try:
     title = "Pastex v" + __import__("pastex").__version__ + " — One-Click Paste"
@@ -318,7 +308,6 @@ finally:
             "-c",
             script,
             str(ROOT / "bin" / "pastex"),
-            str(tmp_path),
             app_module.WM_CLASS,
         ],
         cwd=ROOT,

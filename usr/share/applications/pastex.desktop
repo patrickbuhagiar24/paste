@@ -10,9 +10,3 @@ Categories=Utility;TextEditor;
 Keywords=paste;clipboard;text;snippet;
 StartupWMClass=Pastex
 X-GNOME-Autostart-enabled=false
-Actions=Pick;
-
-[Desktop Action Pick]
-Name=Paste a Snippet (picker)
-Comment=Show the snippet picker popup at the pointer
-Exec=/usr/bin/pastex --pick

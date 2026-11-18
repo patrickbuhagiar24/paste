@@ -464,7 +464,7 @@ def window_manager(runner: Runner = _default_runner) -> str | None:
     """Return the window manager's name, or None when X has no EWMH WM.
 
     Without a window manager nothing can minimize Pastex: Tk's ``iconify()``
-    is a request to the WM. Naming the WM in the log and in ``--check`` makes
+    is a request to the WM. Naming the WM in the log makes
     that visible instead of looking like a mystery.
     """
     if shutil.which("wmctrl") is not None:
@@ -707,7 +707,7 @@ def _spawn_private_ydotoold() -> bool:
     ``systemctl --user start ydotoold.service`` fails on a stock install and
     automatic paste looked broken. A daemon started by the user with a
     user-owned socket needs no root: it only needs write access to
-    /dev/uinput, which ``pastex --enable-permissions`` sets up.
+    /dev/uinput, which the setup helper sets up.
     """
     binary = shutil.which("ydotoold")
     if binary is None:
@@ -1045,6 +1045,6 @@ def simulate_paste(
         message=(
             f"Automatic paste is unavailable ({detail}). "
             "The text was copied; press Ctrl+V in the target app. "
-            "Run `pastex --check` for diagnostics."
+            "See the log for diagnostics."
         ),
     )

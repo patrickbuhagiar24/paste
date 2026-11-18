@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pastex</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <input id="search" type="search" placeholder="Search snippets…" aria-label="Search snippets" />
+      <div class="toolbar" role="toolbar" aria-label="Snippet actions">
+        <button id="btn-folder" title="New folder">＋ Folder</button>
+        <button id="btn-text" title="New snippet">＋ Text</button>
+        <button id="btn-sync" title="Sync with Google Drive">⇄ Sync</button>
+        <button id="btn-options" title="Settings (Drive, service account)">⚙</button>
+      </div>
+      <div id="drive-bar" aria-live="polite">
+        <span id="drive-status">Drive: not connected.</span>
+        <span id="drive-actions">
+          <button id="btn-upload-all" title="Overwrite Drive with local snippets">⇪</button>
+          <button id="btn-download-all" title="Overwrite local snippets with Drive">⇩</button>
+        </span>
+      </div>
+    </header>
+    <main>
+      <div id="tree" role="tree" aria-label="Snippets"></div>
+      <div id="empty" hidden>
+        <div class="empty-icon">📁</div>
+        <p>No snippets yet.<br />Create a folder or a text snippet to begin.</p>
+        <button id="btn-empty-text">＋ New snippet</button>
+      </div>
+    </main>
+    <section id="preview-pane" aria-label="Preview">
+      <div id="preview-title">Select a snippet.</div>
+      <pre id="preview"></pre>
+      <div id="preview-actions">
+        <button id="btn-insert" disabled>⚡ Insert into page</button>
+        <button id="btn-edit" disabled>Edit</button>
+      </div>
+    </section>
+    <div id="editor-overlay" hidden>
+      <div id="editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+        <h2 id="editor-title">New snippet</h2>
+        <label id="editor-parent-label" for="editor-parent">Folder</label>
+        <select id="editor-parent"></select>
+        <label for="editor-name">Name</label>
+        <input id="editor-name" type="text" />
+        <div id="editor-text-wrap">
+          <label for="editor-text">Text</label>
+          <textarea id="editor-text" rows="10"></textarea>
+        </div>
+        <div class="editor-buttons">
+          <button id="editor-save">Save</button>
+          <button id="editor-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <footer id="status" aria-live="polite">Ready.</footer>
+    <script src="store.js"></script>
+    <script src="drive.js"></script>
+    <script src="native.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

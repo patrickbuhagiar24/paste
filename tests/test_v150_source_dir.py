@@ -3,7 +3,8 @@
 Rules kept here:
   * "📁 Choose Source Folder" stores ONE folder in settings.json.
   * That folder is the only root AND the only write target.
-  * `--dir` always wins for that session and does NOT change the stored folder.
+  * Session-only (transient) roots always win for that session and do NOT
+    change the stored folder.
   * With no source folder chosen, the empty view shows guidance.
 """
 
@@ -193,11 +194,11 @@ def test_add_text_writes_into_source(gui, dialogs, sample_root, monkeypatch):
     assert (sample_root / "Catatan.txt").exists()
 
 
-# --- --dir always wins, without changing the stored folder ---------------
+# --- transient roots always win, without changing the stored folder -------
 
 
-def test_dir_argument_wins_over_saved_source(gui, sample_root, tmp_path, monkeypatch):
-    """--dir overrides source_dir for that session."""
+def test_transient_roots_win_over_saved_source(gui, sample_root, tmp_path, monkeypatch):
+    """Session-only roots override source_dir for that session."""
     other = tmp_path / "other"
     other.mkdir()
     (other / "Notes.txt").write_text("body", encoding="utf-8")
@@ -210,10 +211,10 @@ def test_dir_argument_wins_over_saved_source(gui, sample_root, tmp_path, monkeyp
     assert app.tree.rows[0]["parent"] == ""
 
 
-def test_dir_argument_does_not_touch_saved_source(
+def test_transient_session_does_not_touch_saved_source(
     gui, sample_root, tmp_path, monkeypatch
 ):
-    """--dir must not write to or change the stored folder."""
+    """A transient session must not write to or change the stored folder."""
     monkeypatch.setattr(
         app_module.PastexApp,
         "__init__",
@@ -226,54 +227,7 @@ def test_dir_argument_does_not_touch_saved_source(
     )
     app.refresh_tree()
     assert app.settings["source_dir"] == _norm(sample_root)
-    assert app.saved_settings == [], "a --dir session wrote settings.json"
-
-
-def test_dir_argument_transient_flag_from_cli(monkeypatch, tmp_path):
-    """run_cli passes transient_roots=True when --dir is used."""
-    seen = {}
-
-    class FakeApp:
-        def __init__(self, roots=None, *, transient_roots=False):
-            seen["roots"] = [Path(r) for r in roots or []]
-            seen["transient"] = transient_roots
-
-        def mainloop(self):
-            pass
-
-    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
-    monkeypatch.setattr(app_module, "tk", object())
-    assert app_module.run_cli(["--dir", str(tmp_path)]) == 0
-    assert seen["roots"] == [tmp_path]
-    assert seen["transient"] is True
-
-
-def test_without_dir_not_transient(monkeypatch):
-    seen = {}
-
-    class FakeApp:
-        def __init__(self, roots=None, *, transient_roots=False):
-            seen["transient"] = transient_roots
-
-        def mainloop(self):
-            pass
-
-    monkeypatch.setattr(app_module, "PastexApp", FakeApp)
-    monkeypatch.setattr(app_module, "tk", object())
-    app_module.run_cli([])
-    assert seen["transient"] is False
-
-
-def test_cli_list_explains_when_nothing_found(tmp_path, capsys):
-    """--list with no text must not fail silently."""
-    from pastex.app import run_cli
-
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert run_cli(["--dir", str(empty), "--list"]) == 0
-    err = capsys.readouterr().err
-    assert "no .txt files found" in err
-    assert "--dir FOLDER" in err
+    assert app.saved_settings == [], "a transient session wrote settings.json"
 
 
 # --- fresh install: really empty, samples only on request ----------------
@@ -299,7 +253,9 @@ def test_source_dir_selection_does_not_get_samples(
     assert names == ["Greeting.txt", "Reply.txt"]
 
 
-def test_dir_writes_to_transient_root_not_saved_source(gui, sample_root, tmp_path):
+def test_transient_session_writes_to_transient_root_not_saved_source(
+    gui, sample_root, tmp_path
+):
     other = tmp_path / "other"
     (other / "folders").mkdir(parents=True)
     app = gui(

@@ -66,28 +66,6 @@ def test_samples_are_gone_from_the_codebase():
     assert not hasattr(app, "export_data")
 
 
-def test_export_data_option_is_rejected():
-    """Argparse must reject removed options instead of silently accepting them."""
-    import pytest
-
-    from pastex.app import run_cli
-
-    with pytest.raises(SystemExit) as excinfo:
-        run_cli(["--export-data"])
-    assert excinfo.value.code == 2
-
-
-def test_list_hint_never_points_at_the_removed_option(tmp_path, capsys):
-    from pastex.app import run_cli
-
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert run_cli(["--dir", str(empty), "--list"]) == 0
-    err = capsys.readouterr().err
-    assert "--dir" in err
-    assert "--export-data" not in err
-
-
 def test_docs_and_packaging_do_not_promise_the_removed_option():
     for name in ("README.md", "debian/control", "scripts/build-deb.sh"):
         text = (ROOT / name).read_text(encoding="utf-8")

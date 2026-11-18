@@ -1,3 +1,9 @@
+pastex (2.0.0-1) unstable; urgency=medium
+
+  * Ship the Pastex browser extension and Drive configuration native host.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 00:00:00 +0000
+
 pastex (1.10.11-1) unstable; urgency=medium
 
   * Paste even when the window manager refuses to minimize. The 1.10.10 log

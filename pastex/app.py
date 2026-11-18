@@ -1,13 +1,12 @@
 """Pastex GUI — a hierarchy of folders containing .txt files.
 
-Run: pastex [--dir FOLDER] [--list] [--copy FILE] [--paste FILE]
-Click or press Enter on a .txt file to copy and paste it into another app.
+Launch: pastex (no arguments). Click or press Enter on a .txt file to copy
+and paste it into another app.
 
 """
 
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -55,10 +54,8 @@ from .snippets import (
     create_snippet,
     default_roots,
     delete_path,
-    flatten_texts,
     read_text,
     rename_folder,
-    scan_roots,
     writable_root,
     write_text,
 )
@@ -73,7 +70,8 @@ except ImportError:  # pragma: no cover - handled at runtime
     tk = None  # type: ignore[assignment]
     filedialog = messagebox = simpledialog = ttk = None  # type: ignore[assignment]
 
-# Use object as the GUI base when tkinter is unavailable so the CLI still works.
+# Use object as the GUI base when tkinter is unavailable so the module still
+# imports (for tests) without a display.
 _TkBase = tk.Tk if tk is not None else object  # type: ignore[union-attr]
 _ToplevelBase = tk.Toplevel if tk is not None else object  # type: ignore[union-attr]
 # Errors raised by Tk calls. Without tkinter, AttributeError is what the same
@@ -219,7 +217,7 @@ def apply_window_icon(window) -> list[Path]:
     Without this, the window uses Tk's generic icon instead of the application
     menu icon. Load PNGs rendered from the same SVG as the theme icon so they match.
     """
-    if tk is None:  # pragma: no cover - CLI without tkinter
+    if tk is None:  # pragma: no cover - no tkinter
         return []
     images = []
     used: list[Path] = []
@@ -250,7 +248,7 @@ DEFAULT_SETTINGS = {
     # window coming back; 30 ms is enough for the target app to keep focus.
     "restore_delay": 0.03,
     # User-selected source folder. If set, only this folder is displayed
-    # and used for writes. The --dir argument does not change this value.
+    # and used for writes.
     "source_dir": None,
     # Folders currently collapsed in the tree (absolute paths).
     "collapsed": [],
@@ -401,9 +399,9 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
     ):
         """Use ``roots`` instead of the default list for this session only.
 
-        ``transient_roots=True`` is used by the CLI ``--dir`` option. These roots
-        apply only while the process is running and are never saved to settings,
-        so the user's selected source folder remains unchanged.
+        ``transient_roots=True`` marks these roots as session-only: they apply
+        only while the process is running and are never saved to settings, so
+        the user's selected source folder remains unchanged.
         """
         if tk is None:
             raise RuntimeError(
@@ -593,20 +591,20 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
                         "\n\nOther setup items still need attention:\n"
                         + "\n".join(f"• {issue}" for issue in remaining)
                     )
-                message += "\n\nRun `pastex --check` to review the environment."
+                message += f"\n\nSee the log at {ERROR_LOG} for details."
                 messagebox.showinfo("Setup Requested", message)
                 return
             message = err or out or f"The setup helper exited with code {code}."
             messagebox.showwarning(
                 "Setup Not Completed",
                 f"Pastex could not configure automatic paste.\n\n{message}\n\n"
-                "You can run `pastex --check` for details.",
+                f"See the log at {ERROR_LOG} for details.",
             )
             return
         messagebox.showwarning(
             "Automatic Paste Setup",
             f"Pastex checked its clipboard and paste prerequisites before use.\n\n"
-            f"{details}\n\nRun `pastex --check` for a full diagnostic report.",
+            f"{details}\n\nSee the log at {ERROR_LOG} for a full report.",
         )
 
     def _center_window(self) -> None:
@@ -711,8 +709,8 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         ).pack(side="left")
 
         # Note: the automatic-paste permission button was removed in 1.5.0.
-        # Configure /dev/uinput through the CLI (`pastex --permissions`, `--enable-permissions`).
-        # Status information remains available in `--check` and on paste failures.
+        # /dev/uinput is configured through the first-run setup dialog and
+        # the paste-failure dialog; status is shown there and in the log.
 
         # Status bar
         self.status_var = tk.StringVar(value="Ready.")
@@ -1246,7 +1244,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         """
         roots = list(getattr(self, "roots", []) or [])
         if getattr(self, "transient_roots", False) and roots:
-            # --dir takes precedence for this session and does not alter the saved folder.
+            # Session-only roots take precedence and do not alter the saved folder.
             return roots
         source = getattr(self, "settings", {}).get("source_dir")
         if source:
@@ -2684,8 +2682,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         try:
             messagebox.showerror(
                 "Could not copy to the clipboard",
-                f"{message}.\n\nNothing was pasted. Check the clipboard with "
-                "`pastex --check` and see the log at "
+                f"{message}.\n\nNothing was pasted. See the log at "
                 f"{ERROR_LOG}.",
             )
         except TK_ERRORS:  # pragma: no cover - no display in tests
@@ -2707,12 +2704,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
     # ---------- Automatic-paste permissions (pastex group) ----------
     def _show_paste_failure(self, message: str) -> None:
-        """Show the failure reason and CLI commands that may resolve it.
+        """Show the failure reason and the manual steps that may resolve it.
 
-        Since 1.5.0, the GUI permission button has been removed. Configure
-        /dev/uinput permissions with `pastex --enable-permissions`
-        and inspected with `--permissions`. The dialog provides instructions
-        and the command to run in a terminal.
+        Since 1.5.0, the GUI permission button has been removed. The dialog
+        provides the diagnosis and the manual setup steps.
         """
         st = uinput.status()
         text = (
@@ -2721,7 +2716,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         )
         if not st.needed:
             # X11: no permission is involved, so do not send the user to
-            # `pastex --enable-permissions`.
+            # the manual /dev/uinput setup steps.
             text += (
                 "\n\nThis is an X11 session, so no /dev/uinput permission is "
                 "involved: xdotool could not deliver Ctrl+V to the window that "
@@ -2738,7 +2733,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             + "\n\n"
             + uinput.explain(st)
             + "\n\n"
-            + uinput.CLI_HINT
+            + uinput.MANUAL_HINT
         )
         messagebox.showinfo("Automatic paste is unavailable", text)
 
@@ -2947,7 +2942,7 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
 
 
 def _status_lines(st: uinput.UinputStatus, *, prefix: str = "") -> list[str]:
-    """Return formatted permission-status lines for the GUI and --check."""
+    """Return formatted permission-status lines for the GUI."""
     return [
         f"{mark} {label}: {detail}" for mark, label, detail in st.summary(prefix=prefix)
     ]
@@ -3004,113 +2999,13 @@ class EditorWindow(_ToplevelBase):  # type: ignore[misc,valid-type]
             if self.master.tree.exists(iid):
                 self.master.do_paste()
 
+def run_gui() -> int:
+    """Run the Pastex GUI and return the exit code.
 
-def run_cli(argv: list[str] | None = None) -> int:
-    """Non-GUI CLI options for listing, copying, and pasting files."""
-    parser = argparse.ArgumentParser(
-        prog="pastex",
-        description="Paste text snippets from a .txt folder hierarchy (GUI + CLI).",
-    )
-    parser.add_argument(
-        "--dir",
-        action="append",
-        default=[],
-        help="Additional snippet folder (may be repeated).",
-    )
-    parser.add_argument(
-        "--list", action="store_true", help="List all text files and exit."
-    )
-    parser.add_argument(
-        "--copy", metavar="FILE", help="Copy FILE contents to the clipboard."
-    )
-    parser.add_argument(
-        "--paste", metavar="FILE", help="Copy FILE and send Ctrl+V automatically."
-    )
-    parser.add_argument("--version", action="store_true", help="Show the version.")
-    parser.add_argument(
-        "--test-paste",
-        action="store_true",
-        help="Send test text through ydotool (diagnostics).",
-    )
-    parser.add_argument(
-        "--ctrl-v",
-        action="store_true",
-        help="With --test-paste, send Ctrl+V instead of text.",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Check the environment (tkinter, display, tools) and exit.",
-    )
-    # /dev/uinput permissions are managed through the CLI (since 1.5.0).
-    parser.add_argument(
-        "--permissions",
-        action="store_true",
-        help="Show automatic-paste permissions (/dev/uinput).",
-    )
-    parser.add_argument(
-        "--enable-permissions",
-        action="store_true",
-        help="Request /dev/uinput access (the 'pastex' group via pkexec).",
-    )
-    parser.add_argument(
-        "--wayland-clipboard",
-        action="store_true",
-        help=(
-            "Own the Wayland clipboard directly (experimental, avoids spawning "
-            "wl-copy per copy) and save the choice."
-        ),
-    )
-    parser.add_argument(
-        "--pick",
-        action="store_true",
-        help=(
-            "Show the snippet picker popup; asks a running Pastex instead of "
-            "starting a second window."
-        ),
-    )
-    args = parser.parse_args(argv)
-
-    if args.version:
-        print(f"pastex {__version__}")
-        return 0
-
-    roots = [Path(d) for d in args.dir] or default_roots()
-    if args.check:
-        return run_check(roots)
-    if args.permissions:
-        return run_permission_info()
-    if args.enable_permissions:
-        return run_enable_permission()
-    if args.list:
-        nodes = scan_roots(roots)
-        for node in nodes:
-            _print_tree(node, prefix="")
-        if not flatten_texts(nodes):
-            print("(no .txt files found)", file=sys.stderr)
-            print(
-                "Choose a source folder in the GUI or pass --dir FOLDER.",
-                file=sys.stderr,
-            )
-        return 0
-    if args.test_paste:
-        return run_test_paste(ctrl_v=args.ctrl_v)
-
-    if args.copy or args.paste:
-        target = Path(args.copy or args.paste or "")
-        try:
-            text = read_text(target)
-        except OSError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        result = copy_text(text)
-        print(result.message)
-        if args.paste:
-            paste = simulate_paste()
-            print(paste.message)
-            return 0 if paste.ok else 2
-        return 0 if result.ok else 2
-
+    One instance per user: a later launch asks the running one to show its
+    window and exits, so it costs no startup time and cannot leave a second
+    panel entry.
+    """
     if tk is None:
         print(
             "Error: tkinter is unavailable. Install python3-tk "
@@ -3119,26 +3014,14 @@ def run_cli(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    # One instance per user: a later launch asks the running one to show its
-    # window (or picker) and exits, so it costs no startup time and cannot
-    # leave a second panel entry. --dir sessions stay separate on purpose.
-    if args.wayland_clipboard and not load_settings().get("clipboard_owner"):
-        settings = dict(load_settings())
-        settings["clipboard_owner"] = True
-        save_settings(settings)
-        log_error("[owner] opt-in Wayland clipboard owner enabled by --wayland-clipboard")
-
-    if not args.dir:
-        answer = send_command("pick" if args.pick else "show")
-        if answer is not None and answer.get("ok"):
-            return 0
-        if answer is not None:
-            log_error(f"[instance] command refused: {answer.get('error')}")
+    answer = send_command("show")
+    if answer is not None and answer.get("ok"):
+        return 0
+    if answer is not None:
+        log_error(f"[instance] command refused: {answer.get('error')}")
 
     try:
-        # --dir applies only to this session; it does not change the saved source
-        # folder.
-        app = PastexApp(roots=roots, transient_roots=bool(args.dir))
+        app = PastexApp(roots=default_roots())
     except Exception:  # noqa: BLE001 - report unexpected failures during GUI startup
         tb = traceback.format_exc()
         log_error(f"Could not start GUI:\n{tb}")
@@ -3152,9 +3035,6 @@ def run_cli(argv: list[str] | None = None) -> int:
         if instance.claim() and not instance.serve():
             log_error("[instance] could not listen; later launches start a new window")
         app.instance = instance
-    open_picker_callback = getattr(app, "open_picker", None)
-    if args.pick and open_picker_callback is not None:
-        app.after(120, open_picker_callback)
     try:
         app.mainloop()
     finally:
@@ -3168,338 +3048,11 @@ def run_cli(argv: list[str] | None = None) -> int:
     return 0
 
 
-TEST_PASTE_TEXT = "pastex-ok "
-
-
-def run_test_paste(ctrl_v: bool = False) -> int:
-    """Type test text or send Ctrl+V to the active window for diagnostics.
-
-    If the test text appears in the target app, /dev/uinput permissions,
-    the daemon, and ydotool are working. Any remaining issue is with clipboard
-    access or the Ctrl+V key event.
-    """
-    from .clipboard import detect_session, ensure_ydotoold, type_text
-
-    print(f"Paste test — graphical session: {detect_session()}")
-    if ctrl_v:
-        print("Sending Ctrl+V to the active window in 3 seconds...")
-    else:
-        print(f"Sending test text {TEST_PASTE_TEXT!r} in 3 seconds...")
-    print("Click the target window NOW (for example, a comment box or chat).")
-    time.sleep(3)
-
-    if ctrl_v:
-        return _full_paste_test()
-
-    result = type_text(TEST_PASTE_TEXT)
-    if not result.ok:
-        print("Typing failed; starting ydotoold and retrying...")
-        ensure_ydotoold()
-        result = type_text(TEST_PASTE_TEXT)
-    if not result.ok:
-        print(f"❌ {result.message}")
-        print(f"Check {ERROR_LOG} and run `pastex --check`.")
-        return 2
-    print(f"✅ {result.message}")
-    print(
-        "If the test text APPEARS in the target window, ydotool, permissions, and the daemon "
-        "are working correctly."
-    )
-    print(
-        "If it does NOT appear, the compositor may be ignoring the uinput device "
-        "(check `lsinput` or the system log)."
-    )
-    print("Test the complete flow (clipboard + Ctrl+V): pastex --test-paste --ctrl-v")
-    return 0
-
-
-def _full_paste_test() -> int:
-    """Test the actual paste flow: copy, verify, then send Ctrl+V."""
-    from .clipboard import (
-        copy_text,
-        ensure_ydotoold,
-        read_text_from_clipboard,
-        simulate_paste,
-    )
-
-    probe = f"{TEST_PASTE_TEXT}{os.getpid()}"
-    print(f"Copying test text {probe!r}...")
-    copied = copy_text(probe)
-    print(("✅ " if copied.ok else "❌ ") + copied.message)
-    back = read_text_from_clipboard()
-    if back is None:
-        print("⚠️ Could not read the clipboard back; verification skipped.")
-    elif back.rstrip("\n") == probe:
-        print("✅ Clipboard contents verified")
-    else:
-        print(f"❌ Clipboard contents differ: {back.strip()[:60]!r}")
-        print(
-            "   The text was not copied correctly; Ctrl+V will paste "
-            "the previous contents."
-        )
-        return 2
-
-    print("Sending Ctrl+V in 1 second — click the target window NOW.")
-    time.sleep(1)
-    paste = simulate_paste()
-    if not paste.ok:
-        ensure_ydotoold()
-        paste = simulate_paste()
-    if not paste.ok:
-        print(f"❌ {paste.message}")
-        return 2
-    print(f"✅ {paste.message}")
-    print(
-        f"If {probe!r} appears in the target window, automatic paste is working "
-        "correctly."
-    )
-    return 0
-
-
-# Shown instead of the group//dev/uinput report on Linux Mint's default X11
-# session, where automatic paste needs no device permission at all.
-X11_PERMISSION_NOTE = (
-    "Automatic-paste permissions: not needed on X11 — xdotool sends Ctrl+V "
-    "through XTEST, with no /dev/uinput access, no 'pastex' group and no "
-    "ydotoold daemon."
-)
-
-
-def permission_report() -> str:
-    """Build an automatic-paste permission report for --permissions and --check."""
-    st = uinput.status()
-    if not st.needed:
-        return X11_PERMISSION_NOTE
-    lines = "\n".join(_status_lines(st))
-    return (
-        f"Automatic-paste permissions (group '{uinput.GROUP}', account '{st.user}'):\n"
-        f"{lines}\n\nNext steps:\n{uinput.explain(st)}"
-    )
-
-
-def run_permission_info() -> int:
-    """Print /dev/uinput permission status without opening the GUI."""
-    print(permission_report())
-    if not uinput.status().ready:
-        print(f"\n{uinput.CLI_HINT}")
-    return 0
-
-
-def run_enable_permission() -> int:
-    """Request /dev/uinput permissions; replaces the removed GUI button."""
-    st = uinput.status()
-    if st.device_writable:
-        print("Automatic paste permissions are already enabled.")
-        return 0
-    if not st.needed:
-        print(
-            "This X11 session does not need /dev/uinput permissions: xdotool "
-            "sends Ctrl+V through XTEST. The setup below is only used by the "
-            "Cinnamon Wayland session."
-        )
-    if not uinput.can_self_enable(st):
-        print("Cannot request administrator privileges from here.")
-        print("Run the following command in a terminal:\n")
-        print(uinput.MANUAL_COMMAND)
-        return 2
-    print(f"Requesting /dev/uinput access for account '{st.user}'...")
-    code, out, err = uinput.enable_for_user(st.user)
-    for line in (out, err):
-        if line:
-            print(line)
-    if code == 0:
-        print("\n✅ Permissions enabled.")
-        print(
-            "Log out and back in (or reboot) to activate the new group; "
-            "automatic paste should then work."
-        )
-        return 0
-    if code in (126, 127):
-        print("\n❌ Password request cancelled.")
-        return 1
-    print(f"\n❌ Activation failed (exit code {code}).")
-    print("\nManual alternative in a terminal:\n")
-    print(uinput.MANUAL_COMMAND)
-    return 1
-
-
-def clipboard_status() -> list[str]:
-    """Test writing to and reading back from the system clipboard.
-
-    wl-copy and xclip fork and own the selection. A failure here (for example,
-    a pipe hang causing the tool to be reported as failed) can make automatic
-    paste send the previous clipboard contents even when Ctrl+V is delivered.
-    """
-    from .clipboard import (
-        available_tools,
-        copy_text,
-        detect_session,
-        read_text_from_clipboard,
-    )
-
-    tools = available_tools()
-    lines = [
-        "tool: "
-        + ", ".join(
-            f"{k}={'available' if v else 'not available'}"
-            for k, v in tools.items()
-            if k in ("wl-copy", "xclip", "xsel")
-        )
-    ]
-    if detect_session() == "unknown":
-        lines.append("No graphical session detected — clipboard test skipped")
-        return lines
-
-    probe = f"pastex-{os.getpid()}"
-    result = copy_text(probe)
-    if not result.ok:
-        lines.append(f"❌ copy: {result.message}")
-        return lines
-    lines.append(f"✅ copied through {result.tool}")
-
-    back = read_text_from_clipboard()
-    if back is not None and back.strip() != probe:
-        # xclip forks an owner that takes the selection over; right after the
-        # copy a read can come back empty on a busy session. Ask again before
-        # claiming the clipboard is wrong.
-        time.sleep(0.15)
-        back = read_text_from_clipboard()
-    if back is None:
-        lines.append("(read-back not supported — install wl-paste or xclip)")
-    elif back.strip() == probe:
-        lines.append("✅ read-back matches")
-    elif not back.strip():
-        lines.append(
-            "⚠️ read-back is empty — the tool accepted the text but no reader "
-            "sees it. A click still delivers the snippet: Pastex claims the "
-            "clipboard in Tk and, if that fails too, types the text with "
-            "xdotool; please report this log"
-        )
-    else:
-        lines.append(f"⚠️ read-back differs: {back.strip()[:40]!r}")
-    return lines
-
-
-def run_check(roots: list[Path]) -> int:
-    """Print environment diagnostics for troubleshooting."""
-    from .clipboard import available_tools, detect_session
-
-    print(f"pastex {__version__}")
-    print(f"Python: {sys.version.split()[0]} ({sys.executable})")
-    print(
-        f"Graphical session: {detect_session()} "
-        f"(DISPLAY={os.environ.get('DISPLAY', '-')}, "
-        f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')})"
-    )
-    print(
-        f"tkinter: {'available' if tk is not None else 'NOT available — install python3-tk'}"
-    )
-    tools = available_tools()
-    print(
-        "Clipboard/paste tools: "
-        + ", ".join(
-            f"{k}={'available' if v else 'not available'}" for k, v in tools.items()
-        )
-    )
-    from . import portal  # noqa: PLC0415 - optional dependency
-    from .instance import SOCKET_NAME, runtime_dir  # noqa: PLC0415 - local import
-
-    print(
-        "Portal paste fallback: "
-        + (
-            "available (works without /dev/uinput)"
-            if portal.available()
-            else "not available — install python3-dbus for a rootless fallback"
-        )
-    )
-    try:
-        running = (runtime_dir() / SOCKET_NAME).exists()
-    except OSError:  # pragma: no cover - read-only runtime dir
-        running = False
-    print(f"Running instance: {'yes (later launches reuse it)' if running else 'no'}")
-    from .clipboard import window_manager  # noqa: PLC0415 - local import
-
-    wm = window_manager()
-    print(
-        "Window manager: "
-        + (
-            f"{wm} (minimizes the window for the paste)"
-            if wm
-            else "none — nothing can minimize the window, so automatic paste "
-            "cannot be used (start a desktop session with a window manager)"
-        )
-    )
-    from . import wlowner  # noqa: PLC0415 - optional feature
-
-    owner_wanted = bool(load_settings().get("clipboard_owner"))
-    supported = wlowner.available()
-    if not supported:
-        detail = "n/a (not a Wayland session); opt-in with pastex --wayland-clipboard"
-    elif not owner_wanted:
-        detail = "off; opt-in with pastex --wayland-clipboard"
-    else:
-        detail = "on (verified at startup, wl-copy stays the fallback)"
-    print(f"Clipboard owner: {detail}")
-    print(f"Application icon: {ICON_NAME} (expected WM_CLASS '{WM_CLASS}')")
-    found_icons = icon_files()
-    if found_icons:
-        for path in found_icons:
-            print(f"  ✅ {path}")
-    else:
-        print(
-            "  ❌ not found — the window will use the default icon; "
-            "reinstall the package or run scripts/make-icon-png.py"
-        )
-    try:
-        st = uinput.status()
-        if not st.needed:
-            print(X11_PERMISSION_NOTE)
-        else:
-            print(
-                f"Automatic-paste permissions "
-                f"(group '{uinput.GROUP}', account '{st.user}'):"
-            )
-            for line in _status_lines(st):
-                print(f"  {line}")
-            print("\nNext steps:")
-            for line in uinput.explain(st).splitlines():
-                print(f"  {line}")
-            if not st.ready:
-                # Keep permission information in --check even though the GUI
-                # button was removed.
-                print(f"\n{uinput.CLI_HINT}")
-    except Exception as exc:  # noqa: BLE001 - diagnostics should continue after optional checks fail
-        print(f"Automatic-paste permissions: could not be checked ({exc})")
-    clip = clipboard_status()
-    print("Clipboard:")
-    for line in clip:
-        print(f"  {line}")
-    settings = load_settings()
-    source = settings.get("source_dir")
-    print("Source folder:")
-    if source:
-        print(f"  - {source} ({'exists' if Path(source).is_dir() else 'MISSING'})")
-    else:
-        print("  (not selected — using the default folders below)")
-    print("Snippet folders:")
-    for r in roots:
-        print(f"  - {r} ({'exists' if r.is_dir() else 'not found'})")
-    print(f"Settings: {SETTINGS_FILE}")
-    print(f"Error log: {ERROR_LOG}")
-    return 0
-
-
-def _print_tree(node: Node, prefix: str) -> None:
-    label = node.name + ("/" if node.is_dir else ".txt")
-    print(f"{prefix}{label}")
-    for child in node.children:
-        _print_tree(child, prefix + "  ")
-
-
 def main() -> None:
+    """Entry point: launch the GUI (no command-line options)."""
     try:
-        code = run_cli()
-    except Exception:  # noqa: BLE001 - log unexpected failures at the CLI boundary
+        code = run_gui()
+    except Exception:  # noqa: BLE001 - log unexpected failures at the boundary
         tb = traceback.format_exc()
         log_error(tb)
         print(f"Unexpected error. See {ERROR_LOG}.", file=sys.stderr)
