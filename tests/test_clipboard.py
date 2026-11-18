@@ -1051,26 +1051,89 @@ def test_the_typing_timeout_grows_with_the_text(monkeypatch):
     assert timeouts and timeouts[0] > 10
 
 
+def _wm_runner(captured, *, wm_state="", map_ok=True, active="0x999"):
+    def runner(cmd, **kwargs):
+        captured.append(list(cmd))
+        if cmd[:2] == ["xdotool", "getactivewindow"]:
+            return SimpleNamespace(returncode=0, stdout=f"{active}\n", stderr="")
+        if cmd[0] == "xprop":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"_NET_WM_STATE(ATOM) = {wm_state}\n" if wm_state else "_NET_WM_STATE(ATOM) = \n",
+                stderr="",
+            )
+        if cmd[:2] == ["xdotool", "windowmap"] and not map_ok:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return runner
+
+
 def test_restore_window_asks_the_window_manager(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
     captured = []
 
-    def runner(cmd, **kwargs):
-        captured.append(list(cmd))
-        if cmd[:2] == ["xdotool", "getactivewindow"]:
-            return SimpleNamespace(returncode=0, stdout="0x2800003\n", stderr="")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    assert clipboard.restore_window("0x2800003", runner=_wm_runner(captured)) is True
+    assert ["xdotool", "windowmap", "0x2800003"] in captured
+    assert ["xdotool", "windowactivate", "0x2800003"] in captured
 
-    assert clipboard.restore_window("0x2800003", runner=runner) is True
-    assert ["xdotool", "windowactivate", "--sync", "0x2800003"] in captured
+
+def test_restore_window_never_waits_for_the_focus(monkeypatch):
+    """``--sync`` waits for an activation Muffin may refuse: two wasted seconds."""
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = []
+    slept = []
+
+    assert (
+        clipboard.restore_window(
+            "0x2800003",
+            runner=_wm_runner(captured, active="0x42"),
+            sleep=slept.append,
+        )
+        is True
+    )
+    assert not any("--sync" in cmd for cmd in captured)
+    assert slept == []  # _NET_WM_STATE already says the window is shown
+
+
+def test_restore_window_keeps_polling_a_hidden_window(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    slept = []
+    answers = iter(["_NET_WM_STATE_HIDDEN", "", ""])
+
+    def runner(cmd, **kwargs):
+        if cmd[0] == "xprop":
+            return SimpleNamespace(
+                returncode=0, stdout=f"_NET_WM_STATE(ATOM) = {next(answers)}\n", stderr=""
+            )
+        return SimpleNamespace(returncode=0, stdout="0x42\n", stderr="")
+
+    assert clipboard.restore_window("0x2800003", runner=runner, sleep=slept.append) is True
+    assert len(slept) == 1
 
 
 def test_restore_window_reports_a_refusing_window_manager(monkeypatch):
     monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    slept = []
     assert (
         clipboard.restore_window(
             "0x2800003",
-            runner=lambda cmd, **k: SimpleNamespace(returncode=1, stdout="", stderr=""),
+            runner=_wm_runner([], wm_state="_NET_WM_STATE_HIDDEN", map_ok=False),
+            sleep=slept.append,
         )
         is False
     )
+    assert len(slept) == clipboard.RESTORE_POLLS - 1
+
+
+def test_window_is_shown_reads_the_ewmh_state(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert (
+        clipboard.window_is_shown(
+            "0x1",
+            runner=_wm_runner([], wm_state="_NET_WM_STATE_HIDDEN, _NET_WM_STATE_MAXIMIZED_VERT"),
+        )
+        is False
+    )
+    assert clipboard.window_is_shown("0x1", runner=_wm_runner([])) is True
+

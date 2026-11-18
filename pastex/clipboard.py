@@ -57,6 +57,12 @@ PASTE_KEY_TIMEOUT = 2.0
 DAEMON_START_TIMEOUT = 3.0
 # X11 helpers used by the hide step: one short query, one EWMH request.
 X11_QUERY_TIMEOUT = 2.0
+# Restoring the window: xdotool without --sync returns at once, and the result
+# is polled for about half a second. --sync would wait for the focus, which
+# Muffin's focus-stealing protection likes to refuse (two wasted seconds).
+RESTORE_TIMEOUT = 1.0
+RESTORE_POLL_S = 0.06
+RESTORE_POLLS = 8
 FORCE_MINIMIZE_TIMEOUT = 2.0
 # Total portal budget. The portal is a fallback; a consent dialog the user
 # never answers must not keep the window minimized.
@@ -290,20 +296,74 @@ def activate_window(window_id: str, runner: Runner = _default_runner) -> bool:
     return getattr(proc, "returncode", 1) == 0
 
 
-def restore_window(window_id: str, runner: Runner = _default_runner) -> bool:
-    """Ask the window manager to show ``window_id`` again, and verify it.
+def window_is_shown(window_id: str, runner: Runner = _default_runner) -> bool | None:
+    """True when the window manager no longer calls ``window_id`` hidden.
 
-    Tk's ``deiconify()`` waits up to two seconds for the window manager to
-    report the state change, which delayed the window's return on a Cinnamon
-    session. EWMH activation asks the window manager directly and ``--sync``
-    returns once it answered.
+    ``_NET_WM_STATE_HIDDEN`` is the property EWMH window managers (Mutter and
+    Muffin included) keep current for a minimized window, while the client's
+    own ``Map State`` stays ``IsViewable`` because only the frame around it is
+    unmapped. None means the state cannot be read here.
     """
-    if not activate_window(window_id, runner=runner):
+    if shutil.which("xprop") is None:
+        return None
+    try:
+        proc = _run_with_timeout(
+            runner, ["xprop", "-id", str(window_id), "_NET_WM_STATE"], X11_QUERY_TIMEOUT
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    out = f"{getattr(proc, 'stdout', '') or ''}"
+    if "not found" in out.lower():
+        return None
+    return "_NET_WM_STATE_HIDDEN" not in out
+
+
+def restore_window(
+    window_id: str,
+    runner: Runner = _default_runner,
+    sleep: Callable[[float], None] = time.sleep,
+    polls: int = RESTORE_POLLS,
+) -> bool:
+    """Show ``window_id`` again through the window manager, without waiting.
+
+    ``xdotool windowactivate --sync`` waits for the window to become *active*,
+    and Muffin's focus-stealing protection refuses an activation that carries
+    no timestamp: the request then burns its whole two-second timeout and
+    reports failure even though the window itself was fine. A plain
+    ``windowmap`` (XMapWindow) is answered immediately, so the window is shown
+    first and only the focus is attempted; the result is then verified for
+    ``RESTORE_POLLS * RESTORE_POLL_S`` seconds before giving up.
+    """
+    if shutil.which("xdotool") is None:
         return False
-    active = x11_active_window(runner)
-    if active is None:
-        return True  # activated, but the focus cannot be read here
-    return True
+    mapped = _ask_the_window_manager(window_id, "windowmap", runner)
+    _ask_the_window_manager(window_id, "windowraise", runner)
+    _ask_the_window_manager(window_id, "windowactivate", runner)
+    for attempt in range(max(1, polls)):
+        if window_is_shown(window_id, runner) is True:
+            return True
+        if x11_active_window(runner) == _window_id(str(window_id)):
+            return True
+        if attempt + 1 < polls:
+            sleep(RESTORE_POLL_S)
+    # The window manager never said it showed the window; report whether the
+    # request itself was accepted so the caller can decide about a fallback.
+    return bool(mapped) and window_is_shown(window_id, runner) is not False
+
+
+def _ask_the_window_manager(
+    window_id: str, verb: str, runner: Runner = _default_runner
+) -> bool:
+    """Send one xdotool request to the window manager, without ``--sync``."""
+    try:
+        proc = _run_with_timeout(
+            runner, ["xdotool", verb, str(window_id)], RESTORE_TIMEOUT
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return getattr(proc, "returncode", 1) == 0
 
 
 def force_minimize_window(window_id: str, runner: Runner = _default_runner) -> bool:

@@ -2100,12 +2100,24 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         _run_in_thread(PastexApp._restore_window_worker, self, window_id)
 
     def _restore_window_worker(self, window_id: str) -> None:
+        started = time.monotonic()
         ok = restore_window(window_id)
+        took = int((time.monotonic() - started) * 1000)
         log_error(
             "[paste] the window manager "
             + ("showed the window again" if ok else "did not show the window")
-            + f" ({PastexApp._since_click(self)})"
+            + f" in {took} ms ({PastexApp._since_click(self)})"
         )
+        if ok:
+            return
+        # The window manager kept the request: hand it back to Tk, which retries
+        # deiconify() every RESTORE_RETRY_MS. This is the 1.10.8 path that did
+        # bring the window back; it is only slow when the request is dropped.
+        log_error("[paste] falling back to Tk to show the window again")
+        try:
+            self.after(0, lambda app=self: PastexApp._restore_window_via_tk(app))
+        except TK_ERRORS:  # pragma: no cover - interpreter already gone
+            pass
 
     def _restore_window(self, *, raise_window: bool = False) -> None:
         """Bring the window back and confirm that the WM really did it.
@@ -2127,6 +2139,10 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             if window_id is not None:
                 PastexApp._restore_window_via_x11(self, window_id)
                 return
+        PastexApp._restore_window_via_tk(self, raise_window=raise_window)
+
+    def _restore_window_via_tk(self, *, raise_window: bool = False) -> None:
+        """The pre-1.10.9 restore: Tk's deiconify(), retried, plus a focus ask."""
         if raise_window:
             try:
                 self.lift()
@@ -2280,6 +2296,20 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
         except TK_ERRORS:
             return None
 
+    def _ask_the_wm_to_minimize_again(self) -> None:
+        """Repeat the EWMH minimize, without touching Tk."""
+        if self.__dict__.get("_rehide_asked", False):
+            return
+        self._rehide_asked = True
+        window_id = PastexApp._window_id(self)
+        if window_id is None:
+            return
+        log_error(
+            f"[paste] the window is still in the foreground; asking the window "
+            f"manager to minimize it again ({PastexApp._since_click(self)})"
+        )
+        _run_in_thread(force_minimize_window, window_id)
+
     def _force_minimize(self) -> None:
         """Ask the window manager to minimize, for when iconify() is ignored."""
         if self.__dict__.get("_force_minimize_tried", False):
@@ -2350,11 +2380,17 @@ class PastexApp(_TkBase):  # type: ignore[misc,valid-type]
             # a maximized window ignores iconify() outright. xdotool sends the
             # EWMH request directly, which the WM cannot mistake for a Tk no-op.
             self._rehide_done = True
-            try:
-                self.iconify()
-            except TK_ERRORS:  # pragma: no cover - interpreter already gone
-                pass
-            PastexApp._force_minimize(self)
+            if self.__dict__.get("_paste_hide_via_x11", False):
+                # iconify() here cost two seconds of every click on a Cinnamon
+                # session: Tk waits that long for an unmap the window manager
+                # never reports, for a window it has already minimized.
+                PastexApp._ask_the_wm_to_minimize_again(self)
+            else:
+                try:
+                    self.iconify()
+                except TK_ERRORS:  # pragma: no cover - interpreter already gone
+                    pass
+                PastexApp._force_minimize(self)
         checked = self.__dict__.get("_x11_checked_ms")
         if waited >= MINIMIZE_FOCUS_CHECK_AT_MS and (
             checked is None or waited - checked >= MINIMIZE_FOCUS_RETRY_MS
