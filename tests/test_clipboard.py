@@ -1137,3 +1137,83 @@ def test_window_is_shown_reads_the_ewmh_state(monkeypatch):
     )
     assert clipboard.window_is_shown("0x1", runner=_wm_runner([])) is True
 
+
+
+def _stacking_runner(captured, *, order="0x2200003, 0x5600009", states=None, active="0x2200003"):
+    states = states or {}
+
+    def runner(cmd, **kwargs):
+        captured.append(list(cmd))
+        if cmd[:3] == ["xprop", "-root", "_NET_CLIENT_LIST_STACKING"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"_NET_CLIENT_LIST_STACKING(WINDOW): window id # {order}\n",
+                stderr="",
+            )
+        if cmd[0] == "xprop" and "WM_STATE" in cmd:
+            state = states.get(cmd[2], "Normal")
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"WM_STATE(WM_STATE):\n\twindow state: {state}\n",
+                stderr="",
+            )
+        if cmd[0] == "xprop" and "_NET_WM_STATE" in cmd:
+            return SimpleNamespace(returncode=0, stdout="_NET_WM_STATE(ATOM) = \n", stderr="")
+        if cmd[:2] == ["xdotool", "getactivewindow"]:
+            return SimpleNamespace(returncode=0, stdout=f"{active}\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return runner
+
+
+def test_the_window_below_is_read_from_the_stacking_order(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = []
+    assert (
+        clipboard.window_below("0x5600009", runner=_stacking_runner(captured))
+        == "0x2200003"
+    )
+
+
+def test_an_iconified_window_below_is_skipped(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert (
+        clipboard.window_below(
+            "0x5600009",
+            runner=_stacking_runner(
+                [], order="0x1000003, 0x2200003, 0x5600009", states={"0x2200003": "Iconic"}
+            ),
+        )
+        == "0x1000003"
+    )
+
+
+def test_the_focus_is_handed_to_the_window_below(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = []
+    assert (
+        clipboard.focus_the_window_below("0x5600009", runner=_stacking_runner(captured))
+        == "0x2200003"
+    )
+    assert ["xdotool", "windowfocus", "0x2200003"] in captured
+    assert ["xdotool", "windowraise", "0x2200003"] in captured
+
+
+def test_no_focus_transfer_when_xsetinputfocus_is_overridden(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert (
+        clipboard.focus_the_window_below(
+            "0x5600009", runner=_stacking_runner([], active="0x5600009")
+        )
+        is None
+    )
+
+
+def test_no_focus_transfer_without_a_window_below(monkeypatch):
+    monkeypatch.setattr(clipboard.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert (
+        clipboard.focus_the_window_below(
+            "0x5600009", runner=_stacking_runner([], order="0x5600009")
+        )
+        is None
+    )
