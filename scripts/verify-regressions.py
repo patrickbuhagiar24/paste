@@ -354,11 +354,9 @@ MUTATIONS = [
     (
         "the ignored minimize request is never repeated",
         "pastex/app.py",
-        "            self._rehide_done = True\n            try:\n                self.iconify()",
-        "            self._rehide_done = True\n            try:\n                pass",
-        [
-            "tests/test_app.py::test_the_minimize_request_is_repeated_when_the_first_one_is_ignored"
-        ],
+        "            self._rehide_done = True\n            if self.__dict__.get(\"_paste_hide_via_x11\", False):",
+        "            self._rehide_done = True\n            if False:",
+        ["tests/test_app.py::test_the_rehide_does_not_call_tk_iconify"],
     ),
     (
         "Ctrl+V is armed even when the window stays visible",
@@ -1237,9 +1235,58 @@ MUTATIONS = [
     (
         "the wm restore is not verified",
         "pastex/clipboard.py",
-        "    if not activate_window(window_id, runner=runner):\n        return False",
-        "    if False:\n        return False",
+        "    mapped = _ask_the_window_manager(window_id, \"windowmap\", runner)",
+        "    mapped = False",
         ["tests/test_clipboard.py::test_restore_window_asks_the_window_manager"],
+    ),
+    (
+        "the rehide iconifies through tk after the wm minimized the window",
+        "pastex/app.py",
+        '            if self.__dict__.get("_paste_hide_via_x11", False):\n                # iconify() here cost two seconds',
+        '            if False:\n                # iconify() here cost two seconds',
+        ["tests/test_app.py::test_the_rehide_does_not_call_tk_iconify"],
+    ),
+    (
+        "the rehide never iconifies without the window manager",
+        "pastex/app.py",
+        '            else:\n                try:\n                    self.iconify()',
+        '            else:\n                try:\n                    pass',
+        ["tests/test_app.py::test_the_rehide_still_iconifies_without_the_window_manager"],
+    ),
+    (
+        "the tk restore runs even after the wm showed the window",
+        "pastex/app.py",
+        "        if ok:\n            return",
+        "        if False:\n            return",
+        ["tests/test_app.py::test_the_tk_restore_is_skipped_when_the_window_manager_shows_the_window"],
+    ),
+    (
+        "no tk fallback when the window manager refuses to show the window",
+        "pastex/app.py",
+        "            self.after(0, lambda app=self: PastexApp._restore_window_via_tk(app))",
+        "            pass",
+        ["tests/test_app.py::test_the_tk_restore_runs_when_the_window_manager_refuses"],
+    ),
+    (
+        "the restore waits for the focus with --sync again",
+        "pastex/clipboard.py",
+        '            runner, ["xdotool", verb, str(window_id)], RESTORE_TIMEOUT',
+        '            runner, ["xdotool", verb, "--sync", str(window_id)], RESTORE_TIMEOUT',
+        ["tests/test_clipboard.py::test_restore_window_never_waits_for_the_focus"],
+    ),
+    (
+        "a hidden window is reported as shown",
+        "pastex/clipboard.py",
+        '    return "_NET_WM_STATE_HIDDEN" not in out',
+        "    return True",
+        ["tests/test_clipboard.py::test_window_is_shown_reads_the_ewmh_state"],
+    ),
+    (
+        "the restore stops polling before the window is shown",
+        "pastex/clipboard.py",
+        "        if attempt + 1 < polls:\n            sleep(RESTORE_POLL_S)",
+        "        if False:\n            sleep(RESTORE_POLL_S)",
+        ["tests/test_clipboard.py::test_restore_window_keeps_polling_a_hidden_window"],
     ),
 ]
 

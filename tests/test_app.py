@@ -3068,3 +3068,76 @@ def test_a_click_without_xdotool_falls_back_to_tk(monkeypatch):
     assert app._paste_hide_via_x11 is False
     # The old Tk path: it asks the state (to unzoom), then iconifies.
     assert calls == [("state", ()), "iconify", "idle"]
+
+
+def test_the_rehide_does_not_call_tk_iconify(monkeypatch):
+    """iconify() on a window the WM already minimized cost two seconds a click."""
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    threads = []
+    app, calls = _ewmh_app(monkeypatch)
+    app._paste_hide_via_x11 = True
+    app._minimize_waited_ms = app_module.MINIMIZE_REHIDE_AT_MS - app_module.MINIMIZE_RETRY_MS
+    app._rehide_done = False
+    app._x11_checked_ms = None
+    monkeypatch.setattr(
+        app_module, "_run_in_thread", lambda fn, *a, **k: threads.append((fn, a))
+    )
+    monkeypatch.setattr(PastexApp, "_tk_ready", lambda self: True)
+    monkeypatch.setattr(PastexApp, "_x11_confirm_hidden", lambda self, waited=0: None)
+
+    assert PastexApp._wait_for_the_window_hiding(app) is True
+
+    assert calls == []  # no iconify(), no state(), no update_idletasks()
+    assert threads == [(app_module.force_minimize_window, ("0x2800003",))]
+
+
+def test_the_rehide_still_iconifies_without_the_window_manager(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    app, calls = _ewmh_app(monkeypatch)
+    app._paste_hide_via_x11 = False
+    app._minimize_waited_ms = app_module.MINIMIZE_REHIDE_AT_MS - app_module.MINIMIZE_RETRY_MS
+    app._rehide_done = False
+    app._x11_checked_ms = None
+    monkeypatch.setattr(PastexApp, "_tk_ready", lambda self: True)
+    monkeypatch.setattr(PastexApp, "_x11_confirm_hidden", lambda self, waited=0: None)
+    monkeypatch.setattr(PastexApp, "_force_minimize", lambda self: None)
+
+    assert PastexApp._wait_for_the_window_hiding(app) is True
+    assert calls == ["iconify"]
+
+
+def test_the_tk_restore_runs_when_the_window_manager_refuses(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    app, calls = _ewmh_app(monkeypatch)
+    app.after = lambda delay, fn=None, *a: scheduled.append((delay, fn)) or "id"
+    monkeypatch.setattr(app_module, "restore_window", lambda window_id: False)
+    monkeypatch.setattr(PastexApp, "_restore_window_via_tk", lambda self, **k: calls.append("tk"))
+
+    PastexApp._restore_window_worker(app, "0x2800003")
+
+    assert [delay for delay, _ in scheduled] == [0]
+    scheduled[0][1]()
+    assert calls == ["tk"]
+
+
+def test_the_tk_restore_is_skipped_when_the_window_manager_shows_the_window(monkeypatch):
+    from pastex import app as app_module
+    from pastex.app import PastexApp
+
+    scheduled = []
+    app, calls = _ewmh_app(monkeypatch)
+    app.after = lambda delay, fn=None, *a: scheduled.append((delay, fn)) or "id"
+    monkeypatch.setattr(app_module, "restore_window", lambda window_id: True)
+    monkeypatch.setattr(PastexApp, "_restore_window_via_tk", lambda self, **k: calls.append("tk"))
+
+    PastexApp._restore_window_worker(app, "0x2800003")
+
+    assert scheduled == []
+    assert calls == []

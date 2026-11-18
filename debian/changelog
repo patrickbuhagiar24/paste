@@ -1,3 +1,22 @@
+pastex (1.10.10-1) unstable; urgency=medium
+
+  * Remove the last two-second stall in a click. The window is now minimized
+    through the window manager, so Tk's iconify() must never run on that click
+    again: the "still in the foreground" retry called it anyway and paid the
+    same two-second wait Tk spends when the window manager does not report the
+    state change. In the 1.10.9 log the copy finished at +18 ms but the paste
+    was only sent at +2226 ms because of exactly that call.
+  * Bring the window back without waiting for the focus. xdotool
+    windowactivate --sync waits for the window to become active, and Muffin's
+    focus-stealing protection refuses an activation that carries no timestamp:
+    the request burned its two-second timeout and reported failure even though
+    the window manager was fine. Restoring is now windowmap plus windowraise
+    and windowactivate without --sync, verified through _NET_WM_STATE for about
+    half a second, and only a real refusal hands the job back to Tk's
+    deiconify() retry.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 23:40:00 +0700
+
 pastex (1.10.9-1) unstable; urgency=medium
 
   * Stop hiding and restoring the window through Tk. Tk's iconify() and
