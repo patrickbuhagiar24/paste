@@ -1,3 +1,11 @@
+pastex (2.5.0-1) unstable; urgency=medium
+
+  * Read configuration directly from a user-selected folder.
+  * Remove the native host and automatic per-user configuration files.
+  * Open the side panel from the lightning button instead of an in-page picker.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 13:00:00 +0000
+
 pastex (2.4.0-1) unstable; urgency=medium
 
   * Place editing actions next to each snippet and remove the preview pane.

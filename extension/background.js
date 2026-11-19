@@ -1,14 +1,16 @@
 /* Pastex background service worker (Manifest V3).
  *
  *  - Toolbar click opens the Side Panel.
- *  - The in-page ⚡ button opens the Drive picker on approved sites.
+ *  - The in-page ⚡ button opens the side panel on approved sites.
  *  - Content scripts are injected on demand for tabs that were already
  *    open when the extension was installed or updated.
  */
 
-importScripts("native.js", "sites.js", "drive.js", "library.js", "cache.js");
+importScripts("sites.js", "config-client.js", "drive.js", "library.js", "cache.js");
 
-var libraryCache = PastexCache.create(PastexNative, PastexDrive, PastexLibrary, chrome.storage.session, crypto);
+var PastexConfig = PastexConfigClient;
+
+var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto);
 var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;
@@ -44,18 +46,25 @@ function clearProgress() {
 }
 
 var CONTENT_SCRIPT_ID = "pastex-allowed-sites";
+// A short-lived capability bridges async allowlist reads to Chrome's required
+// synchronous user-gesture call to sidePanel.open. Insertion still rechecks
+// the live allowlist; a stale capability can never authorize insertion.
+var panelGrants = new Map();
+var siteRevision = 0;
+function grantKey(sender) { return sender.tab.id + ":" + (sender.frameId || 0); }
+function invalidateGrants() { panelGrants.clear(); siteRevision++; }
 
 async function allowedSitePatterns() {
-  var data = await PastexNative.readSites();
+  var data = await PastexConfig.readSites();
   return PastexSites.parse(data.allowedSites);
 }
 
 // Register only user-approved origins. Empty or invalid configuration and
-// native host errors are fail-closed: no scripts are registered.
+// folder-access errors are fail-closed: no scripts are registered.
 async function configureSites() {
+  invalidateGrants();
   var patterns = [];
   var configError = null;
-  PastexNative.resetCache();
   try {
     patterns = await allowedSitePatterns();
   } catch (err) {
@@ -114,7 +123,7 @@ async function insertIntoActiveTab(id, text) {
 // and after every write, including partial failures. Only the panel can write.
 async function mutateDrive(command) {
   return libraryCache.mutate(async function () {
-    var session = await PastexLibrary.connect(PastexNative, PastexDrive);
+    var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
     if (!command.rootId || session.rootId !== command.rootId) throw new Error("Drive folder changed; refresh the list first.");
     var token = session.token;
     if (command.action === "save") {
@@ -172,35 +181,44 @@ chrome.action.onClicked.addListener(async function (tab) {
   }
 });
 
-// Content scripts re-check the current allowlist before showing or using the
-// picker. This also disables an already-open page when its site is removed.
+// Content scripts must authenticate on an allowed site before opening a panel.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
-    // Only the extension's own panel can request registration changes.
-    if (!trustedPanel(sender)) {
-      sendResponse({ ok: false, error: "Unauthorized request." });
-      return false;
-    }
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     configureSites().then(function () { sendResponse({ ok: true }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }
-  if (message && message.type === "pastex-site-allowed") {
-    allowedSitePatterns().then(function (patterns) {
-      sendResponse({ allowed: !!(sender.tab && PastexSites.allows(patterns, sender.url)) });
-    }).catch(function () { sendResponse({ allowed: false }); });
+  if (message && message.type === "pastex-open-panel") {
+    if (!sender || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0) {
+      sendResponse({ ok: false }); return false;
+    }
+    var grant = panelGrants.get(grantKey(sender));
+    if (!grant || grant.token !== message.capability || grant.url !== sender.url || grant.tabUrl !== sender.tab.url || grant.expires < Date.now() ||
+        grant.revision !== siteRevision || !Number.isInteger(sender.tab.windowId)) {
+      sendResponse({ ok: false }); return false;
+    }
+    // Do not await anything before this call: Chrome requires the user's
+    // gesture, which arrives with the content script's mousedown message.
+    try {
+      chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true }); })
+        .catch(function () { sendResponse({ ok: false }); });
+    } catch (err) { sendResponse({ ok: false }); return false; }
     return true;
   }
-  if (message && message.type === "pastex-get-library") {
-    allowedSitePatterns().then(async function (patterns) {
-      if (!sender.tab || !PastexSites.allows(patterns, sender.url)) throw new Error("Site not allowed.");
-      var result = await libraryCache.get(false, broadcastProgress);
-      clearProgress();
-      // A site can be removed while a slow load is in flight.
-      var currentPatterns = await allowedSitePatterns();
-      if (!sender.tab || !PastexSites.allows(currentPatterns, sender.url)) throw new Error("Site not allowed.");
-      sendResponse({ ok: true, tree: result.tree, warnings: result.warnings });
-    }).catch(function (err) { clearProgress(); sendResponse({ ok: false, error: err.message || String(err) }); });
+  if (message && message.type === "pastex-site-allowed") {
+    if (!sender || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0 || typeof sender.url !== "string") {
+      sendResponse({ allowed: false }); return false;
+    }
+    var revision = siteRevision, key = grantKey(sender);
+    allowedSitePatterns().then(function (patterns) {
+      var allowed = revision === siteRevision && PastexSites.allows(patterns, sender.url) &&
+        PastexSites.allows(patterns, sender.tab.url);
+      if (!allowed) { panelGrants.delete(key); sendResponse({ allowed: false }); return; }
+      var token = crypto.randomUUID();
+      panelGrants.set(key, { token: token, url: sender.url, tabUrl: sender.tab.url, expires: Date.now() + 30000, revision: revision });
+      sendResponse({ allowed: true, capability: token });
+    }).catch(function () { panelGrants.delete(key); sendResponse({ allowed: false }); });
     return true;
   }
   if (message && (message.type === "pastex-panel-library" || message.type === "pastex-panel-mutate")) {

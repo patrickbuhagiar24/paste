@@ -5,10 +5,10 @@ snippets on explicitly allowed sites. Snippets are read and saved directly
 in Google Drive; an internet connection and Drive access are required. A temporary
 browser-session cache makes repeat openings faster; refresh to pick up external changes.
 
-Edit `~/.config/pastex/pastex-sites.json` to allow sites, and use
-`pastex-google-drive.json` and `service-account.json` for Drive. You can also import
-these JSON files using **Config** in the extension side panel. See [the extension
-README](extension/README.md) for setup, examples and security details.
+Choose a configuration folder in **Config** containing `pastex-sites.json`,
+`pastex-google-drive.json` and your service-account JSON. Pastex reads these
+files directly; browser permission may need to be granted again after restart.
+See [the extension README](extension/README.md) for setup and security details.
 
 ## Install on Linux Mint through APT only
 

@@ -1,4 +1,4 @@
-// Exercise the injected picker with a minimal simulated browser DOM.
+// Exercise the floating launcher with a minimal simulated browser DOM.
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -45,10 +45,10 @@ function setupContent(options = {}) {
     hasFocus: () => true,
     execCommand(command, ignored, text) { inserted = text; return true; },
   };
+  const messages = [];
   const runtime = {
-    sendMessage: async ({ type }) => type === "pastex-site-allowed" ?
-      (options.allowed ? options.allowed() : { allowed: true }) :
-      (options.load ? options.load() : { ok: true, tree: [{ id: "1", kind: "text", name: "Test", text: "Drive content" }], warnings: [] }),
+    sendMessage: async (message) => { messages.push(message); return message.type === "pastex-site-allowed" ?
+      (options.allowed ? options.allowed() : { allowed: true, capability: "token" }) : { ok: true }; },
     onMessage: { addListener(fn) { events.message = fn; } },
   };
   const window = {
@@ -62,76 +62,38 @@ function setupContent(options = {}) {
   function runTimers(ms) {
     for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); }
   }
-  return { root, target, events, runTimers, get inserted() { return inserted; } };
+  return { root, target, events, runTimers, messages, get inserted() { return inserted; } };
 }
 async function tick() { await new Promise(setImmediate); }
 
-test("lightning button toggles Drive picker; Escape is not intercepted", async () => {
+test("lightning opens side panel without an in-page picker", async () => {
   const page = setupContent();
   page.target.focus();
   await tick();
-  const buttonHost = page.root.children.find((el) => el.id === "pastex-float-host");
-  assert.ok(buttonHost);
-  const button = buttonHost.__pastexButton;
-  assert.equal(button.style.display, "block");
-  const click = () => button.listeners.mousedown({ preventDefault() {} });
-  click();
+  const host = page.root.children.find((el) => el.id === "pastex-float-host");
+  assert.ok(host);
+  assert.equal(host.__pastexButton.style.display, "block");
+  host.__pastexButton.listeners.mousedown({ isTrusted: true, preventDefault() {} });
   await tick();
-  let picker = page.root.children.find((el) => el.id === "pastex-picker-host");
-  assert.ok(picker);
-  assert.equal(page.root.children.at(-1), buttonHost, "toggle stays above overlapping picker");
-  page.runTimers(180); // focus moved from the text field to the picker
-  assert.equal(button.style.display, "block", "lightning remains clickable while picker is open");
-  let prevented = false;
-  picker.__pastexInput.listeners.keydown({ key: "Escape", preventDefault() { prevented = true; } });
-  assert.equal(prevented, false);
-  assert.ok(page.root.children.includes(picker));
-  assert.equal(page.events.keydown, undefined, "no global Escape handler");
-  picker.__pastexInput.listeners.blur(); // a pending blur from the old picker
-  click();
-  assert.ok(!page.root.children.includes(picker));
-  assert.equal(page.target, page.root.children[0]);
-  await tick();
-  click();
-  await tick();
-  picker = page.root.children.find((el) => el.id === "pastex-picker-host");
-  assert.ok(picker);
-  page.runTimers(150);
-  assert.ok(page.root.children.includes(picker), "old blur must not close the new picker");
-  const item = picker.__pastexList.children[0];
-  picker.__pastexList.listeners.mousedown({ target: item, preventDefault() {} });
-  await tick();
+  assert.equal(page.messages.filter((m) => m.type === "pastex-open-panel").length, 1);
+  assert.equal(page.messages.at(-1).capability, "token");
+  assert.ok(!page.root.children.some((el) => el.id === "pastex-picker-host"));
+  host.__pastexButton.listeners.mousedown({ isTrusted: false, preventDefault() {} });
+  assert.equal(page.messages.filter((m) => m.type === "pastex-open-panel").length, 1);
+  assert.equal(page.events.keydown, undefined);
+});
+
+test("denied sites cannot display the launcher", async () => {
+  const page = setupContent({ allowed: () => ({ allowed: false }) });
+  page.target.focus(); await tick();
+  assert.ok(!page.root.children.some((el) => el.id === "pastex-float-host"));
+});
+
+test("side panel insertion uses the previously focused field", async () => {
+  const page = setupContent();
+  page.target.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "Drive content" }, {}, (response) => { result = response; });
+  assert.equal(result.ok, true);
   assert.equal(page.inserted, "Drive content");
-  assert.ok(!page.root.children.includes(picker));
-});
-
-test("old shortcut message cannot open the picker", () => {
-  const page = setupContent();
-  let responded = false;
-  assert.equal(page.events.message({ type: "pastex-toggle-picker" }, {}, () => { responded = true; }), false);
-  assert.equal(responded, false);
-  assert.ok(!page.root.children.some((el) => el.id === "pastex-picker-host"));
-});
-
-test("closing during authorization or Drive loading does not reopen the picker", async () => {
-  let releaseAuth, releaseLoad, count = 0;
-  const page = setupContent({
-    allowed: () => ++count === 2 ? new Promise((resolve) => { releaseAuth = resolve; }) : { allowed: true },
-    load: () => new Promise((resolve) => { releaseLoad = resolve; }),
-  });
-  page.target.focus();
-  await tick();
-  const button = page.root.children.find((el) => el.id === "pastex-float-host").__pastexButton;
-  const click = () => button.listeners.mousedown({ preventDefault() {} });
-  click(); click();
-  releaseAuth({ allowed: true });
-  await tick();
-  assert.ok(!page.root.children.some((el) => el.id === "pastex-picker-host"));
-  click();
-  await tick();
-  assert.ok(page.root.children.some((el) => el.id === "pastex-picker-host"));
-  click();
-  releaseLoad({ ok: true, tree: [], warnings: [] });
-  await tick();
-  assert.ok(!page.root.children.some((el) => el.id === "pastex-picker-host"));
 });

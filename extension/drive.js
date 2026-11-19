@@ -1,4 +1,4 @@
-/* Google Drive API access using a service-account key from the native host.
+/* Google Drive API access using a service-account key from the selected folder.
  * The private key is used locally to sign an assertion, not sent to Google.
  * Snippet files are read and written directly in the configured Drive folder.
  */

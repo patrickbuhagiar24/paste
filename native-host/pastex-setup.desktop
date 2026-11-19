@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Pastex user setup
-Comment=Create ~/.config/pastex on login (a .deb cannot create per-user files at install time)
-Exec=/usr/lib/pastex/pastex-native-host --init-only
-Terminal=false
-NoDisplay=true
-StartupNotify=false
-X-GNOME-Autostart-enabled=true

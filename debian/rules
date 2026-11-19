@@ -8,12 +8,6 @@ override_dh_auto_install:
 	install -d debian/pastex/usr/share/pastex
 	cp -r extension debian/pastex/usr/share/pastex/extension
 	rm -rf debian/pastex/usr/share/pastex/extension/test
-	install -d debian/pastex/usr/lib/pastex
-	install -m 755 native-host/pastex-native-host debian/pastex/usr/lib/pastex/pastex-native-host
-	install -d debian/pastex/etc/xdg/autostart
-	install -m 644 native-host/pastex-setup.desktop debian/pastex/etc/xdg/autostart/pastex-setup.desktop
-	install -d debian/pastex/etc/opt/chrome/native-messaging-hosts
-	install -d debian/pastex/etc/chromium/native-messaging-hosts
 	# One shell block on purpose: make runs each recipe line in its own
 	# shell, and the key, id, and version below belong together.
 	set -e; CRX_KEY="$${PASTEX_CRX_KEY:-}"; \
@@ -32,11 +26,7 @@ override_dh_auto_install:
 	  "$$EXT_VERSION" >debian/pastex/usr/share/google-chrome/extensions/$$EXT_ID.json; \
 	install -d debian/pastex/usr/share/chromium/extensions; \
 	printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
-	  "$$EXT_VERSION" >debian/pastex/usr/share/chromium/extensions/$$EXT_ID.json; \
-	for native_dir in debian/pastex/etc/opt/chrome/native-messaging-hosts debian/pastex/etc/chromium/native-messaging-hosts; do \
-	  printf '{"name": "com.pastex.native", "description": "Pastex config bridge", "path": "/usr/lib/pastex/pastex-native-host", "type": "stdio", "allowed_origins": ["chrome-extension://%s/"]}\n' \
-	    "$$EXT_ID" >$$native_dir/com.pastex.native.json; \
-	done
+	  "$$EXT_VERSION" >debian/pastex/usr/share/chromium/extensions/$$EXT_ID.json
 	install -d debian/pastex/usr/share/doc/pastex
 	install -m 644 extension/README.md debian/pastex/usr/share/doc/pastex/README.md
 	install -m 644 LICENSE debian/pastex/usr/share/doc/pastex/copyright

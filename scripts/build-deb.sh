@@ -37,12 +37,8 @@ fi
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" \
   "$STAGE/usr/share/pastex" \
-  "$STAGE/usr/lib/pastex" \
   "$STAGE/usr/share/google-chrome/extensions" \
   "$STAGE/usr/share/chromium/extensions" \
-  "$STAGE/etc/opt/chrome/native-messaging-hosts" \
-  "$STAGE/etc/chromium/native-messaging-hosts" \
-  "$STAGE/etc/xdg/autostart" \
   "$STAGE/usr/share/doc/$PKG"
 
 # Unpacked extension (auditable; also enables manual loading from source).
@@ -60,18 +56,6 @@ for browser_dir in google-chrome chromium; do
   printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
     "$VERSION" >"$STAGE/usr/share/$browser_dir/extensions/$EXT_ID.json"
 done
-
-# Native host: the bridge between the extension and ~/.config/pastex/*.json
-# (the browser cannot read local files by itself). The allowed_origins entry
-# must name this build's extension id, so the manifests are generated here.
-install -m 755 native-host/pastex-native-host "$STAGE/usr/lib/pastex/pastex-native-host"
-for native_dir in "$STAGE/etc/opt/chrome/native-messaging-hosts" "$STAGE/etc/chromium/native-messaging-hosts"; do
-  printf '{"name": "com.pastex.native", "description": "Pastex config bridge", "path": "/usr/lib/pastex/pastex-native-host", "type": "stdio", "allowed_origins": ["chrome-extension://%s/"]}\n' \
-    "$EXT_ID" >"$native_dir/com.pastex.native.json"
-done
-# A .deb cannot create per-user files at install time, so the config folder
-# is created on login (idempotent one-shot) and on first use by the host.
-install -m 644 native-host/pastex-setup.desktop "$STAGE/etc/xdg/autostart/pastex-setup.desktop"
 
 install -m 644 extension/README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
@@ -95,7 +79,7 @@ Replaces: paste-teks
 Recommends: google-chrome-stable | chromium
 Description: One-click text snippet manager for Google Chrome
  Pastex is a Chrome extension (Manifest V3): a snippet library in the
- Side Panel and an in-page picker at the cursor, using Google Drive
+ Side Panel and an in-page launcher at the cursor, using Google Drive
  through a service account.
  .
  Installing the package registers the extension with Chrome and

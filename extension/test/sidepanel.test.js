@@ -20,7 +20,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "import-folder", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "choose-folder", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
@@ -51,7 +51,7 @@ function panelHarness(fail, options = {}) {
     importConfigs: async (files) => { imports.push(files); return options.importResult || { imported: Object.keys(files), error: "" }; },
   };
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), addEventListener() {} };
-  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport, confirm: () => options.confirm !== false, setTimeout, clearTimeout };
+  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport, PastexConfigSource: { create: () => ({ choose: async (folder) => { imports.push(folder); return { drive: "drive.json", account: "account.json", sites: "sites.json" }; } }) }, PastexHandleStore: {}, PastexSites: {}, showDirectoryPicker: options.picker || (async () => ({ name: "source" })), confirm: () => options.confirm !== false, setTimeout, clearTimeout };
   let progress = () => {};
   let cache;
   const runtime = {
@@ -150,43 +150,25 @@ test("side panel creates, edits and trashes files directly in Drive", async () =
   assert.doesNotMatch(allText(elements.tree), /Synced/);
 });
 
-function selectedFile(name, data, parent = "source") {
-  const text = typeof data === "string" ? data : JSON.stringify(data);
-  return { name, size: Buffer.byteLength(text), webkitRelativePath: parent + "/" + name, text: async () => text };
-}
-
-test("configuration dialog detects and imports a selected folder", async () => {
+test("configuration dialog selects a folder and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
   assert.equal(elements["config-overlay"].hidden, false);
-  const input = elements["import-folder"];
-  input.files = [selectedFile("pastex-sites.json", { allowed_sites: ["https://example.com"] }),
-    selectedFile("pastex-google-drive.json", { folder_id: "abc" }),
-    selectedFile("downloaded-key.json", { type: "service_account", client_email: "svc", private_key: "key" })];
-  await input.listeners.change({ target: input });
-  assert.equal(imports.length, 1);
-  assert.equal(imports[0]["pastex-sites.json"].allowed_sites[0], "https://example.com");
-  assert.equal(imports[0]["service-account.json"].client_email, "svc");
+  await elements["choose-folder"].listeners.click();
+  assert.equal(imports[0].name, "source");
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements["config-status"].textContent, /Imported/);
-  input.files = [selectedFile("pastex-sites.json", "bad json")];
-  await input.listeners.change({ target: input });
-  assert.equal(imports.length, 1);
-  assert.match(elements["config-status"].textContent, /not valid JSON/);
+  assert.match(elements["config-status"].textContent, /Using folder/);
   elements["config-close"].listeners.click();
   assert.equal(elements["config-overlay"].hidden, true);
 });
 
-test("folder import can be canceled without writes", async () => {
-  const { elements, imports } = panelHarness(false, { confirm: false });
-  await settled();
-  const input = elements["import-folder"];
-  input.files = [selectedFile("service-account.json", {})];
-  await input.listeners.change({ target: input });
+test("canceling the folder picker leaves configuration unchanged", async () => {
+  const { elements, imports } = panelHarness(false, { picker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
+  await elements["choose-folder"].listeners.click();
   assert.equal(imports.length, 0);
-  assert.equal(input.value, "");
+  assert.match(elements["config-status"].textContent, /unchanged/);
 });
 
 test("side panel shows discovered Drive items before downloads finish", async () => {
@@ -253,18 +235,4 @@ test("text rows expose rename, edit, delete in order without an insert action or
   row.listeners.click();
   await settled();
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
-});
-
-test("folder import reports partial writes and reloads already-imported configuration", async () => {
-  const result = { imported: ["pastex-google-drive.json", "pastex-sites.json"], error: "service-account.json: permission denied" };
-  const { elements, messages } = panelHarness(false, { importResult: result });
-  await settled();
-  const input = elements["import-folder"];
-  input.files = [selectedFile("pastex-google-drive.json", { folder_id: "abc" }),
-    selectedFile("pastex-sites.json", { allowed_sites: [] }), selectedFile("service-account.json", { type: "service_account" })];
-  await input.listeners.change({ target: input });
-  assert.match(elements["config-status"].textContent, /Imported:.*pastex-google-drive\.json/);
-  assert.match(elements["config-status"].textContent, /Import stopped:.*permission denied/);
-  assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
-  assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
 });

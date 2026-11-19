@@ -96,10 +96,6 @@ def test_extension_payload_is_registered_for_autodetection():
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "/usr/share/chromium/extensions",
-        "native-host/pastex-native-host",
-        "native-messaging-hosts",
-        "pastex-setup.desktop",
-        "/etc/xdg/autostart",
         "extension/README.md",
     ):
         assert required in rules, f"rules misses {required!r}"
