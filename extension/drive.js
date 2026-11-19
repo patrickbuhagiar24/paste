@@ -1,19 +1,6 @@
-/* Google Drive sync through a service account (no user OAuth dance).
- *
- * The user pastes a service-account JSON key once (Options page); only
- * client_email + private_key are kept in chrome.storage.local. This module
- * signs a JWT with the key (WebCrypto RS256), exchanges it for an access
- * token, and talks to the Drive v3 REST API with plain fetch().
- *
- * Security notes (also shown in the Options page):
- *  - Anyone holding the JSON key acts as the service account, so treat it
- *    like a password. It never leaves the browser except to Google's
- *    token endpoint (as a signed JWT, never the key itself).
- *  - The service account only sees its own files plus files/folders
- *    explicitly shared with its client_email.
- *
- * Classic script, no DOM: loadable from pages, and unit-tested under node
- * through the module.exports branch below.
+/* Google Drive API access using a service-account key from the native host.
+ * The private key is used locally to sign an assertion, not sent to Google.
+ * Snippet files are read and written directly in the configured Drive folder.
  */
 
 (function (root, factory) {
@@ -199,6 +186,8 @@
     var fetchImpl = options.fetchImpl || fetch;
     var base = options.upload ? UPLOAD_URL : DRIVE_URL;
     var url = new URL(base + path);
+    // Shared drives require explicit opt-in on Drive file operations.
+    if (path.indexOf("/files") === 0) url.searchParams.set("supportsAllDrives", "true");
     Object.keys(options.query || {}).forEach(function (key) {
       url.searchParams.set(key, options.query[key]);
     });
@@ -227,7 +216,7 @@
       throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + String(detail).slice(0, 300));
     }
     var contentType = res.headers.get("content-type") || "";
-    if (contentType.indexOf("json") !== -1) {
+    if (!options.textResponse && contentType.indexOf("json") !== -1) {
       return res.json();
     }
     return res.text();
@@ -241,6 +230,7 @@
         q: "'" + folderId + "' in parents and trashed = false",
         fields: "nextPageToken,files(id,name,mimeType,modifiedTime)",
         pageSize: "1000",
+        includeItemsFromAllDrives: "true",
         orderBy: "folder,name",
       };
       if (pageToken) {
@@ -255,35 +245,30 @@
     return files;
   }
 
-  // Recursive walk of the sync root. Returns:
-  //   {texts: [{path, id, modifiedTime}], folders: [{path, id}]}
-  // A .txt file is recognised by name so files the user drops into the
-  // folder by hand (whatever MIME type Drive guessed) still sync.
-  async function walkRemote(token, rootId, fetchImpl) {
-    var texts = [];
-    var folders = [];
-    async function visit(folderId, segments) {
-      var children = await listChildren(token, folderId, fetchImpl);
-      for (var i = 0; i < children.length; i++) {
-        var child = children[i];
-        if (child.mimeType === FOLDER_MIME) {
-          var folderPath = segments.concat(child.name).join("/");
-          folders.push({ path: folderPath, id: child.id });
-          await visit(child.id, segments.concat(child.name));
-        } else if (child.mimeType === TEXT_MIME || /\.txt$/i.test(child.name || "")) {
-          var leaf = (child.name || "").replace(/\.txt$/i, "");
-          texts.push({ path: segments.concat(leaf).join("/"), id: child.id, modifiedTime: child.modifiedTime || "" });
-        }
-      }
-    }
-    await visit(rootId, []);
-    return { texts: texts, folders: folders };
+  async function getFolder(token, folderId, fetchImpl) {
+    return driveFetch(token, "/files/" + encodeURIComponent(folderId), {
+      query: { fields: "id,name,mimeType" }, fetchImpl: fetchImpl,
+    });
   }
 
   async function downloadText(token, fileId, fetchImpl) {
     return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
-      query: { alt: "media" },
+      query: { alt: "media" }, textResponse: true,
       fetchImpl: fetchImpl,
+    });
+  }
+
+  async function renameFile(token, fileId, name, fetchImpl) {
+    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      method: "PATCH", contentType: "application/json; charset=UTF-8",
+      query: { fields: "id,name" }, body: JSON.stringify({ name: name }), fetchImpl: fetchImpl,
+    });
+  }
+
+  async function trashFile(token, fileId, fetchImpl) {
+    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      method: "PATCH", contentType: "application/json; charset=UTF-8",
+      query: { fields: "id,trashed" }, body: JSON.stringify({ trashed: true }), fetchImpl: fetchImpl,
     });
   }
 
@@ -296,29 +281,6 @@
       fetchImpl: fetchImpl,
     });
     return data.id;
-  }
-
-  async function ensureFolderPath(token, rootId, segments, fetchImpl, cache) {
-    cache = cache || {};
-    var parentId = rootId;
-    var trail = [];
-    for (var i = 0; i < segments.length; i++) {
-      trail.push(segments[i]);
-      var key = trail.join("/");
-      if (!cache[key]) {
-        var children = await listChildren(token, parentId, fetchImpl);
-        var hit = null;
-        for (var j = 0; j < children.length; j++) {
-          if (children[j].name === segments[i] && children[j].mimeType === FOLDER_MIME) {
-            hit = children[j];
-            break;
-          }
-        }
-        cache[key] = hit ? hit.id : await createFolder(token, segments[i], parentId, fetchImpl);
-      }
-      parentId = cache[key];
-    }
-    return parentId;
   }
 
   function multipartBody(metadata, text, boundary) {
@@ -357,65 +319,6 @@
     });
   }
 
-  // --- sync planning (pure; the caller applies the ops with progress) ---
-  //
-  // localEntries:  [{path, updatedAt}]            (from PastexStore)
-  // remoteEntries: [{path, id, modifiedTime}]     (from walkRemote)
-  // Newest-wins per path; ISO-8601 UTC strings compare lexicographically.
-  // Deletions are NOT propagated in v1 (no tombstones): delete on both
-  // sides, or use the overwrite buttons. Documented in the README.
-
-  function planSync(localEntries, remoteEntries) {
-    var remoteByPath = {};
-    (remoteEntries || []).forEach(function (entry) {
-      remoteByPath[entry.path] = entry;
-    });
-    var localByPath = {};
-    (localEntries || []).forEach(function (entry) {
-      localByPath[entry.path] = entry;
-    });
-    var ops = [];
-    Object.keys(localByPath).forEach(function (path) {
-      var local = localByPath[path];
-      var remote = remoteByPath[path];
-      if (!remote) {
-        ops.push({ type: "upload-new", path: path });
-      } else if ((local.updatedAt || "") > (remote.modifiedTime || "")) {
-        ops.push({ type: "upload-update", path: path, remoteId: remote.id });
-      } else if ((remote.modifiedTime || "") > (local.updatedAt || "")) {
-        ops.push({ type: "download-update", path: path, remoteId: remote.id, remoteModified: remote.modifiedTime });
-      } else {
-        ops.push({ type: "noop", path: path });
-      }
-    });
-    Object.keys(remoteByPath).forEach(function (path) {
-      if (!localByPath[path]) {
-        ops.push({ type: "download-new", path: path, remoteId: remoteByPath[path].id, remoteModified: remoteByPath[path].modifiedTime });
-      }
-    });
-    return ops;
-  }
-
-  function planUploadAll(localEntries, remoteEntries) {
-    var remoteByPath = {};
-    (remoteEntries || []).forEach(function (entry) {
-      remoteByPath[entry.path] = entry;
-    });
-    return (localEntries || []).map(function (local) {
-      var remote = remoteByPath[local.path];
-      if (remote) {
-        return { type: "upload-update", path: local.path, remoteId: remote.id };
-      }
-      return { type: "upload-new", path: local.path };
-    });
-  }
-
-  function planDownloadAll(remoteEntries) {
-    return (remoteEntries || []).map(function (remote) {
-      return { type: "download-new", path: remote.path, remoteId: remote.id, remoteModified: remote.modifiedTime };
-    });
-  }
-
   return {
     TOKEN_URL: TOKEN_URL,
     DRIVE_URL: DRIVE_URL,
@@ -433,14 +336,12 @@
     fetchAccessToken: fetchAccessToken,
     driveFetch: driveFetch,
     listChildren: listChildren,
-    walkRemote: walkRemote,
+    getFolder: getFolder,
     downloadText: downloadText,
+    renameFile: renameFile,
+    trashFile: trashFile,
     createFolder: createFolder,
-    ensureFolderPath: ensureFolderPath,
     uploadNew: uploadNew,
     updateText: updateText,
-    planSync: planSync,
-    planUploadAll: planUploadAll,
-    planDownloadAll: planDownloadAll,
   };
 });

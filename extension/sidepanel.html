@@ -11,21 +11,17 @@
       <div class="toolbar" role="toolbar" aria-label="Snippet actions">
         <button id="btn-folder" title="New folder">＋ Folder</button>
         <button id="btn-text" title="New snippet">＋ Text</button>
-        <button id="btn-sync" title="Sync with Google Drive">⇄ Sync</button>
+        <button id="btn-sync" title="Reload from Google Drive">↻ Refresh</button>
       </div>
       <div id="drive-bar" aria-live="polite">
         <span id="drive-status">Drive: not connected.</span>
-        <span id="drive-actions">
-          <button id="btn-upload-all" title="Overwrite Drive with local snippets">⇪</button>
-          <button id="btn-download-all" title="Overwrite local snippets with Drive">⇩</button>
-        </span>
       </div>
     </header>
     <main>
       <div id="tree" role="tree" aria-label="Snippets"></div>
       <div id="empty" hidden>
         <div class="empty-icon">📁</div>
-        <p>No snippets yet.<br />Create a folder or a text snippet to begin.</p>
+        <p>Connect to Google Drive to show your snippets.</p>
         <button id="btn-empty-text">＋ New snippet</button>
       </div>
     </main>
@@ -58,6 +54,7 @@
     <script src="store.js"></script>
     <script src="drive.js"></script>
     <script src="native.js"></script>
+    <script src="library.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

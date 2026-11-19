@@ -95,15 +95,15 @@ Replaces: paste-teks
 Recommends: google-chrome-stable | chromium
 Description: One-click text snippet manager for Google Chrome
  Pastex is a Chrome extension (Manifest V3): a snippet library in the
- Side Panel, an in-page picker at the cursor, and Google Drive sync
+ Side Panel and an in-page picker at the cursor, using Google Drive
  through a service account.
  .
  Installing the package registers the extension with Chrome and
  Chromium: on the next launch the browser offers to enable Pastex
  with one click. No daemons, groups, or system services are used.
  .
- Snippets are stored locally in the browser; the optional Drive sync
- mirrors them as .txt files. Setup is described in the README under
+ Snippets are read and written as .txt files directly in Google Drive.
+ Setup and required credentials are described in the README under
  /usr/share/doc/pastex/.
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF

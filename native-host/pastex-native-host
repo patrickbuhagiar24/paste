@@ -31,18 +31,25 @@ CONFIG_DIR_NAME = "pastex"
 DRIVE_FILE = "google-drive.json"
 SA_FILE = "service-account.json"
 SITES_FILE = "sites.json"
-README_FILE = "README.txt"
 
 FOLDER_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
 
-README_TEXT = """Pastex configuration.
-- google-drive.json: the shared Drive folder (folder_id or folder_url).
-- service-account.json: the Google Cloud JSON key for Drive sync.
-- sites.json: allowed_sites lists allowed HTTP(S) site origins.
-Edit these files directly. Restart the browser and reload open pages after
-changing sites.json. Setup instructions: /usr/share/doc/pastex/README.md.gz.
-The folder is created automatically on login and on extension startup.
-"""
+# Remove only unmodified README files created by older releases; user-edited
+# notes and symlinks are left untouched. New installations create no README.
+LEGACY_READMES = {
+    "Pastex configuration.\n"
+    "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
+    "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
+    "Both are managed from the Pastex Settings page; this folder is created\n"
+    "automatically on login and on first use.\n",
+    "Pastex configuration.\n"
+    "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
+    "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
+    "- sites.json: allowed_sites lists allowed HTTP(S) site origins.\n"
+    "Edit these files directly. Restart the browser and reload open pages after\n"
+    "changing sites.json. Setup instructions: /usr/share/doc/pastex/README.md.gz.\n"
+    "The folder is created automatically on login and on extension startup.\n",
+}
 
 DRIVE_TEMPLATE = {
     "folder_id": "",
@@ -92,14 +99,13 @@ def ensure_configured() -> Path:
             os.chmod(path, 0o600)
         except OSError:
             pass
-    readme = directory / README_FILE
-    old_readme = ("Pastex configuration.\n"
-                  "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
-                  "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
-                  "Both are managed from the Pastex Settings page; this folder is created\n"
-                  "automatically on login and on first use.\n")
-    if not readme.exists() or readme.read_text(encoding="utf-8") == old_readme:
-        readme.write_text(README_TEXT, encoding="utf-8")
+    legacy_readme = directory / "README.txt"
+    try:
+        if (not legacy_readme.is_symlink() and legacy_readme.is_file()
+                and legacy_readme.read_text(encoding="utf-8") in LEGACY_READMES):
+            legacy_readme.unlink()
+    except (OSError, UnicodeError):
+        pass  # Never block configuration if an existing file cannot be read.
     return directory
 
 

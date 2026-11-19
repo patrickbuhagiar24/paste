@@ -1,5 +1,5 @@
 // Unit tests for extension/drive.js: key parsing, JWT signing (WebCrypto),
-// sync planning, and Drive API wrappers against stub fetch().
+// and Drive API wrappers against stub fetch().
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -135,50 +135,6 @@ test("base64 helpers round-trip", () => {
   assert.match(Drive.stringToBase64Url(">>>???"), /^[A-Za-z0-9_-]+$/);
 });
 
-test("planSync is newest-wins per path", () => {
-  const local = [
-    { path: "Email/Reply", updatedAt: "2026-02-01T00:00:00.000Z" },
-    { path: "Local/Only", updatedAt: "2026-02-01T00:00:00.000Z" },
-    { path: "Same", updatedAt: "2026-01-01T00:00:00.000Z" },
-    { path: "Stale", updatedAt: "2026-01-01T00:00:00.000Z" },
-  ];
-  const remote = [
-    { path: "Email/Reply", id: "r1", modifiedTime: "2026-01-01T00:00:00.000Z" },
-    { path: "Same", id: "r2", modifiedTime: "2026-01-01T00:00:00.000Z" },
-    { path: "Stale", id: "r3", modifiedTime: "2026-03-01T00:00:00.000Z" },
-    { path: "Remote/Only", id: "r4", modifiedTime: "2026-01-01T00:00:00.000Z" },
-  ];
-  const ops = Drive.planSync(local, remote);
-  const byPath = {};
-  ops.forEach((op) => {
-    byPath[op.path] = op;
-  });
-  assert.equal(byPath["Email/Reply"].type, "upload-update");
-  assert.equal(byPath["Email/Reply"].remoteId, "r1");
-  assert.equal(byPath["Local/Only"].type, "upload-new");
-  assert.equal(byPath["Same"].type, "noop");
-  assert.equal(byPath["Stale"].type, "download-update");
-  assert.equal(byPath["Stale"].remoteId, "r3");
-  assert.equal(byPath["Remote/Only"].type, "download-new");
-  assert.equal(byPath["Remote/Only"].remoteId, "r4");
-});
-
-test("planUploadAll/planDownloadAll overwrite one side", () => {
-  const local = [{ path: "A", updatedAt: "2026-01-01T00:00:00.000Z" }];
-  const remote = [{ path: "A", id: "r1", modifiedTime: "2026-05-01T00:00:00.000Z" }];
-  const up = Drive.planUploadAll(local, remote);
-  assert.deepEqual(
-    up.map((op) => op.type),
-    ["upload-update"]
-  );
-  assert.equal(up[0].remoteId, "r1");
-  const down = Drive.planDownloadAll(remote);
-  assert.deepEqual(
-    down.map((op) => op.type),
-    ["download-new"]
-  );
-});
-
 test("listChildren follows pagination", async () => {
   const fetchImpl = stubFetch(async (url) => {
     if (url.includes("pageToken")) {
@@ -197,31 +153,6 @@ test("listChildren follows pagination", async () => {
   assert.ok(fetchImpl.calls[0].options.headers.Authorization.includes("Bearer"));
 });
 
-test("walkRemote maps folders and .txt files to paths", async () => {
-  const pages = {
-    root: [
-      { id: "d1", name: "Email", mimeType: Drive.FOLDER_MIME, modifiedTime: "2026-01-01T00:00:00.000Z" },
-      { id: "f1", name: "Top.txt", mimeType: "text/plain", modifiedTime: "2026-01-01T00:00:00.000Z" },
-      { id: "doc1", name: "Slides", mimeType: "application/vnd.google-apps.presentation", modifiedTime: "2026-01-01T00:00:00.000Z" },
-    ],
-    d1: [{ id: "f2", name: "Reply.txt", mimeType: "application/octet-stream", modifiedTime: "2026-01-02T00:00:00.000Z" }],
-  };
-  const fetchImpl = stubFetch(async (url) => {
-    // URLSearchParams encodes spaces as "+", so match the raw id instead.
-    const parent = url.includes("d1") ? "d1" : "root";
-    return jsonResponse({ files: pages[parent] });
-  });
-  const tree = await Drive.walkRemote("tok", "root", fetchImpl);
-  assert.deepEqual(
-    tree.texts.map((t) => t.path),
-    ["Email/Reply", "Top"]
-  );
-  assert.deepEqual(
-    tree.folders.map((f) => f.path),
-    ["Email"]
-  );
-});
-
 test("uploadNew posts multipart, updateText patches media", async () => {
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "n1", modifiedTime: "2026-01-01T00:00:00.000Z" }));
   await Drive.uploadNew("tok", "parent", "Note", "hello", fetchImpl);
@@ -238,20 +169,24 @@ test("uploadNew posts multipart, updateText patches media", async () => {
   assert.ok(update.url.includes("uploadType=media"));
 });
 
-test("ensureFolderPath reuses existing folders", async () => {
-  const fetchImpl = stubFetch(async (url, options) => {
-    if ((options.method || "GET") === "POST") {
-      return jsonResponse({ id: "created" });
-    }
-    if (url.includes("root")) {
-      return jsonResponse({ files: [{ id: "have", name: "Email", mimeType: Drive.FOLDER_MIME }] });
-    }
-    return jsonResponse({ files: [] });
-  });
-  const leaf = await Drive.ensureFolderPath("tok", "root", ["Email", "New"], fetchImpl, {});
-  assert.equal(leaf, "created");
-  const posts = fetchImpl.calls.filter((c) => (c.options.method || "GET") === "POST");
-  assert.equal(posts.length, 1);
+test("Drive reads shared folders and preserves plain text even when MIME is JSON", async () => {
+  const fetchImpl = stubFetch(async (url) => url.includes("alt=media")
+    ? { ok: true, status: 200, headers: { get: () => "application/json" }, text: async () => '{"hello":1}', json: async () => ({ hello: 1 }) }
+    : jsonResponse({ id: "folder", mimeType: Drive.FOLDER_MIME }));
+  await Drive.getFolder("tok", "shared-id", fetchImpl);
+  assert.match(fetchImpl.calls[0].url, /supportsAllDrives=true/);
+  assert.equal(await Drive.downloadText("tok", "file", fetchImpl), '{"hello":1}');
+  await Drive.listChildren("tok", "root", fetchImpl);
+  assert.match(fetchImpl.calls[2].url, /includeItemsFromAllDrives=true/);
+});
+
+test("rename and delete use Drive metadata PATCH, with trash rather than permanent delete", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "f" }));
+  await Drive.renameFile("tok", "f", "New.txt", fetchImpl);
+  await Drive.trashFile("tok", "f", fetchImpl);
+  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { name: "New.txt" });
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { trashed: true });
 });
 
 test("driveFetch reports API errors with the message", async () => {

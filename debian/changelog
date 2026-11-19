@@ -1,3 +1,10 @@
+pastex (2.2.0-1) unstable; urgency=medium
+
+  * Read and write snippet libraries directly in Google Drive.
+  * Load the Drive listing when opening the side panel and picker.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 04:00:00 +0000
+
 pastex (2.1.0-1) unstable; urgency=medium
 
   * Configure Drive and allowed websites using per-user files, without a settings page.

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Pastex",
-  "version": "2.1.0",
-  "description": "One-click text snippet manager: Side Panel library, in-page picker, Google Drive sync.",
+  "version": "2.2.0",
+  "description": "Text snippets stored in Google Drive, with a Side Panel and an in-page picker.",
   "minimum_chrome_version": "114",
   "icons": {
     "16": "icons/icon16.png",
@@ -23,7 +23,7 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "permissions": ["storage", "sidePanel", "contextMenus", "scripting", "activeTab", "clipboardWrite", "nativeMessaging"],
+  "permissions": ["sidePanel", "contextMenus", "scripting", "activeTab", "clipboardWrite", "nativeMessaging"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "commands": {
     "toggle-picker": {

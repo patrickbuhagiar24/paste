@@ -78,6 +78,7 @@ test("extension installation and browser startup initialize config via the real 
       await new Promise(setImmediate);
       assert.equal(browser.launches, 1);
       const dir = path.join(home, ".config", "pastex");
+      assert.deepEqual(fs.readdirSync(dir).sort(), ["google-drive.json", "service-account.json", "sites.json"]);
       for (const name of ["google-drive.json", "service-account.json", "sites.json"]) {
         assert.ok(fs.existsSync(path.join(dir, name)));
         assert.equal(fs.statSync(path.join(dir, name)).mode & 0o777, 0o600);
@@ -118,6 +119,17 @@ test("site registration and on-demand injection are limited to configured sites"
     });
     assert.equal((await allowedMessage("https://allowed.example/path")).allowed, true);
     assert.equal((await allowedMessage("https://blocked.example/")).allowed, false);
+    let loads = 0;
+    browser.context.PastexLibrary.load = async () => {
+      loads++;
+      return { tree: [{ id: "drive-id", kind: "text", name: "Drive snippet", text: "from Drive" }] };
+    };
+    const libraryMessage = (url) => new Promise((resolve) => {
+      assert.equal(browser.listeners.message({ type: "pastex-get-library" }, { tab: { id: 1 }, url }, resolve), true);
+    });
+    assert.equal((await libraryMessage("https://allowed.example/")).tree[0].text, "from Drive");
+    assert.equal((await libraryMessage("https://blocked.example/")).ok, false);
+    assert.equal(loads, 1);
     await assert.rejects(browser.context.messageTab(2, { type: "pastex-insert" }), /site-not-allowed/);
     assert.equal(browser.injected, 0);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
