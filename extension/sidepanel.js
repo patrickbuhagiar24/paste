@@ -1,4 +1,4 @@
-/* Pastex Side Panel: snippet library, preview, editor, Drive sync.
+/* Pastex Side Panel: snippet library, editor, Drive sync.
  *
  * One click on a text snippet inserts it into the active tab (desktop
  * parity); when no editable field is focused the text is copied to the
@@ -75,6 +75,19 @@
     return button;
   }
 
+  function appendRowActions(row, node) {
+    if (selecting) return;
+    row.appendChild(miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
+      openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
+    }));
+    if (node.kind === "text") {
+      var edit = miniButton("Edit", "📝", function () { openEditor("edit-text", node); });
+      if (node.loadError) { edit.disabled = true; edit.title = "Cannot edit: " + node.loadError; }
+      row.appendChild(edit);
+    }
+    row.appendChild(miniButton("Delete", "🗑", function () { deleteNodes([node]); }));
+  }
+
   function renderRow(node, depth, host) {
     var row = document.createElement("div");
     row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
@@ -93,12 +106,7 @@
     label.title = node.loadError || esc(node.name);
     row.appendChild(label);
 
-    if (!selecting) {
-      row.appendChild(miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
-        openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
-      }));
-      row.appendChild(miniButton("Delete", "🗑", function () { deleteNodes([node]); }));
-    }
+    appendRowActions(row, node);
     if (selecting && node.kind === "folder") {
       toggle.title = "Expand or collapse folder";
       toggle.setAttribute("role", "button");
@@ -161,6 +169,7 @@
       label.textContent = (selecting ? (selectedItems.has(node.id) ? "☑ " : "☐ ") : "") + (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
       label.title = node.loadError || esc(node.name);
       row.appendChild(label);
+      appendRowActions(row, node);
       function activateResult() {
         if (selecting) toggleSelection(node.id);
         else { selectNode(node.id); insertNode(node); }
@@ -197,7 +206,6 @@
         $("empty").querySelector("p").textContent = ready ? "No snippets in the Google Drive folder yet." : "Connect to Google Drive to show your snippets.";
       }
     }
-    renderPreview();
     renderSelectionActions();
   }
 
@@ -224,14 +232,6 @@
 
   function selectedNode() {
     return selectedId ? Store.findById(tree, selectedId) : null;
-  }
-
-  function renderPreview() {
-    var node = selectedNode();
-    var isText = !!node && node.kind === "text";
-    $("preview-title").textContent = node ? esc(node.name) : "Select a snippet.";
-    $("preview").textContent = node && node.loadError ? "Could not read from Drive: " + node.loadError : (isText ? node.text || "" : "");
-    $("btn-edit").disabled = selecting || busy || !isText || !!node.loadError;
   }
 
   function renderDriveBar() {
@@ -286,7 +286,7 @@
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
-      if (/HTTP (401|403|404)\b|invalid_grant|service-account\.json|google-drive\.json/i.test(err.message || "")) {
+      if (/HTTP (401|403|404)\b|invalid_grant|service-account\.json|pastex-google-drive\.json/i.test(err.message || "")) {
         tree = []; rootId = ""; ready = false; fromCache = false;
       } else {
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
@@ -324,7 +324,7 @@
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. See ~/.config/pastex/sites.json and README.");
+      setStatus("Site not allowed. See ~/.config/pastex/pastex-sites.json and README.");
       return;
     }
     try {
@@ -460,50 +460,60 @@
     await runMutation({ action: "reorder", groups: groups });
   }
 
-  // --- configuration import (one explicit file at a time) ---
+  // --- configuration import from a user-selected source folder ---
 
-  function configureImport(inputId, destination) {
-    $(inputId).addEventListener("change", async function (event) {
-      var input = event.target;
-      var file = input.files && input.files[0];
-      if (!file) return;
-      try {
-        if (file.size > 256 * 1024) throw new Error("File is too large (maximum 256 KB).");
-        var data;
-        try { data = JSON.parse(await file.text()); }
-        catch (err) { throw new Error("The selected file is not valid JSON."); }
-        if (!window.confirm("Replace " + destination + " in your Pastex configuration?")) return;
-        Native.resetCache();
-        await Native.importConfig(destination, data);
-        if (destination === "sites.json") {
-          var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
-          if (!response || !response.ok) throw new Error((response && response.error) || "Could not reload site registration; restart the browser.");
-        }
-        $("config-status").textContent = destination + " imported. " +
-          (destination === "sites.json" ? "Reload open pages to apply." : "Reloading Drive…");
-        if (destination !== "sites.json") {
-          configVersion++;
-          tree = []; rootId = ""; ready = false; fromCache = false;
-          selectedId = ""; selectedItems.clear();
-          render(); renderDriveBar();
-          refresh(true);
-        }
-      } catch (err) {
-        $("config-status").textContent = "Import failed: " + (err.message || err);
-      } finally {
-        input.value = "";
+  $("import-folder").addEventListener("change", async function (event) {
+    var input = event.target;
+    if (!input.files || !input.files.length) return;
+    input.disabled = true;
+    try {
+      var found = await window.PastexConfigImport.discover(input.files);
+      var names = Object.keys(found.files);
+      if (!names.length) throw new Error("No supported configuration files found in the selected folder.");
+      var details = names.map(function (name) {
+        return found.sources[name] === name ? name : found.sources[name] + " → " + name;
+      }).join(", ");
+      var missing = found.missing.length ? "\nNot found (existing files remain unchanged): " + found.missing.join(", ") + "." : "";
+      if (!window.confirm("Import and replace these Pastex configuration files?\n" + details + missing)) {
+        $("config-status").textContent = "Import canceled; no files changed.";
+        return;
       }
-    });
-  }
+      Native.resetCache();
+      var result = await Native.importConfigs(found.files);
+      var imported = result.imported || [];
+      var issues = [];
+      if (result.error) issues.push("Import stopped: " + result.error);
+      if (imported.indexOf("pastex-sites.json") !== -1) {
+        try {
+          var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
+          if (!response || !response.ok) throw new Error((response && response.error) || "Site registration failed.");
+        } catch (err) { issues.push("Sites saved but registration failed; restart the browser: " + (err.message || err)); }
+      }
+      if (imported.indexOf("pastex-google-drive.json") !== -1 || imported.indexOf("service-account.json") !== -1) {
+        configVersion++;
+        tree = []; rootId = ""; ready = false; fromCache = false;
+        selectedId = ""; selectedItems.clear();
+        render(); renderDriveBar();
+        refresh(true);
+      }
+      var status = imported.length ? "Imported: " + imported.join(", ") + "." : "No files imported.";
+      if (found.missing.length) status += " Not found (unchanged): " + found.missing.join(", ") + ".";
+      if (imported.indexOf("pastex-sites.json") !== -1) status += " Reload open pages.";
+      if (issues.length) status += " " + issues.join(" ");
+      $("config-status").textContent = status;
+    } catch (err) {
+      $("config-status").textContent = "Import failed: " + (err.message || err);
+    } finally {
+      input.value = "";
+      input.disabled = false;
+    }
+  });
 
   $("btn-config").addEventListener("click", function () {
     $("config-status").textContent = "";
     $("config-overlay").hidden = false;
   });
   $("config-close").addEventListener("click", function () { $("config-overlay").hidden = true; });
-  configureImport("import-drive", "google-drive.json");
-  configureImport("import-account", "service-account.json");
-  configureImport("import-sites", "sites.json");
 
   // --- events ---
 
@@ -538,13 +548,6 @@
   $("btn-down").addEventListener("click", function () { moveSelected(1); });
   $("btn-delete-selected").addEventListener("click", function () {
     deleteNodes(Store.selectedRoots(tree, selectedItems));
-  });
-
-  $("btn-edit").addEventListener("click", function () {
-    var node = selectedNode();
-    if (node && node.kind === "text") {
-      openEditor("edit-text", node);
-    }
   });
 
   $("editor-save").addEventListener("click", saveEditor);

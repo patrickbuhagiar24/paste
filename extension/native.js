@@ -104,6 +104,10 @@
     return send({ type: "pastex-import-config", name: name, data: data });
   }
 
+  function importConfigs(files) {
+    return send({ type: "pastex-import-configs", files: files });
+  }
+
   function resetCache() {
     unavailableUntil = 0;
   }
@@ -116,6 +120,7 @@
     readConfig: readConfig,
     readSites: readSites,
     importConfig: importConfig,
+    importConfigs: importConfigs,
     resetCache: resetCache,
   };
 });

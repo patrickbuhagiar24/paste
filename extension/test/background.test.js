@@ -76,8 +76,8 @@ test("extension installation and browser startup initialize config via the real 
       await new Promise(setImmediate);
       assert.equal(browser.launches, 1);
       const dir = path.join(home, ".config", "pastex");
-      assert.deepEqual(fs.readdirSync(dir).sort(), ["google-drive.json", "service-account.json", "sites.json"]);
-      for (const name of ["google-drive.json", "service-account.json", "sites.json"]) {
+      assert.deepEqual(fs.readdirSync(dir).sort(), ["pastex-google-drive.json", "pastex-sites.json", "service-account.json"]);
+      for (const name of ["pastex-google-drive.json", "service-account.json", "pastex-sites.json"]) {
         assert.ok(fs.existsSync(path.join(dir, name)));
         assert.equal(fs.statSync(path.join(dir, name)).mode & 0o777, 0o600);
       }
@@ -91,7 +91,7 @@ test("repeated lifecycle events preserve user config files", async () => {
     const browser = harness(home, false);
     browser.listeners.installed();
     await new Promise(setImmediate);
-    const file = path.join(home, ".config", "pastex", "google-drive.json");
+    const file = path.join(home, ".config", "pastex", "pastex-google-drive.json");
     const existing = JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/example" });
     fs.writeFileSync(file, existing);
     browser.listeners.startup();
@@ -107,7 +107,7 @@ test("site registration and on-demand injection are limited to configured sites"
     browser.listeners.installed();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0);
-    const file = path.join(home, ".config", "pastex", "sites.json");
+    const file = path.join(home, ".config", "pastex", "pastex-sites.json");
     fs.writeFileSync(file, JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.listeners.startup();
     await new Promise(setImmediate);
@@ -118,7 +118,7 @@ test("site registration and on-demand injection are limited to configured sites"
     assert.equal((await allowedMessage("https://allowed.example/path")).allowed, true);
     assert.equal((await allowedMessage("https://blocked.example/")).allowed, false);
     const configDir = path.join(home, ".config", "pastex");
-    fs.writeFileSync(path.join(configDir, "google-drive.json"), JSON.stringify({ folder_id: "root" }));
+    fs.writeFileSync(path.join(configDir, "pastex-google-drive.json"), JSON.stringify({ folder_id: "root" }));
     fs.writeFileSync(path.join(configDir, "service-account.json"), JSON.stringify({ type: "service_account", client_email: "test@example.com", private_key: "key" }));
     let loads = 0;
     browser.context.PastexLibrary.load = async () => {
@@ -157,7 +157,7 @@ test("only the extension panel can request a site registration reload", async ()
     const browser = harness(home, false);
     browser.listeners.installed();
     await new Promise(setImmediate);
-    const file = path.join(home, ".config", "pastex", "sites.json");
+    const file = path.join(home, ".config", "pastex", "pastex-sites.json");
     fs.writeFileSync(file, JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     let denied;
     assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "https://allowed.example" }, (res) => { denied = res; }), false);
@@ -176,7 +176,7 @@ test("panel and allowed picker share cached data; writes require panel and inval
   try {
     const browser = harness(home, false);
     browser.listeners.installed(); await new Promise(setImmediate);
-    fs.writeFileSync(path.join(home, ".config", "pastex", "sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    fs.writeFileSync(path.join(home, ".config", "pastex", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.context.PastexNative.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
     let text = "old", loads = 0;
     browser.context.PastexLibrary.load = async () => ({ tree: [{ id: "item", kind: "text", name: "Item", text: text }], session: { rootId: "root" }, warnings: [], sequence: ++loads });

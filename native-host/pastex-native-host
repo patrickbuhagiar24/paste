@@ -3,7 +3,7 @@
 ~/.config/pastex/*.json (the browser cannot read local files by itself).
 
 Config files (created with templates on first run):
-  ~/.config/pastex/google-drive.json     {"folder_id": ..., "folder_url": ...}
+  ~/.config/pastex/pastex-google-drive.json  {"folder_id": ..., "folder_url": ...}
   ~/.config/pastex/service-account.json  Google Cloud JSON key (client_email + private_key)
 
 Protocol: Chrome native messaging (4-byte LE length + JSON) on stdio.
@@ -12,6 +12,7 @@ Requests (responses always carry "ok"):
   {"type": "pastex-read-config"}                     full SA key + drive config
   {"type": "pastex-read-sites"}                      configured site allowlist
   {"type": "pastex-import-config", "name": ..., "data": {...}}  import one validated file
+  {"type": "pastex-import-configs", "files": {...}}   validate and import selected files
 
 Usage:
   pastex-native-host [chrome-extension://<id>/]  # serve Chrome on stdio
@@ -30,9 +31,9 @@ from pathlib import Path
 
 HOST_NAME = "com.pastex.native"
 CONFIG_DIR_NAME = "pastex"
-DRIVE_FILE = "google-drive.json"
+DRIVE_FILE = "pastex-google-drive.json"
 SA_FILE = "service-account.json"
-SITES_FILE = "sites.json"
+SITES_FILE = "pastex-sites.json"
 
 FOLDER_ID_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
 
@@ -85,20 +86,32 @@ def ensure_configured() -> Path:
         SA_FILE: SA_TEMPLATE,
         SITES_FILE: {"allowed_sites": []},
     }
+    legacy_names = {DRIVE_FILE: "google-drive.json", SITES_FILE: "sites.json"}
     for name, template in defaults.items():
         path = directory / name
+        if not os.path.lexists(path):
+            old = directory / legacy_names[name] if name in legacy_names else None
+            if old is not None and os.path.lexists(old):
+                # Preserve exact old contents, including malformed files; do
+                # not hide configuration errors by replacing them with defaults.
+                contents = old.read_bytes()
+            else:
+                contents = (json.dumps(template, indent=2) + "\n").encode("utf-8")
+            # Publish a fully written file only if the destination still does
+            # not exist. Concurrent hosts and login setup cannot clobber it.
+            fd, temporary = tempfile.mkstemp(prefix=".pastex-init-", dir=directory)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(contents)
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(temporary)
         try:
-            # Exclusive creation avoids clobbering user configuration if
-            # login setup and the browser host start at the same time.
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(template, stream, indent=2)
-                stream.write("\n")
-        try:
-            os.chmod(path, 0o600)
+            if not path.is_symlink():
+                os.chmod(path, 0o600)
         except OSError:
             pass
     legacy_readme = directory / "README.txt"
@@ -166,12 +179,12 @@ def sa_status(directory: Path) -> dict:
     return {"configured": True, "email": email, "error": ""}
 
 
-def import_config(directory: Path, name: str, data) -> None:
-    """Replace one explicitly named config file, after validation, atomically."""
+def encode_config(name: str, data) -> bytes:
+    """Validate and encode one explicitly named configuration."""
     if name not in (DRIVE_FILE, SA_FILE, SITES_FILE) or not isinstance(data, dict):
         raise ValueError("Unsupported configuration file or JSON object")
     if name == DRIVE_FILE and not resolve_folder_id(data):
-        raise ValueError("google-drive.json needs folder_id or a Drive folder_url")
+        raise ValueError(f"{DRIVE_FILE} needs folder_id or a Drive folder_url")
     if name == SA_FILE:
         key = data.get("private_key")
         if (data.get("type") != "service_account" or not isinstance(data.get("client_email"), str)
@@ -185,10 +198,14 @@ def import_config(directory: Path, name: str, data) -> None:
         for site in sites:
             match = re.fullmatch(r"(https?)://(?:\*\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*)/?", site.strip().lower()) if isinstance(site, str) else None
             if not match or len(match[2]) > 253 or any(len(label) > 63 or label.startswith('-') or label.endswith('-') for label in match[2].split('.')):
-                raise ValueError("sites.json contains an invalid site origin")
+                raise ValueError(f"{SITES_FILE} contains an invalid site origin")
     encoded = json.dumps(data, indent=2, ensure_ascii=True).encode("utf-8") + b"\n"
     if len(encoded) > 256 * 1024:
         raise ValueError("Configuration file is too large (maximum 256 KB)")
+    return encoded
+
+
+def write_config(directory: Path, name: str, encoded: bytes) -> None:
     # A fixed allowlist of names avoids path traversal; os.replace does not
     # follow an existing destination symlink and readers never see partial JSON.
     fd, temporary = tempfile.mkstemp(prefix=".pastex-import-", dir=directory)
@@ -213,8 +230,25 @@ def handle(message: dict, directory: Path) -> dict:
             "serviceAccount": sa_status(directory),
         }
     if kind == "pastex-import-config":
-        import_config(directory, message.get("name"), message.get("data"))
+        name = message.get("name")
+        encoded = encode_config(name, message.get("data"))
+        write_config(directory, name, encoded)
         return {"ok": True}
+    if kind == "pastex-import-configs":
+        files = message.get("files")
+        if not isinstance(files, dict) or not files or len(files) > 3:
+            raise ValueError("Select one or more supported configuration files")
+        # Validate every file before making any changes. Each replacement is
+        # atomic; report partial completion if a later filesystem write fails.
+        encoded_files = {name: encode_config(name, data) for name, data in files.items()}
+        imported = []
+        for name, encoded in encoded_files.items():
+            try:
+                write_config(directory, name, encoded)
+            except OSError as exc:
+                return {"ok": True, "imported": imported, "error": f"{name}: {exc}"}
+            imported.append(name)
+        return {"ok": True, "imported": imported, "error": ""}
     if kind == "pastex-read-sites":
         try:
             data = _read_json(directory / SITES_FILE)
