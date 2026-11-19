@@ -19,7 +19,7 @@ function harness(home, unavailable) {
   let injected = 0;
   const runtime = {
     id: "abc", getURL: (name) => "chrome-extension://abc/" + name,
-    onInstalled: event("installed"), onStartup: event("startup"), onMessage: event("message"),
+    onInstalled: event("installed"), onStartup: event("startup"), onMessage: event("message"), onConnect: event("connect"),
     sendNativeMessage(host, message, callback) {
       launches++;
       assert.equal(host, "com.pastex.native");
@@ -42,7 +42,7 @@ function harness(home, unavailable) {
   };
   const context = vm.createContext({
     chrome: {
-      runtime,
+      runtime, storage: { session: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
       scripting: {
         getRegisteredContentScripts: async () => registered,
         unregisterContentScripts: async () => { registered = []; },
@@ -54,7 +54,7 @@ function harness(home, unavailable) {
       action: { onClicked: event("action") },
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
-    setTimeout, clearTimeout, URL, console: { warn() {} },
+    crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL, console: { warn() {} },
   });
   context.self = context;
   context.importScripts = (...names) => {
@@ -117,10 +117,13 @@ test("site registration and on-demand injection are limited to configured sites"
     });
     assert.equal((await allowedMessage("https://allowed.example/path")).allowed, true);
     assert.equal((await allowedMessage("https://blocked.example/")).allowed, false);
+    const configDir = path.join(home, ".config", "pastex");
+    fs.writeFileSync(path.join(configDir, "google-drive.json"), JSON.stringify({ folder_id: "root" }));
+    fs.writeFileSync(path.join(configDir, "service-account.json"), JSON.stringify({ type: "service_account", client_email: "test@example.com", private_key: "key" }));
     let loads = 0;
     browser.context.PastexLibrary.load = async () => {
       loads++;
-      return { tree: [{ id: "drive-id", kind: "text", name: "Drive snippet", text: "from Drive" }] };
+      return { tree: [{ id: "drive-id", kind: "text", name: "Drive snippet", text: "from Drive" }], session: { rootId: "root" }, warnings: [] };
     };
     const libraryMessage = (url) => new Promise((resolve) => {
       assert.equal(browser.listeners.message({ type: "pastex-get-library" }, { tab: { id: 1 }, url }, resolve), true);
@@ -166,4 +169,51 @@ test("only the extension panel can request a site registration reload", async ()
     assert.equal(response.ok, true);
     assert.deepEqual(Array.from(browser.registered[0].matches), ["https://allowed.example/*"]);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("panel and allowed picker share cached data; writes require panel and invalidate it", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-cache-worker-"));
+  try {
+    const browser = harness(home, false);
+    browser.listeners.installed(); await new Promise(setImmediate);
+    fs.writeFileSync(path.join(home, ".config", "pastex", "sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    browser.context.PastexNative.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+    let text = "old", loads = 0;
+    browser.context.PastexLibrary.load = async () => ({ tree: [{ id: "item", kind: "text", name: "Item", text: text }], session: { rootId: "root" }, warnings: [], sequence: ++loads });
+    browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
+    browser.context.PastexDrive.updateText = async (token, id, value) => { assert.equal(id, "item"); text = value; };
+    const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+    const page = { id: "abc", tab: { id: 1 }, url: "https://allowed.example/" };
+    function send(message, sender) { return new Promise((resolve) => browser.listeners.message(message, sender, resolve)); }
+    assert.equal((await send({ type: "pastex-panel-library" }, panel)).result.tree[0].text, "old");
+    assert.equal((await send({ type: "pastex-get-library" }, page)).tree[0].text, "old");
+    assert.equal(loads, 1);
+    assert.equal((await send({ type: "pastex-panel-mutate", command: {} }, page)).ok, false);
+    const command = { action: "save", mode: "edit-text", rootId: "root", parentId: "root", name: "Item", text: "new", node: { id: "item", name: "Item", driveName: "Item.txt", kind: "text", text: "old" } };
+    assert.equal((await send({ type: "pastex-panel-mutate", command }, panel)).ok, true);
+    assert.equal((await send({ type: "pastex-get-library" }, page)).tree[0].text, "new");
+    assert.equal(loads, 2);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("worker handles create, rename, order and bulk trash with Drive, denying changed roots", async () => {
+  const browser = harness(os.tmpdir(), true);
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
+  const drive = browser.context.PastexDrive;
+  const writes = [];
+  drive.listChildren = async () => [];
+  drive.createFolder = async (t, name, parent) => { writes.push(["folder", name, parent]); return "f"; };
+  drive.uploadNew = async (t, parent, name, text) => { writes.push(["new", parent, name, text]); return { id: "n" }; };
+  drive.renameFile = async (t, id, name) => { writes.push(["rename", id, name]); };
+  drive.trashFile = async (t, id) => { writes.push(["trash", id]); };
+  drive.setOrder = async (t, id, order) => { writes.push(["order", id, order]); };
+  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
+  assert.equal((await send({ rootId: "root", action: "save", mode: "new-folder", name: "Folder", parentId: "root" })).result.id, "f");
+  assert.equal((await send({ rootId: "root", action: "save", mode: "new-text", name: "Note", text: "text", parentId: "root" })).result.id, "n");
+  assert.equal((await send({ rootId: "root", action: "save", mode: "rename-text", name: "Renamed", parentId: "root", node: { id: "n", kind: "text", name: "Note", driveName: "Note.txt" } })).ok, true);
+  assert.equal((await send({ rootId: "root", action: "reorder", groups: [["n", "f"]] })).ok, true);
+  assert.equal((await send({ rootId: "root", action: "delete", ids: ["n", "f"] })).ok, true);
+  assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
+  assert.deepEqual(writes, [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"], ["order", "n", 0], ["order", "f", 1], ["trash", "n"], ["trash", "f"]]);
 });

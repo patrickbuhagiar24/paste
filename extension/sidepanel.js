@@ -9,9 +9,7 @@
   "use strict";
 
   var Store = window.PastexStore;
-  var Drive = window.PastexDrive;
   var Native = window.PastexNative;
-  var Library = window.PastexLibrary;
 
   var tree = [];
   var settings = { collapsed: [] };
@@ -21,8 +19,14 @@
   var query = "";
   var searchTimer = 0;
   var busy = false;
+  var loading = false;
   var refreshRequested = false;
   var progressTimer = 0;
+  var fromCache = false;
+  var configVersion = 0;
+  var loadConfigVersion = 0;
+  var selecting = false;
+  var selectedItems = new Set();
 
   function $(id) {
     return document.getElementById(id);
@@ -63,7 +67,7 @@
     button.className = "mini";
     button.title = title;
     button.textContent = text;
-    if (busy && title !== "Insert into page") button.disabled = true;
+    if (busy) button.disabled = true;
     button.addEventListener("click", function (event) {
       event.stopPropagation();
       onClick();
@@ -73,8 +77,9 @@
 
   function renderRow(node, depth, host) {
     var row = document.createElement("div");
-    row.className = "row" + (node.id === selectedId ? " selected" : "");
+    row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
     row.setAttribute("role", "treeitem");
+    if (selecting) row.setAttribute("aria-selected", String(selectedItems.has(node.id)));
     row.style.paddingLeft = 4 + depth * 2 + "px";
 
     var toggle = document.createElement("span");
@@ -84,35 +89,48 @@
 
     var label = document.createElement("span");
     label.className = "label";
-    label.textContent = (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
+    label.textContent = (selecting ? (selectedItems.has(node.id) ? "☑ " : "☐ ") : "") + (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
     label.title = node.loadError || esc(node.name);
     row.appendChild(label);
 
-    if (node.kind === "text") {
-      row.appendChild(
-        miniButton("Insert into page", "⚡", function () {
-          insertNode(node);
-        })
-      );
-    }
-    row.appendChild(
-      miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
+    if (!selecting) {
+      row.appendChild(miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
         openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
-      })
-    );
-    row.appendChild(
-      miniButton("Delete", "🗑", function () {
-        deleteNode(node);
-      })
-    );
+      }));
+      row.appendChild(miniButton("Delete", "🗑", function () { deleteNodes([node]); }));
+    }
+    if (selecting && node.kind === "folder") {
+      toggle.title = "Expand or collapse folder";
+      toggle.setAttribute("role", "button");
+      toggle.setAttribute("aria-label", toggle.title);
+      toggle.tabIndex = 0;
+      function toggleFolder(event) {
+        event.stopPropagation();
+        setCollapsed(node.id, !isCollapsed(node.id));
+        render();
+      }
+      toggle.addEventListener("click", toggleFolder);
+      toggle.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleFolder(event); }
+      });
+    }
 
-    row.addEventListener("click", function () {
-      if (node.kind === "folder") {
+    function activateRow() {
+      if (selecting) {
+        toggleSelection(node.id);
+      } else if (node.kind === "folder") {
         setCollapsed(node.id, !isCollapsed(node.id));
         render();
       } else {
         selectNode(node.id);
         insertNode(node);
+      }
+    }
+    row.tabIndex = 0;
+    row.addEventListener("click", activateRow);
+    row.addEventListener("keydown", function (event) {
+      if (event.target === row && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault(); activateRow();
       }
     });
     host.appendChild(row);
@@ -133,24 +151,28 @@
     var host = $("tree");
     matches.forEach(function (node) {
       var row = document.createElement("div");
-      row.className = "row" + (node.id === selectedId ? " selected" : "");
+      row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
       var icon = document.createElement("span");
       icon.className = "toggle";
       icon.textContent = "📄";
       row.appendChild(icon);
       var label = document.createElement("span");
       label.className = "label";
-      label.textContent = (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
+      label.textContent = (selecting ? (selectedItems.has(node.id) ? "☑ " : "☐ ") : "") + (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
       label.title = node.loadError || esc(node.name);
       row.appendChild(label);
-      row.appendChild(
-        miniButton("Insert into page", "⚡", function () {
-          insertNode(node);
-        })
-      );
-      row.addEventListener("click", function () {
-        selectNode(node.id);
-        insertNode(node);
+      function activateResult() {
+        if (selecting) toggleSelection(node.id);
+        else { selectNode(node.id); insertNode(node); }
+      }
+      row.setAttribute("role", "treeitem");
+      if (selecting) row.setAttribute("aria-selected", String(selectedItems.has(node.id)));
+      row.tabIndex = 0;
+      row.addEventListener("click", activateResult);
+      row.addEventListener("keydown", function (event) {
+        if (event.target === row && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault(); activateResult();
+        }
       });
       host.appendChild(row);
     });
@@ -176,6 +198,23 @@
       }
     }
     renderPreview();
+    renderSelectionActions();
+  }
+
+  function toggleSelection(id) {
+    if (selectedItems.has(id)) selectedItems.delete(id);
+    else selectedItems.add(id);
+    render();
+  }
+
+  function renderSelectionActions() {
+    $("selection-actions").hidden = !selecting;
+    $("btn-select").setAttribute("aria-pressed", String(selecting));
+    $("btn-select").textContent = selecting ? "Done" : "Select";
+    $("selection-count").textContent = selectedItems.size + " selected";
+    $("btn-up").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, -1).length;
+    $("btn-down").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, 1).length;
+    $("btn-delete-selected").disabled = busy || !ready || !selectedItems.size;
   }
 
   function selectNode(id) {
@@ -192,58 +231,76 @@
     var isText = !!node && node.kind === "text";
     $("preview-title").textContent = node ? esc(node.name) : "Select a snippet.";
     $("preview").textContent = node && node.loadError ? "Could not read from Drive: " + node.loadError : (isText ? node.text || "" : "");
-    $("btn-insert").disabled = !isText || !!node.loadError;
-    $("btn-edit").disabled = busy || !isText || !!node.loadError;
+    $("btn-edit").disabled = selecting || busy || !isText || !!node.loadError;
   }
 
   function renderDriveBar() {
-    $("drive-status").textContent = busy ? "Drive: loading…" : (ready ? "Google Drive connected" : "Google Drive unavailable");
+    $("drive-status").textContent = busy ? "Drive: loading…" : (ready ? (fromCache ? "Google Drive • session cache" : "Google Drive connected") : "Google Drive unavailable");
     $("btn-sync").disabled = busy;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
     $("btn-empty-text").disabled = busy || !ready;
   }
 
-  async function refresh() {
+  function onProgress(partial, id) {
+    if (!loading || loadConfigVersion !== configVersion) return;
+    tree = partial;
+    rootId = id;
+    ready = true;
+    if (!progressTimer) progressTimer = window.setTimeout(function () {
+      progressTimer = 0;
+      render();
+      setStatus("Loading Google Drive… " + Store.flatten(tree).length + " snippets found.");
+    }, 100);
+  }
+
+  try {
+    var progressPort = chrome.runtime.connect({ name: "pastex-library-progress" });
+    progressPort.onMessage.addListener(function (message) { onProgress(message.tree, message.rootId); });
+  } catch (ignored) { /* Loading still works without live progress. */ }
+
+  async function refresh(force) {
     if (busy) { refreshRequested = true; return false; }
+    var previous = { tree: tree, rootId: rootId, ready: ready, cached: fromCache };
     busy = true;
+    loading = true;
+    loadConfigVersion = configVersion;
     renderDriveBar();
     render();
-    setStatus("Loading snippets from Google Drive…");
+    setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
     try {
-      var result = await Library.load(Native, Drive, function (partial, session) {
-        tree = partial;
-        rootId = session.rootId;
-        ready = true;
-        if (!progressTimer) progressTimer = window.setTimeout(function () {
-          progressTimer = 0;
-          render();
-          setStatus("Loading Google Drive… " + Store.flatten(tree).length + " snippets found.");
-        }, 100);
-      });
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library", force: !!force });
+      if (loadConfigVersion !== configVersion) return false;
+      if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
+      var result = response.result;
       tree = result.tree;
-      rootId = result.session.rootId;
+      rootId = result.rootId;
+      fromCache = result.cached;
       ready = true;
       if (selectedId && !Store.findById(tree, selectedId)) selectedId = "";
+      selectedItems.forEach(function (id) { if (!Store.findById(tree, id)) selectedItems.delete(id); });
       render();
       var warnings = result.warnings || [];
       setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        "Google Drive loaded: " + Store.flatten(tree).length + " snippets.");
+        (fromCache ? "Session cache: " : "Google Drive loaded: ") + Store.flatten(tree).length + " snippets.");
       return true;
     } catch (err) {
-      tree = [];
-      rootId = "";
-      ready = false;
-      selectedId = "";
+      if (loadConfigVersion !== configVersion) return false;
+      if (/HTTP (401|403|404)\b|invalid_grant|service-account\.json|google-drive\.json/i.test(err.message || "")) {
+        tree = []; rootId = ""; ready = false; fromCache = false;
+      } else {
+        tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
+      }
       render();
-      setStatus("Could not load Google Drive: " + (err.message || err));
+      setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
       return false;
     } finally {
+      loading = false;
       if (progressTimer) { window.clearTimeout(progressTimer); progressTimer = 0; }
       busy = false;
       renderDriveBar();
       render();
-      if (refreshRequested) { refreshRequested = false; refresh(); }
+      if (refreshRequested) { refreshRequested = false; refresh(true); }
     }
   }
 
@@ -341,20 +398,6 @@
     $("editor-overlay").hidden = true;
   }
 
-  async function currentSession() {
-    if (!ready) throw new Error("Load Google Drive first.");
-    var session = await Library.connect(Native, Drive);
-    if (session.rootId !== rootId) throw new Error("Drive folder changed; refresh the list first.");
-    return session;
-  }
-
-  async function ensureAvailable(session, parentId, name, exceptId) {
-    var children = await Drive.listChildren(session.token, parentId);
-    if (children.some(function (child) { return child.name === name && child.id !== exceptId; })) {
-      throw new Error("An item with that name already exists in this folder.");
-    }
-  }
-
   function parentOf(nodes, id, parentId) {
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].id === id) return parentId;
@@ -366,66 +409,55 @@
     return "";
   }
 
+  async function runMutation(command) {
+    if (busy || !ready) return null;
+    busy = true;
+    renderDriveBar();
+    render();
+    setStatus("Saving changes to Google Drive…");
+    var result = null, failure = "";
+    try {
+      command.rootId = rootId;
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-mutate", command: command });
+      if (!response || !response.ok) throw new Error((response && response.error) || "Drive operation failed.");
+      result = response.result;
+    } catch (err) {
+      failure = "Drive operation failed (some changes may have succeeded): " + (err.message || err);
+    } finally { busy = false; }
+    await refresh(true);
+    if (failure) setStatus(failure);
+    return result;
+  }
+
   async function saveEditor() {
     var name = $("editor-name").value.trim();
-    if (!name || name.indexOf("/") !== -1) {
-      setStatus("Enter a name without /.");
-      return;
-    }
+    if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /."); return; }
     if (busy) return;
     var mode = editorMode;
     var node = Store.findById(tree, editorNodeId);
     var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
     if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
-      setStatus("That item or folder is no longer available; refresh first.");
-      return;
+      setStatus("That item or folder is no longer available; refresh first."); return;
     }
-    busy = true;
-    renderDriveBar();
-    setStatus("Saving to Google Drive…");
-    var failure = "";
-    try {
-      var session = await currentSession();
-      var driveName = mode === "new-text" ? name.replace(/\.txt$/i, "") + ".txt" : name;
-      if (node && node.kind === "text") driveName = name.replace(/\.txt$/i, "") + (/\.txt$/i.test(node.driveName || "") ? ".txt" : "");
-      if (!node || driveName !== node.driveName && driveName !== node.name) {
-        await ensureAvailable(session, parentId, driveName, node && node.id);
-      }
-      if (mode === "new-folder") selectedId = await Drive.createFolder(session.token, name, parentId);
-      else if (mode === "new-text") {
-        var created = await Drive.uploadNew(session.token, parentId, name.replace(/\.txt$/i, ""), $("editor-text").value);
-        selectedId = created.id;
-      } else {
-        if (mode === "edit-text" && $("editor-text").value !== node.text) {
-          await Drive.updateText(session.token, node.id, $("editor-text").value);
-        }
-        if (driveName !== (node.driveName || node.name)) await Drive.renameFile(session.token, node.id, driveName);
-      }
-      closeEditor();
-    } catch (err) {
-      failure = "Could not save to Drive (some changes may have succeeded): " + (err.message || err);
-    } finally {
-      busy = false;
-    }
-    await refresh();
-    if (failure) setStatus(failure);
+    var result = await runMutation({ action: "save", mode: mode, name: name, node: node,
+      parentId: parentId, text: $("editor-text").value });
+    if (result) { selectedId = result.id || ""; closeEditor(); render(); }
   }
 
-  async function deleteNode(node) {
-    var what = node.kind === "folder" ? 'folder "' + node.name + '" and everything inside it' : 'snippet "' + node.name + '"';
-    if (!window.confirm("Move " + what + " to Google Drive trash?")) return;
-    if (busy) return;
-    busy = true;
-    renderDriveBar();
-    var failure = "";
-    try {
-      var session = await currentSession();
-      await Drive.trashFile(session.token, node.id);
-      if (selectedId === node.id) selectedId = "";
-    } catch (err) { failure = "Could not delete from Drive: " + (err.message || err); }
-    finally { busy = false; }
-    await refresh();
-    if (failure) setStatus(failure);
+  async function deleteNodes(nodes) {
+    if (!nodes.length || busy) return;
+    var hasFolder = nodes.some(function (node) { return node.kind === "folder"; });
+    if (!window.confirm("Move " + nodes.length + " selected item(s)" +
+        (hasFolder ? " (including all contents of selected folders)" : "") + " to Google Drive trash?")) return;
+    var result = await runMutation({ action: "delete", ids: nodes.map(function (node) { return node.id; }) });
+    if (result) { selectedId = ""; selectedItems.clear(); render(); }
+  }
+
+  async function moveSelected(direction) {
+    if (busy || query) return;
+    var groups = Store.reorderGroups(tree, selectedItems, direction);
+    if (!groups.length) return;
+    await runMutation({ action: "reorder", groups: groups });
   }
 
   // --- configuration import (one explicit file at a time) ---
@@ -449,7 +481,13 @@
         }
         $("config-status").textContent = destination + " imported. " +
           (destination === "sites.json" ? "Reload open pages to apply." : "Reloading Drive…");
-        if (destination !== "sites.json") refresh();
+        if (destination !== "sites.json") {
+          configVersion++;
+          tree = []; rootId = ""; ready = false; fromCache = false;
+          selectedId = ""; selectedItems.clear();
+          render(); renderDriveBar();
+          refresh(true);
+        }
       } catch (err) {
         $("config-status").textContent = "Import failed: " + (err.message || err);
       } finally {
@@ -489,15 +527,17 @@
     openEditor("new-text", null);
   });
 
-  $("btn-sync").addEventListener("click", function () {
-    refresh();
+  $("btn-sync").addEventListener("click", function () { refresh(true); });
+  $("btn-select").addEventListener("click", function () {
+    selecting = !selecting;
+    selectedItems.clear();
+    if (selecting && query) setStatus("Clear search to reorder items.");
+    render();
   });
-
-  $("btn-insert").addEventListener("click", function () {
-    var node = selectedNode();
-    if (node && node.kind === "text") {
-      insertNode(node);
-    }
+  $("btn-up").addEventListener("click", function () { moveSelected(-1); });
+  $("btn-down").addEventListener("click", function () { moveSelected(1); });
+  $("btn-delete-selected").addEventListener("click", function () {
+    deleteNodes(Store.selectedRoots(tree, selectedItems));
   });
 
   $("btn-edit").addEventListener("click", function () {
@@ -514,7 +554,7 @@
       closeEditor();
     }
   });
-  // Re-read Drive on opening the panel or using the refresh button.
+  // Use the shared session cache on open; explicit refresh reloads Drive.
   renderDriveBar();
-  refresh();
+  refresh(false);
 })();

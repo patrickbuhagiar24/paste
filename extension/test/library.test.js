@@ -66,3 +66,15 @@ test("Drive tree is reported progressively with bounded parallel downloads", asy
   assert.equal(result.tree[8].text, "content 8");
   assert.equal(max, 6);
 });
+
+test("Drive tree respects persistent item properties, then Drive order for unranked items", async () => {
+  const drive = fakeDrive();
+  drive.listChildren = async () => [
+    { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
+    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
+    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
+  ];
+  drive.downloadText = async (token, id) => id;
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
+});

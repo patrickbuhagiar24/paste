@@ -41,6 +41,7 @@ def test_manifest_permissions_are_minimal_and_documented():
         "activeTab",
         "clipboardWrite",
         "nativeMessaging",
+        "storage",
     }
     # Broad host permissions enable dynamic registration for user-chosen sites;
     # content scripts themselves are registered only for the allowlist.
@@ -70,17 +71,20 @@ def test_picker_has_no_shortcut_escape_handler_or_context_menu():
     assert "togglePicker();" in (EXT / "content.js").read_text(encoding="utf-8")
 
 
-def test_snippet_data_is_not_persisted_in_browser_storage():
+def test_snippet_cache_is_session_only_and_mutations_stay_in_drive():
     manifest = _manifest()
-    assert "storage" not in manifest["permissions"]
-    for name in ("store.js", "sidepanel.js", "content.js", "background.js"):
-        source = (EXT / name).read_text(encoding="utf-8")
-        assert "chrome.storage" not in source
-        assert "pastex.tree.v1" not in source
-    panel = (EXT / "sidepanel.js").read_text(encoding="utf-8")
-    assert "Library.load(Native, Drive," in panel
-    assert "Drive.uploadNew" in panel and "Drive.updateText" in panel
-    assert "Drive.trashFile" in panel
+    assert "storage" in manifest["permissions"]
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    cache = (EXT / "cache.js").read_text(encoding="utf-8")
+    assert "chrome.storage.session" in background
+    assert "storage.local" not in background + cache
+    assert "storage.sync" not in background + cache
+    assert "libraryCache.mutate" in background
+    assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background
+    assert "PastexDrive.trashFile" in background and "PastexDrive.setOrder" in background
+    panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    assert 'id="btn-insert"' not in panel
+    assert 'id="selection-actions"' in panel
 
 
 def test_manifest_icons_exist_and_match_sizes():

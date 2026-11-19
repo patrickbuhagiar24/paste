@@ -56,8 +56,8 @@
     return false;
   }
 
-  // Request the current Drive library from the background worker; snippet
-  // contents are never written to browser storage.
+  // Request the session-cached Drive library from the background worker.
+  // The worker rechecks both the site allowlist and current configuration.
   async function loadTree() {
     var response = await chrome.runtime.sendMessage({ type: "pastex-get-library" });
     if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
