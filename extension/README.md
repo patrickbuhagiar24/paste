@@ -49,7 +49,7 @@ and all subdomains. HTTP and HTTPS are separate; matching includes any port.
 If the file is malformed, contains an invalid entry, or the native host is
 unavailable, no sites are enabled. The extension requests access to HTTP/HTTPS
 in Chrome so it can register your chosen sites dynamically; it registers its
-content script and context menu only for the configured origins.
+content script only for the configured origins.
 
 **After changing sites.json, completely restart the browser and reload open
 tabs.** Already-open tabs can retain an earlier injected script until reloaded.
@@ -99,11 +99,12 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. On an allowed site, focus an editable field and press `Ctrl+Shift+V`,
-click the floating lightning button, or use the editable-field context menu.
-Click a side-panel snippet to insert it. If no editable field is focused on an
-allowed page, it is copied to the clipboard. Restricted browser pages cannot
-receive scripts. Sites not listed in `sites.json` are not injected or targeted.
+snippets. On an allowed site, focus an editable field and click the floating
+**⚡** button to open the picker; click it again to close the picker. There is
+no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
+to insert it. If no editable field is focused on an allowed page, it is copied
+to the clipboard. Restricted browser pages cannot receive scripts. Sites not
+listed in `sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
@@ -134,7 +135,7 @@ for testing only. Verify with `python3 scripts/pack-crx.py --verify FILE.crx`.
 An enterprise administrator may configure `ExtensionInstallForcelist` with
 an update manifest; the package does not silently force-install extensions.
 
-Permissions: `sidePanel`, `contextMenus`, `scripting` and `activeTab` provide
+Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site picker;
 `clipboardWrite` is the fallback on approved sites; `nativeMessaging` reads
 the config files. HTTP/HTTPS host permission covers dynamic user-approved sites

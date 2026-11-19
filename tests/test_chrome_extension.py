@@ -37,7 +37,6 @@ def test_manifest_permissions_are_minimal_and_documented():
     manifest = _manifest()
     assert set(manifest["permissions"]) == {
         "sidePanel",
-        "contextMenus",
         "scripting",
         "activeTab",
         "clipboardWrite",
@@ -55,8 +54,20 @@ def test_manifest_entry_points_exist():
     assert "options_page" not in manifest
     assert "content_scripts" not in manifest
     assert (EXT / "sites.js").is_file()
-    assert "toggle-picker" in manifest["commands"]
+    assert "commands" not in manifest
     assert manifest["action"]["default_title"]
+
+
+def test_picker_has_no_shortcut_escape_handler_or_context_menu():
+    manifest = _manifest()
+    assert "commands" not in manifest
+    assert "contextMenus" not in manifest["permissions"]
+    for name in ("background.js", "content.js", "sidepanel.js"):
+        source = (EXT / name).read_text(encoding="utf-8")
+        assert '"Escape"' not in source
+        assert "Ctrl+Shift+V" not in source
+        assert "pastex-toggle-picker" not in source
+    assert "togglePicker();" in (EXT / "content.js").read_text(encoding="utf-8")
 
 
 def test_snippet_data_is_not_persisted_in_browser_storage():

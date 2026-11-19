@@ -23,14 +23,6 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "permissions": ["sidePanel", "contextMenus", "scripting", "activeTab", "clipboardWrite", "nativeMessaging"],
-  "host_permissions": ["http://*/*", "https://*/*"],
-  "commands": {
-    "toggle-picker": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+V"
-      },
-      "description": "Open the snippet picker here"
-    }
-  }
+  "permissions": ["sidePanel", "scripting", "activeTab", "clipboardWrite", "nativeMessaging"],
+  "host_permissions": ["http://*/*", "https://*/*"]
 }

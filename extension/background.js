@@ -1,8 +1,7 @@
 /* Pastex background service worker (Manifest V3).
  *
  *  - Toolbar click opens the Side Panel.
- *  - Ctrl+Shift+V (command "toggle-picker") opens the in-page picker.
- *  - The "Paste snippet" context menu opens the Drive picker.
+ *  - The in-page ⚡ button opens the Drive picker on approved sites.
  *  - Content scripts are injected on demand for tabs that were already
  *    open when the extension was installed or updated.
  */
@@ -17,7 +16,7 @@ async function allowedSitePatterns() {
 }
 
 // Register only user-approved origins. Empty or invalid configuration and
-// native host errors are fail-closed: no scripts or menus are registered.
+// native host errors are fail-closed: no scripts are registered.
 async function configureSites() {
   var patterns = [];
   PastexNative.resetCache();
@@ -34,10 +33,7 @@ async function configureSites() {
       runAt: "document_idle", persistAcrossSessions: false,
     }]);
   }
-  await rebuildContextMenu(patterns);
 }
-
-var MENU_ROOT = "pastex-insert-root";
 
 function activeTab() {
   return chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
@@ -63,21 +59,6 @@ async function messageTab(tabId, message) {
   }
 }
 
-async function togglePickerInActiveTab() {
-  var tab = await activeTab();
-  if (!tab) {
-    return;
-  }
-  try {
-    await messageTab(tab.id, { type: "pastex-toggle-picker" });
-  } catch (err) {
-    // Restricted pages (chrome://, Web Store): fall back to the Side Panel.
-    if (tab.windowId !== undefined) {
-      await chrome.sidePanel.open({ windowId: tab.windowId }).catch(function () {});
-    }
-  }
-}
-
 async function insertIntoActiveTab(id, text) {
   var tab = await activeTab();
   if (!tab) {
@@ -91,16 +72,6 @@ async function insertIntoActiveTab(id, text) {
   }
 }
 
-// --- context menu for the configured sites ---
-async function rebuildContextMenu(patterns) {
-  try { await chrome.contextMenus.removeAll(); } catch (ignored) {}
-  if (!patterns.length) return;
-  chrome.contextMenus.create({
-    id: MENU_ROOT, title: "Browse Pastex snippets", contexts: ["editable"],
-    documentUrlPatterns: patterns,
-  });
-}
-
 // --- events ---
 
 function initializeUserConfig() {
@@ -111,21 +82,6 @@ function initializeUserConfig() {
 
 chrome.runtime.onInstalled.addListener(initializeUserConfig);
 chrome.runtime.onStartup.addListener(initializeUserConfig);
-
-chrome.contextMenus.onClicked.addListener(async function (info, tab) {
-  if (info.menuItemId !== MENU_ROOT || !tab) return;
-  try {
-    await messageTab(tab.id, { type: "pastex-toggle-picker" });
-  } catch (err) {
-    console.warn("Pastex picker unavailable:", err.message);
-  }
-});
-
-chrome.commands.onCommand.addListener(function (command) {
-  if (command === "toggle-picker") {
-    togglePickerInActiveTab();
-  }
-});
 
 chrome.action.onClicked.addListener(async function (tab) {
   if (tab && tab.windowId !== undefined) {

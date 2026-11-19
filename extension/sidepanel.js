@@ -459,12 +459,6 @@
       closeEditor();
     }
   });
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape" && !$("editor-overlay").hidden) {
-      closeEditor();
-    }
-  });
-
   // Re-read Drive on opening the panel or using the refresh button.
   renderDriveBar();
   refresh();

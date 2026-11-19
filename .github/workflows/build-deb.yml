@@ -40,6 +40,9 @@ jobs:
             exit 1
           fi
 
+      - name: Run extension tests
+        run: node extension/test/run.js
+
       - name: Upload the pytest log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -49,13 +52,19 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build the Debian package
+        env:
+          CRX_SIGNING_SECRET: ${{ secrets.PASTEX_CRX_KEY }}
         run: |
-          if [ -n "${{ secrets.PASTEX_CRX_KEY }}" ]; then
-            printf '%s' "${{ secrets.PASTEX_CRX_KEY }}" > "${{ runner.temp }}/pastex-crx-key.pem"
-            chmod 600 "${{ runner.temp }}/pastex-crx-key.pem"
-            echo "PASTEX_CRX_KEY=${{ runner.temp }}/pastex-crx-key.pem" >> "$GITHUB_ENV"
+          set -euo pipefail
+          if [ -n "$CRX_SIGNING_SECRET" ]; then
+            printf '%s' "$CRX_SIGNING_SECRET" > "$RUNNER_TEMP/pastex-crx-key.pem"
+            chmod 600 "$RUNNER_TEMP/pastex-crx-key.pem"
+            export PASTEX_CRX_KEY="$RUNNER_TEMP/pastex-crx-key.pem"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            echo "::error::PASTEX_CRX_KEY is required for deployment; refusing an ephemeral extension ID."
+            exit 1
           else
-            echo "::warning::PASTEX_CRX_KEY is not configured; the .crx gets an ephemeral id (test build)."
+            echo "::warning::PASTEX_CRX_KEY is not configured; using an ephemeral id for this test build."
           fi
           ./scripts/build-deb.sh
 
