@@ -195,3 +195,22 @@ test("driveFetch reports API errors with the message", async () => {
   );
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /File not found: root/);
 });
+
+test("stalled Google responses and body reads time out and abort", async () => {
+  let signal;
+  const hanging = async (url, options) => { signal = options.signal; return new Promise(() => {}); };
+  await assert.rejects(Drive.driveFetch("tok", "/files", { fetchImpl: hanging, timeoutMs: 10 }), /timed out/);
+  assert.equal(signal.aborted, true);
+  const slowBody = async (url, options) => { signal = options.signal; return { ok: true, headers: { get: () => "text/plain" }, text: () => new Promise(() => {}) }; };
+  await assert.rejects(Drive.driveFetch("tok", "/files/x", { fetchImpl: slowBody, timeoutMs: 10 }), /timed out/);
+  assert.equal(signal.aborted, true);
+  const { pem } = await testKeyPair();
+  Drive.clearTokenCache();
+  await assert.rejects(Drive.fetchAccessToken({ client_email: "a@b", private_key: pem }, { subtle, fetchImpl: hanging, timeoutMs: 10 }), /timed out/);
+  assert.equal(signal.aborted, true);
+});
+
+test("Drive pagination rejects a repeated token instead of loading forever", async () => {
+  const fetchImpl = async () => jsonResponse({ files: [], nextPageToken: "same" });
+  await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
+});

@@ -19,14 +19,17 @@ async function allowedSitePatterns() {
 // native host errors are fail-closed: no scripts are registered.
 async function configureSites() {
   var patterns = [];
+  var configError = null;
   PastexNative.resetCache();
   try {
     patterns = await allowedSitePatterns();
   } catch (err) {
     console.warn("Pastex site configuration unavailable:", err.message);
+    configError = err;
   }
   var existing = await chrome.scripting.getRegisteredContentScripts({ ids: [CONTENT_SCRIPT_ID] });
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+  if (configError) throw configError;
   if (patterns.length) {
     await chrome.scripting.registerContentScripts([{
       id: CONTENT_SCRIPT_ID, matches: patterns, js: ["content.js"], css: ["content.css"],
@@ -92,6 +95,16 @@ chrome.action.onClicked.addListener(async function (tab) {
 // Content scripts re-check the current allowlist before showing or using the
 // picker. This also disables an already-open page when its site is removed.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (message && message.type === "pastex-reload-sites") {
+    // Only the extension's own panel can request registration changes.
+    if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("sidepanel.html")) {
+      sendResponse({ ok: false, error: "Unauthorized request." });
+      return false;
+    }
+    configureSites().then(function () { sendResponse({ ok: true }); })
+      .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
+    return true;
+  }
   if (message && message.type === "pastex-site-allowed") {
     allowedSitePatterns().then(function (patterns) {
       sendResponse({ allowed: !!(sender.tab && PastexSites.allows(patterns, sender.url)) });

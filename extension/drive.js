@@ -23,6 +23,25 @@
   var SCOPES = "https://www.googleapis.com/auth/drive";
   var FOLDER_MIME = "application/vnd.google-apps.folder";
   var TEXT_MIME = "text/plain";
+  var REQUEST_TIMEOUT_MS = 20000;
+
+  // Bound both the response and body read. Some connections otherwise leave
+  // the panel on "loading" indefinitely. Abort also releases the socket.
+  async function withTimeout(operation, timeoutMs) {
+    var controller = new AbortController();
+    var timer;
+    var timeout = new Promise(function (_, reject) {
+      timer = setTimeout(function () {
+        reject(new Error("Google request timed out. Check your internet connection and try Refresh."));
+        controller.abort();
+      }, timeoutMs || REQUEST_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([operation(controller.signal), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   var tokenCache = { token: "", expiry: 0 };
 
@@ -159,18 +178,17 @@
     var subtle = subtleCrypto(overrides);
     var assertion = await signJwt(subtle, sa.private_key, claimSet(sa.client_email, nowSec));
     var fetchImpl = overrides.fetchImpl || fetch;
-    var res = await fetchImpl(TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body:
-        "grant_type=" +
-        encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") +
-        "&assertion=" +
-        encodeURIComponent(assertion),
-    });
-    var data = await res.json().catch(function () {
-      return {};
-    });
+    var tokenResult = await withTimeout(async function (signal) {
+      var response = await fetchImpl(TOKEN_URL, {
+        method: "POST", signal: signal,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "grant_type=" + encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") +
+          "&assertion=" + encodeURIComponent(assertion),
+      });
+      return { res: response, data: await response.json().catch(function () { return {}; }) };
+    }, overrides.timeoutMs);
+    var res = tokenResult.res;
+    var data = tokenResult.data;
     if (!res.ok || !data.access_token) {
       throw new Error("token request failed (HTTP " + res.status + "): " + (data.error_description || data.error || "unknown error"));
     }
@@ -195,36 +213,30 @@
     if (options.contentType) {
       headers["Content-Type"] = options.contentType;
     }
-    var res = await fetchImpl(url.toString(), {
-      method: options.method || "GET",
-      headers: headers,
-      body: options.body === undefined ? undefined : options.body,
-    });
-    if (!res.ok) {
-      var text = await res.text().catch(function () {
-        return "";
+    return withTimeout(async function (signal) {
+      var res = await fetchImpl(url.toString(), {
+        method: options.method || "GET", headers: headers, signal: signal,
+        body: options.body === undefined ? undefined : options.body,
       });
-      var detail = text;
-      try {
-        var parsed = JSON.parse(text);
-        if (parsed && parsed.error && parsed.error.message) {
-          detail = parsed.error.message;
-        }
-      } catch (ignored) {
-        /* keep the raw text */
+      if (!res.ok) {
+        var text = await res.text().catch(function () { return ""; });
+        var detail = text;
+        try {
+          var parsed = JSON.parse(text);
+          if (parsed && parsed.error && parsed.error.message) detail = parsed.error.message;
+        } catch (ignored) { /* keep the raw text */ }
+        throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + String(detail).slice(0, 300));
       }
-      throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + String(detail).slice(0, 300));
-    }
-    var contentType = res.headers.get("content-type") || "";
-    if (!options.textResponse && contentType.indexOf("json") !== -1) {
-      return res.json();
-    }
-    return res.text();
+      var contentType = res.headers.get("content-type") || "";
+      if (!options.textResponse && contentType.indexOf("json") !== -1) return res.json();
+      return res.text();
+    }, options.timeoutMs);
   }
 
   async function listChildren(token, folderId, fetchImpl) {
     var files = [];
     var pageToken = "";
+    var seenTokens = new Set();
     do {
       var query = {
         q: "'" + folderId + "' in parents and trashed = false",
@@ -241,6 +253,8 @@
         files.push(file);
       });
       pageToken = data.nextPageToken || "";
+      if (pageToken && seenTokens.has(pageToken)) throw new Error("Drive returned a repeated page token.");
+      if (pageToken) seenTokens.add(pageToken);
     } while (pageToken);
     return files;
   }

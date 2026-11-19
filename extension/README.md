@@ -1,9 +1,9 @@
 # Pastex for Chrome and Chromium
 
 Pastex is a browser extension for text snippets stored directly in Google
-Drive. It operates on **only the sites you choose**. There is no settings
-window: configure Pastex by editing the files below. A working internet
-connection and access to the configured Drive folder are required.
+Drive. It operates on **only the sites you choose**. Configure Pastex by
+editing the files below or importing them from the side panel. A working
+internet connection and access to the configured Drive folder are required.
 
 ## Install
 
@@ -51,8 +51,10 @@ unavailable, no sites are enabled. The extension requests access to HTTP/HTTPS
 in Chrome so it can register your chosen sites dynamically; it registers its
 content script only for the configured origins.
 
-**After changing sites.json, completely restart the browser and reload open
-tabs.** Already-open tabs can retain an earlier injected script until reloaded.
+After editing `sites.json` manually, restart the browser and reload open tabs.
+If imported through **Config** in the side panel, registrations update immediately;
+reload open tabs to load the new script. Already-open tabs can retain an earlier
+injected script until reloaded.
 When upgrading, Chrome may ask you to re-enable the extension because its site
 permissions changed. Insertion requests also check the current file each time,
 so a removed site is denied even before restart.
@@ -71,14 +73,24 @@ so a removed site is denied even before restart.
    ```
 
    A `folder_id` field may be used instead. When both are present, `folder_id`
-   wins; clear it when changing the link. No settings page or browser-storage
-   credential fallback is used. Older browser-storage credentials are not
+   wins; clear it when changing the link. No browser-storage credential fallback
+   is used. Older browser-storage credentials are not
    automatically deleted on upgrade; remove them via Chrome's extension
    storage developer tools if desired, after verifying your file setup.
 4. Open the Pastex side panel. It loads the folder and its `.txt` files from
    Drive automatically; use **↻ Refresh** to reload after external changes.
    The service account key never leaves the machine; only signed authentication
    requests are sent to Google's token endpoint.
+
+Alternatively, click **Config** in the side panel to open an import dialog and
+choose JSON files for the Drive folder, service account and allowed sites. Each
+selection replaces the corresponding file in `~/.config/pastex` (or the XDG
+config directory) only after confirmation and validation. The native host must
+be installed; the browser file chooser does not give the extension unrestricted
+access to your files. The key is not shown, logged, or saved to browser storage.
+Importing Drive configuration starts a reload; reload open tabs after importing
+sites. Changes made manually can be loaded with **↻ Refresh** (restart the
+browser after manually changing sites).
 
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
@@ -117,7 +129,10 @@ listed in `sites.json` are not injected or targeted.
   needs a matching native host manifest and permissions, otherwise it fails
   closed. The extension service-worker console shows native-host errors.
 - If Drive says 404, share the folder with the service account email. Token
-  errors can indicate a malformed key or a disabled Drive API.
+  errors can indicate a malformed key or a disabled Drive API. Snippets appear
+  progressively while loading; a stalled Google request times out and reports
+  an error. Check network access, the folder ID, permissions, and Drive API,
+  then use **↻ Refresh**. Individual unreadable files display a warning.
 - The built-in Chrome Web Store, `chrome://` pages and other browser-protected
   pages cannot run extensions, even if listed.
 
@@ -128,8 +143,8 @@ the Python 3 native host, XDG autostart initialization, and external extension
 and native-host manifests for Chrome and Chromium. `external_crx` registers the
 CRX in `/usr/share/google-chrome/extensions` and `/usr/share/chromium/extensions`.
 
-CRX IDs come from the signing key. Configure a stable `PASTEX_CRX_KEY` for
-release CI and use the same key on every upgrade. Without it, local builds use
+CRX IDs come from the signing key. Configure the `PASTEX_CRX_PRIVATE_KEY` GitHub Actions secret for
+release CI (use `PASTEX_CRX_KEY` as the local build environment variable) and use the same key on every upgrade. Without it, local builds use
 an ephemeral key: the extension ID and browser storage change, and the build is
 for testing only. Verify with `python3 scripts/pack-crx.py --verify FILE.crx`.
 An enterprise administrator may configure `ExtensionInstallForcelist` with

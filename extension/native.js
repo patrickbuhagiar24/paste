@@ -100,6 +100,10 @@
     return send({ type: "pastex-read-sites" });
   }
 
+  function importConfig(name, data) {
+    return send({ type: "pastex-import-config", name: name, data: data });
+  }
+
   function resetCache() {
     unavailableUntil = 0;
   }
@@ -111,6 +115,7 @@
     status: status,
     readConfig: readConfig,
     readSites: readSites,
+    importConfig: importConfig,
     resetCache: resetCache,
   };
 });

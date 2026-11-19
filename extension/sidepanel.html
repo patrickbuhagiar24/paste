@@ -12,6 +12,7 @@
         <button id="btn-folder" title="New folder">＋ Folder</button>
         <button id="btn-text" title="New snippet">＋ Text</button>
         <button id="btn-sync" title="Reload from Google Drive">↻ Refresh</button>
+        <button id="btn-config" title="Import configuration files">Config</button>
       </div>
       <div id="drive-bar" aria-live="polite">
         <span id="drive-status">Drive: not connected.</span>
@@ -48,6 +49,18 @@
           <button id="editor-save">Save</button>
           <button id="editor-cancel">Cancel</button>
         </div>
+      </div>
+    </div>
+    <div id="config-overlay" hidden>
+      <div id="config-dialog" role="dialog" aria-modal="true" aria-labelledby="config-title">
+        <h2 id="config-title">Import configuration</h2>
+        <p>Select a JSON file for each configuration you want to replace. Existing files will be overwritten after confirmation.</p>
+        <label>Google Drive folder (google-drive.json)<input id="import-drive" type="file" accept=".json,application/json" /></label>
+        <label>Service account (service-account.json)<input id="import-account" type="file" accept=".json,application/json" /></label>
+        <label>Allowed sites (sites.json)<input id="import-sites" type="file" accept=".json,application/json" /></label>
+        <p>Keys stay local. Reload open pages after changing allowed sites.</p>
+        <p id="config-status" aria-live="polite"></p>
+        <button id="config-close">Close</button>
       </div>
     </div>
     <footer id="status" aria-live="polite">Ready.</footer>

@@ -39,3 +39,30 @@ test("Drive library reports missing configuration, invalid folder, and fetch err
   offline.listChildren = async () => { throw new Error("permission denied"); };
   await assert.rejects(Library.load(native, offline), /permission denied/);
 });
+
+test("Drive tree is reported progressively with bounded parallel downloads", async () => {
+  const drive = fakeDrive();
+  let active = 0, max = 0;
+  const waiting = [];
+  drive.listChildren = async () => Array.from({ length: 9 }, (_, i) => ({ id: String(i), name: i + ".txt", mimeType: drive.TEXT_MIME }));
+  drive.downloadText = async (token, id) => {
+    active++; max = Math.max(max, active);
+    await new Promise((resolve) => waiting.push(resolve));
+    active--;
+    return "content " + id;
+  };
+  let partial;
+  const loading = Library.load(native, drive, (tree) => { partial = tree; });
+  await new Promise(setImmediate);
+  assert.equal(partial.length, 9);
+  assert.equal(partial[0].loadError, "Loading from Google Drive…");
+  assert.equal(max, 6);
+  waiting.splice(0).forEach((resolve) => resolve());
+  await new Promise(setImmediate);
+  assert.equal(partial[0].text, "content 0");
+  assert.equal(partial[0].loadError, undefined);
+  waiting.splice(0).forEach((resolve) => resolve());
+  const result = await loading;
+  assert.equal(result.tree[8].text, "content 8");
+  assert.equal(max, 6);
+});

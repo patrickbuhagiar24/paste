@@ -21,6 +21,8 @@
   var query = "";
   var searchTimer = 0;
   var busy = false;
+  var refreshRequested = false;
+  var progressTimer = 0;
 
   function $(id) {
     return document.getElementById(id);
@@ -61,6 +63,7 @@
     button.className = "mini";
     button.title = title;
     button.textContent = text;
+    if (busy && title !== "Insert into page") button.disabled = true;
     button.addEventListener("click", function (event) {
       event.stopPropagation();
       onClick();
@@ -190,7 +193,7 @@
     $("preview-title").textContent = node ? esc(node.name) : "Select a snippet.";
     $("preview").textContent = node && node.loadError ? "Could not read from Drive: " + node.loadError : (isText ? node.text || "" : "");
     $("btn-insert").disabled = !isText || !!node.loadError;
-    $("btn-edit").disabled = !isText || !!node.loadError;
+    $("btn-edit").disabled = busy || !isText || !!node.loadError;
   }
 
   function renderDriveBar() {
@@ -202,12 +205,22 @@
   }
 
   async function refresh() {
-    if (busy) return false;
+    if (busy) { refreshRequested = true; return false; }
     busy = true;
     renderDriveBar();
+    render();
     setStatus("Loading snippets from Google Drive…");
     try {
-      var result = await Library.load(Native, Drive);
+      var result = await Library.load(Native, Drive, function (partial, session) {
+        tree = partial;
+        rootId = session.rootId;
+        ready = true;
+        if (!progressTimer) progressTimer = window.setTimeout(function () {
+          progressTimer = 0;
+          render();
+          setStatus("Loading Google Drive… " + Store.flatten(tree).length + " snippets found.");
+        }, 100);
+      });
       tree = result.tree;
       rootId = result.session.rootId;
       ready = true;
@@ -226,8 +239,11 @@
       setStatus("Could not load Google Drive: " + (err.message || err));
       return false;
     } finally {
+      if (progressTimer) { window.clearTimeout(progressTimer); progressTimer = 0; }
       busy = false;
       renderDriveBar();
+      render();
+      if (refreshRequested) { refreshRequested = false; refresh(); }
     }
   }
 
@@ -411,6 +427,45 @@
     await refresh();
     if (failure) setStatus(failure);
   }
+
+  // --- configuration import (one explicit file at a time) ---
+
+  function configureImport(inputId, destination) {
+    $(inputId).addEventListener("change", async function (event) {
+      var input = event.target;
+      var file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        if (file.size > 256 * 1024) throw new Error("File is too large (maximum 256 KB).");
+        var data;
+        try { data = JSON.parse(await file.text()); }
+        catch (err) { throw new Error("The selected file is not valid JSON."); }
+        if (!window.confirm("Replace " + destination + " in your Pastex configuration?")) return;
+        Native.resetCache();
+        await Native.importConfig(destination, data);
+        if (destination === "sites.json") {
+          var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
+          if (!response || !response.ok) throw new Error((response && response.error) || "Could not reload site registration; restart the browser.");
+        }
+        $("config-status").textContent = destination + " imported. " +
+          (destination === "sites.json" ? "Reload open pages to apply." : "Reloading Drive…");
+        if (destination !== "sites.json") refresh();
+      } catch (err) {
+        $("config-status").textContent = "Import failed: " + (err.message || err);
+      } finally {
+        input.value = "";
+      }
+    });
+  }
+
+  $("btn-config").addEventListener("click", function () {
+    $("config-status").textContent = "";
+    $("config-overlay").hidden = false;
+  });
+  $("config-close").addEventListener("click", function () { $("config-overlay").hidden = true; });
+  configureImport("import-drive", "google-drive.json");
+  configureImport("import-account", "service-account.json");
+  configureImport("import-sites", "sites.json");
 
   // --- events ---
 

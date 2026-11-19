@@ -18,6 +18,7 @@ function harness(home, unavailable) {
   let registered = [];
   let injected = 0;
   const runtime = {
+    id: "abc", getURL: (name) => "chrome-extension://abc/" + name,
     onInstalled: event("installed"), onStartup: event("startup"), onMessage: event("message"),
     sendNativeMessage(host, message, callback) {
       launches++;
@@ -145,4 +146,24 @@ test("an unavailable native host does not prevent extension startup", async () =
   browser.listeners.installed();
   await new Promise(setImmediate);
   assert.equal(browser.launches, 1);
+});
+
+test("only the extension panel can request a site registration reload", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-reload-"));
+  try {
+    const browser = harness(home, false);
+    browser.listeners.installed();
+    await new Promise(setImmediate);
+    const file = path.join(home, ".config", "pastex", "sites.json");
+    fs.writeFileSync(file, JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    let denied;
+    assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "https://allowed.example" }, (res) => { denied = res; }), false);
+    assert.equal(denied.ok, false);
+    assert.equal(browser.registered.length, 0);
+    const response = await new Promise((resolve) => {
+      assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "chrome-extension://abc/sidepanel.html" }, resolve), true);
+    });
+    assert.equal(response.ok, true);
+    assert.deepEqual(Array.from(browser.registered[0].matches), ["https://allowed.example/*"]);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

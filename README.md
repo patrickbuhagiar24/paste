@@ -5,9 +5,9 @@ snippets on explicitly allowed sites. Snippets are read and saved directly
 in Google Drive; an internet connection and Drive access are required.
 
 Edit `~/.config/pastex/sites.json` to allow sites, and use
-`google-drive.json` and `service-account.json` for Drive. There is no settings
-window. See [the extension README](extension/README.md) for setup, examples,
-security details, and the required browser restart after changing sites.
+`google-drive.json` and `service-account.json` for Drive. You can also import
+these JSON files using **Config** in the extension side panel. See [the extension
+README](extension/README.md) for setup, examples and security details.
 
 ## Install on Linux Mint through APT only
 
@@ -68,5 +68,5 @@ python3 -m pytest tests/ -q
 ./scripts/build-deb.sh
 ```
 
-Release builds must use a stable `PASTEX_CRX_KEY`; see the extension README.
+Release builds must use a stable `PASTEX_CRX_PRIVATE_KEY` CI secret; see the extension README.
 The legacy desktop application has been removed; it remains in Git history.
