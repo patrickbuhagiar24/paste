@@ -53,7 +53,7 @@ jobs:
 
       - name: Build the Debian package
         env:
-          CRX_SIGNING_SECRET: ${{ secrets.PASTEX_CRX_KEY }}
+          CRX_SIGNING_SECRET: ${{ secrets.PASTEX_CRX_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -n "$CRX_SIGNING_SECRET" ]; then
@@ -61,10 +61,10 @@ jobs:
             chmod 600 "$RUNNER_TEMP/pastex-crx-key.pem"
             export PASTEX_CRX_KEY="$RUNNER_TEMP/pastex-crx-key.pem"
           elif [ "$GITHUB_REF" = refs/heads/main ]; then
-            echo "::error::PASTEX_CRX_KEY is required for deployment; refusing an ephemeral extension ID."
+            echo "::error::PASTEX_CRX_PRIVATE_KEY is required for deployment; refusing an ephemeral extension ID."
             exit 1
           else
-            echo "::warning::PASTEX_CRX_KEY is not configured; using an ephemeral id for this test build."
+            echo "::warning::PASTEX_CRX_PRIVATE_KEY is not configured; using an ephemeral id for this test build."
           fi
           ./scripts/build-deb.sh
 

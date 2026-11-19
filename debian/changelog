@@ -1,3 +1,10 @@
+pastex (2.2.1-1) unstable; urgency=medium
+
+  * Improve Drive loading and configuration import in the side panel.
+  * Use the renamed CRX signing secret for release builds.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 05:00:00 +0000
+
 pastex (2.2.0-1) unstable; urgency=medium
 
   * Read and write snippet libraries directly in Google Drive.

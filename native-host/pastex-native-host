@@ -11,6 +11,7 @@ Requests (responses always carry "ok"):
   {"type": "pastex-status"}                          files present? (no secrets)
   {"type": "pastex-read-config"}                     full SA key + drive config
   {"type": "pastex-read-sites"}                      configured site allowlist
+  {"type": "pastex-import-config", "name": ..., "data": {...}}  import one validated file
 
 Usage:
   pastex-native-host [chrome-extension://<id>/]  # serve Chrome on stdio
@@ -24,6 +25,7 @@ import os
 import re
 import struct
 import sys
+import tempfile
 from pathlib import Path
 
 HOST_NAME = "com.pastex.native"
@@ -164,6 +166,43 @@ def sa_status(directory: Path) -> dict:
     return {"configured": True, "email": email, "error": ""}
 
 
+def import_config(directory: Path, name: str, data) -> None:
+    """Replace one explicitly named config file, after validation, atomically."""
+    if name not in (DRIVE_FILE, SA_FILE, SITES_FILE) or not isinstance(data, dict):
+        raise ValueError("Unsupported configuration file or JSON object")
+    if name == DRIVE_FILE and not resolve_folder_id(data):
+        raise ValueError("google-drive.json needs folder_id or a Drive folder_url")
+    if name == SA_FILE:
+        key = data.get("private_key")
+        if (data.get("type") != "service_account" or not isinstance(data.get("client_email"), str)
+                or not data["client_email"].strip() or not isinstance(key, str)
+                or "-----BEGIN PRIVATE KEY-----" not in key or "-----END PRIVATE KEY-----" not in key):
+            raise ValueError("service-account.json needs a service account email and private key")
+    if name == SITES_FILE:
+        sites = data.get("allowed_sites")
+        if not isinstance(sites, list) or len(sites) > 500:
+            raise ValueError("allowed_sites must be an array of at most 500 origins")
+        for site in sites:
+            match = re.fullmatch(r"(https?)://(?:\*\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)*)/?", site.strip().lower()) if isinstance(site, str) else None
+            if not match or len(match[2]) > 253 or any(len(label) > 63 or label.startswith('-') or label.endswith('-') for label in match[2].split('.')):
+                raise ValueError("sites.json contains an invalid site origin")
+    encoded = json.dumps(data, indent=2, ensure_ascii=True).encode("utf-8") + b"\n"
+    if len(encoded) > 256 * 1024:
+        raise ValueError("Configuration file is too large (maximum 256 KB)")
+    # A fixed allowlist of names avoids path traversal; os.replace does not
+    # follow an existing destination symlink and readers never see partial JSON.
+    fd, temporary = tempfile.mkstemp(prefix=".pastex-import-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, directory / name)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def handle(message: dict, directory: Path) -> dict:
     kind = message.get("type") if isinstance(message, dict) else None
     if kind == "pastex-status":
@@ -173,6 +212,9 @@ def handle(message: dict, directory: Path) -> dict:
             "drive": drive_status(directory),
             "serviceAccount": sa_status(directory),
         }
+    if kind == "pastex-import-config":
+        import_config(directory, message.get("name"), message.get("data"))
+        return {"ok": True}
     if kind == "pastex-read-sites":
         try:
             data = _read_json(directory / SITES_FILE)
@@ -191,6 +233,8 @@ def handle(message: dict, directory: Path) -> dict:
         return {
             "ok": True,
             "configDir": str(directory),
+            "driveError": drive["error"],
+            "serviceAccountError": sa["error"],
             "drive": {"folderId": drive["folderId"], "folderUrl": drive["folderUrl"]} if drive["configured"] else None,
             "serviceAccount": {
                 "client_email": data["client_email"],

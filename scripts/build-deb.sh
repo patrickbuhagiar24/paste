@@ -8,7 +8,7 @@
 #
 # The CRX signing key sets the extension id, so releases must reuse one
 # stable key: pass its path in PASTEX_CRX_KEY (release builds use the
-# PASTEX_CRX_KEY CI secret). Without it an ephemeral key is generated and
+# PASTEX_CRX_PRIVATE_KEY CI secret). Without it an ephemeral key is generated and
 # the build gets a fresh id — fine for testing, not for release.
 set -euo pipefail
 cd "$(dirname "$0")/.."

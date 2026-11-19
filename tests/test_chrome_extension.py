@@ -78,7 +78,7 @@ def test_snippet_data_is_not_persisted_in_browser_storage():
         assert "chrome.storage" not in source
         assert "pastex.tree.v1" not in source
     panel = (EXT / "sidepanel.js").read_text(encoding="utf-8")
-    assert "Library.load(Native, Drive)" in panel
+    assert "Library.load(Native, Drive," in panel
     assert "Drive.uploadNew" in panel and "Drive.updateText" in panel
     assert "Drive.trashFile" in panel
 
@@ -548,3 +548,36 @@ def test_packaging_never_touches_home_directories():
         )
         assert "/home/" not in code, f"{name} touches /home"
         assert "~/.config" not in code, f"{name} writes to user config"
+
+
+def test_native_host_import_validates_and_atomically_replaces_only_config_files(tmp_path):
+    import os
+    account = {"type": "service_account", "client_email": "svc@example.com", "private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"}
+    requests = [
+        {"type": "pastex-import-config", "name": "google-drive.json", "data": {"folder_id": "folder123"}},
+        {"type": "pastex-import-config", "name": "service-account.json", "data": account},
+        {"type": "pastex-import-config", "name": "sites.json", "data": {"allowed_sites": ["https://example.com"]}},
+        {"type": "pastex-read-config"},
+        {"type": "pastex-read-sites"},
+        {"type": "pastex-import-config", "name": "../other", "data": {}},
+        {"type": "pastex-import-config", "name": "sites.json", "data": {"allowed_sites": ["https://*"]}},
+        {"type": "pastex-import-config", "name": "service-account.json", "data": {"type": "service_account"}},
+    ]
+    responses = _run_host(tmp_path, requests)
+    assert all(r["ok"] for r in responses[:5])
+    assert responses[3]["serviceAccount"]["client_email"] == "svc@example.com"
+    assert responses[4]["allowedSites"] == ["https://example.com"]
+    assert all(not r["ok"] for r in responses[5:])
+    config = tmp_path / ".config" / "pastex"
+    assert json.loads((config / "service-account.json").read_text()) == account
+    assert json.loads((config / "sites.json").read_text())["allowed_sites"] == ["https://example.com"]
+    assert all(os.stat(config / name).st_mode & 0o777 == 0o600 for name in ("service-account.json", "sites.json", "google-drive.json"))
+    assert not (tmp_path / ".config" / "other").exists()
+    assert not list(config.glob(".pastex-import-*"))
+
+
+def test_release_requires_new_crx_secret():
+    workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
+    assert "secrets.PASTEX_CRX_PRIVATE_KEY" in workflow
+    assert "secrets.PASTEX_CRX_KEY" not in workflow
+    assert 'elif [ "$GITHUB_REF" = refs/heads/main ]' in workflow

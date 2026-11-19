@@ -7,8 +7,8 @@
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.serviceAccount) throw new Error("Configure service-account.json in ~/.config/pastex.");
-    if (!config.drive || !config.drive.folderId) throw new Error("Configure google-drive.json in ~/.config/pastex.");
+    if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Configure service-account.json in ~/.config/pastex.");
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Configure google-drive.json in ~/.config/pastex.");
     var account = drive.parseServiceAccount(JSON.stringify(config.serviceAccount));
     var token = await drive.fetchAccessToken(account);
     var rootId = config.drive.folderId;
@@ -17,37 +17,60 @@
     return { token: token, rootId: rootId };
   }
 
-  async function loadTree(drive, token, rootId) {
+  // Limit network requests, not recursion: folders can be traversed in
+  // parallel without deadlocking when all workers encounter subfolders.
+  async function loadTree(drive, token, rootId, onUpdate) {
+    var active = 0, waiting = [];
+    function request(fn) {
+      return new Promise(function (resolve, reject) {
+        function run() {
+          active++;
+          Promise.resolve().then(fn).then(resolve, reject).finally(function () {
+            active--;
+            if (waiting.length) waiting.shift()();
+          });
+        }
+        if (active < 6) run(); else waiting.push(run);
+      });
+    }
     var visited = new Set();
-    async function visit(folderId) {
+    var tree = [];
+    function update() { if (onUpdate) onUpdate(tree); }
+    async function visit(folderId, nodes) {
       if (visited.has(folderId)) throw new Error("Drive folder cycle detected.");
       visited.add(folderId);
-      var files = await drive.listChildren(token, folderId);
-      var nodes = [];
-      for (var i = 0; i < files.length; i++) {
-        var file = files[i];
+      var files = await request(function () { return drive.listChildren(token, folderId); });
+      var jobs = [];
+      files.forEach(function (file) {
         if (file.mimeType === drive.FOLDER_MIME) {
           var folder = { id: file.id, kind: "folder", name: file.name, children: [] };
-          try { folder.children = await visit(file.id); }
-          catch (err) { folder.loadError = err.message || String(err); }
           nodes.push(folder);
+          jobs.push(visit(file.id, folder.children).catch(function (err) {
+            folder.loadError = err.message || String(err);
+          }).finally(update));
         } else if ((file.mimeType || "").indexOf("application/vnd.google-apps.") !== 0 &&
                    (file.mimeType === drive.TEXT_MIME || /\.txt$/i.test(file.name || ""))) {
           var node = { id: file.id, kind: "text", name: (file.name || "").replace(/\.txt$/i, ""),
-            driveName: file.name, text: "" };
-          try { node.text = await drive.downloadText(token, file.id); }
-          catch (err) { node.loadError = err.message || String(err); }
+            driveName: file.name, text: "", loadError: "Loading from Google Drive…" };
           nodes.push(node);
+          jobs.push(request(function () { return drive.downloadText(token, file.id); }).then(function (text) {
+            node.text = text;
+            delete node.loadError;
+          }).catch(function (err) { node.loadError = err.message || String(err); }).finally(update));
         }
-      }
-      return nodes;
+      });
+      update();
+      await Promise.all(jobs);
     }
-    return visit(rootId);
+    await visit(rootId, tree);
+    return tree;
   }
 
-  async function load(native, drive) {
+  async function load(native, drive, onUpdate) {
     var session = await connect(native, drive);
-    var tree = await loadTree(drive, session.token, session.rootId);
+    var tree = await loadTree(drive, session.token, session.rootId, function (partial) {
+      if (onUpdate) onUpdate(partial, session);
+    });
     var warnings = [];
     function collect(nodes) {
       nodes.forEach(function (node) {

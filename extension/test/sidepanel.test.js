@@ -18,8 +18,8 @@ class Element {
   select() {}
 }
 
-function panelHarness(fail) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "preview-title", "preview", "btn-insert", "btn-edit", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status"];
+function panelHarness(fail, options = {}) {
+  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "preview-title", "preview", "btn-insert", "btn-edit", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "import-drive", "import-account", "import-sites"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   const records = [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
@@ -32,6 +32,7 @@ function panelHarness(fail) {
     getFolder: async () => { if (fail === true) throw new Error("403 denied"); return { mimeType: "folder" }; },
     listChildren: async (token, parent) => records.filter((r) => r.parent === parent && !r.trashed),
     downloadText: async (token, id) => {
+      if (options.beforeDownload) await options.beforeDownload(id);
       if (fail === "partial" && id === "item1") throw new Error("403 denied");
       return records.find((r) => r.id === id).text;
     },
@@ -41,12 +42,18 @@ function panelHarness(fail) {
     renameFile: async (token, id, name) => { records.find((r) => r.id === id).name = name; },
     trashFile: async (token, id) => { records.find((r) => r.id === id).trashed = true; },
   };
-  const native = { readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }) };
+  const imports = [];
+  const messages = [];
+  const native = {
+    readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }),
+    resetCache() {},
+    importConfig: async (name, data) => { imports.push({ name, data }); },
+  };
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), addEventListener() {} };
-  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, confirm: () => true, setTimeout, clearTimeout };
-  const context = vm.createContext({ document, window, chrome: { runtime: { sendMessage: async () => ({ ok: true }) } }, navigator: { clipboard: { writeText: async () => {} } }, console });
+  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, confirm: () => options.confirm !== false, setTimeout, clearTimeout };
+  const context = vm.createContext({ document, window, chrome: { runtime: { sendMessage: async (message) => { messages.push(message); return { ok: true }; } } }, navigator: { clipboard: { writeText: async () => {} } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
-  return { elements, records, context };
+  return { elements, records, context, imports, messages };
 }
 function allText(el) { return [el.textContent, ...el.children.map(allText)].join(" "); }
 async function settled() { await new Promise(setImmediate); await new Promise(setImmediate); }
@@ -102,4 +109,48 @@ test("side panel creates, edits and trashes files directly in Drive", async () =
   await settled();
   assert.equal(records.find((r) => r.id === "item1").trashed, true);
   assert.doesNotMatch(allText(elements.tree), /Synced/);
+});
+
+test("configuration dialog imports selected JSON and rejects invalid files", async () => {
+  const { elements, imports, messages } = panelHarness(false);
+  await settled();
+  elements["btn-config"].listeners.click();
+  assert.equal(elements["config-overlay"].hidden, false);
+  const input = elements["import-sites"];
+  input.files = [{ size: 30, text: async () => '{"allowed_sites":["https://example.com"]}' }];
+  await input.listeners.change({ target: input });
+  assert.equal(imports[0].name, "sites.json");
+  assert.equal(imports[0].data.allowed_sites[0], "https://example.com");
+  assert.equal(messages.at(-1).type, "pastex-reload-sites");
+  assert.match(elements["config-status"].textContent, /imported/);
+  input.files = [{ size: 10, text: async () => 'bad json' }];
+  await input.listeners.change({ target: input });
+  assert.equal(imports.length, 1);
+  assert.match(elements["config-status"].textContent, /not valid JSON/);
+  elements["config-close"].listeners.click();
+  assert.equal(elements["config-overlay"].hidden, true);
+});
+
+test("configuration import can be canceled without writes", async () => {
+  const { elements, imports } = panelHarness(false, { confirm: false });
+  await settled();
+  const input = elements["import-account"];
+  input.files = [{ size: 2, text: async () => '{}' }];
+  await input.listeners.change({ target: input });
+  assert.equal(imports.length, 0);
+  assert.equal(input.value, "");
+});
+
+test("side panel shows discovered Drive items before downloads finish", async () => {
+  let resume;
+  const waiting = new Promise((resolve) => { resume = resolve; });
+  const { elements } = panelHarness(false, { beforeDownload: () => waiting });
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  assert.match(elements["drive-status"].textContent, /loading/);
+  assert.match(allText(elements.tree), /Synced/);
+  assert.match(allText(elements.tree), /Empty Folder/);
+  assert.match(elements.status.textContent, /snippets found/);
+  resume();
+  await settled();
+  assert.match(elements["drive-status"].textContent, /connected/);
 });
