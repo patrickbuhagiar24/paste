@@ -6,9 +6,11 @@
  *    open when the extension was installed or updated.
  */
 
-importScripts("native.js", "sites.js", "drive.js", "library.js", "cache.js");
+importScripts("sites.js", "config-client.js", "drive.js", "library.js", "cache.js");
 
-var libraryCache = PastexCache.create(PastexNative, PastexDrive, PastexLibrary, chrome.storage.session, crypto);
+var PastexConfig = PastexConfigClient;
+
+var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto);
 var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;
@@ -46,16 +48,15 @@ function clearProgress() {
 var CONTENT_SCRIPT_ID = "pastex-allowed-sites";
 
 async function allowedSitePatterns() {
-  var data = await PastexNative.readSites();
+  var data = await PastexConfig.readSites();
   return PastexSites.parse(data.allowedSites);
 }
 
 // Register only user-approved origins. Empty or invalid configuration and
-// native host errors are fail-closed: no scripts are registered.
+// folder-access errors are fail-closed: no scripts are registered.
 async function configureSites() {
   var patterns = [];
   var configError = null;
-  PastexNative.resetCache();
   try {
     patterns = await allowedSitePatterns();
   } catch (err) {
@@ -114,7 +115,7 @@ async function insertIntoActiveTab(id, text) {
 // and after every write, including partial failures. Only the panel can write.
 async function mutateDrive(command) {
   return libraryCache.mutate(async function () {
-    var session = await PastexLibrary.connect(PastexNative, PastexDrive);
+    var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
     if (!command.rootId || session.rootId !== command.rootId) throw new Error("Drive folder changed; refresh the list first.");
     var token = session.token;
     if (command.action === "save") {

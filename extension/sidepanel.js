@@ -9,7 +9,7 @@
   "use strict";
 
   var Store = window.PastexStore;
-  var Native = window.PastexNative;
+  var Config = window.PastexConfigSource.create(window.PastexHandleStore, window.PastexConfigImport, window.PastexSites);
 
   var tree = [];
   var settings = { collapsed: [] };
@@ -324,7 +324,7 @@
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. See ~/.config/pastex/pastex-sites.json and README.");
+      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration folder.");
       return;
     }
     try {
@@ -460,53 +460,33 @@
     await runMutation({ action: "reorder", groups: groups });
   }
 
-  // --- configuration import from a user-selected source folder ---
+  // --- user-granted configuration folder ---
 
-  $("import-folder").addEventListener("change", async function (event) {
-    var input = event.target;
-    if (!input.files || !input.files.length) return;
-    input.disabled = true;
-    try {
-      var found = await window.PastexConfigImport.discover(input.files);
-      var names = Object.keys(found.files);
-      if (!names.length) throw new Error("No supported configuration files found in the selected folder.");
-      var details = names.map(function (name) {
-        return found.sources[name] === name ? name : found.sources[name] + " → " + name;
-      }).join(", ");
-      var missing = found.missing.length ? "\nNot found (existing files remain unchanged): " + found.missing.join(", ") + "." : "";
-      if (!window.confirm("Import and replace these Pastex configuration files?\n" + details + missing)) {
-        $("config-status").textContent = "Import canceled; no files changed.";
-        return;
-      }
-      Native.resetCache();
-      var result = await Native.importConfigs(found.files);
-      var imported = result.imported || [];
-      var issues = [];
-      if (result.error) issues.push("Import stopped: " + result.error);
-      if (imported.indexOf("pastex-sites.json") !== -1) {
-        try {
-          var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
-          if (!response || !response.ok) throw new Error((response && response.error) || "Site registration failed.");
-        } catch (err) { issues.push("Sites saved but registration failed; restart the browser: " + (err.message || err)); }
-      }
-      if (imported.indexOf("pastex-google-drive.json") !== -1 || imported.indexOf("service-account.json") !== -1) {
-        configVersion++;
-        tree = []; rootId = ""; ready = false; fromCache = false;
-        selectedId = ""; selectedItems.clear();
-        render(); renderDriveBar();
-        refresh(true);
-      }
-      var status = imported.length ? "Imported: " + imported.join(", ") + "." : "No files imported.";
-      if (found.missing.length) status += " Not found (unchanged): " + found.missing.join(", ") + ".";
-      if (imported.indexOf("pastex-sites.json") !== -1) status += " Reload open pages.";
-      if (issues.length) status += " " + issues.join(" ");
-      $("config-status").textContent = status;
-    } catch (err) {
-      $("config-status").textContent = "Import failed: " + (err.message || err);
-    } finally {
-      input.value = "";
-      input.disabled = false;
+  $("choose-folder").addEventListener("click", async function () {
+    if (typeof window.showDirectoryPicker !== "function") {
+      $("config-status").textContent = "This browser does not support selecting a configuration folder.";
+      return;
     }
+    try {
+      // Must be called directly from a user gesture so the browser can grant access.
+      var folder = await window.showDirectoryPicker({ mode: "read" });
+      $("choose-folder").disabled = true;
+      var found = await Config.choose(folder);
+      var issues = [];
+      try {
+        var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
+        if (!response || !response.ok) throw new Error((response && response.error) || "Site registration failed.");
+      } catch (err) { issues.push("Site registration failed; restart the browser: " + (err.message || err)); }
+      configVersion++;
+      tree = []; rootId = ""; ready = false; fromCache = false;
+      selectedId = ""; selectedItems.clear();
+      render(); renderDriveBar();
+      refresh(true);
+      $("config-status").textContent = "Using folder " + folder.name + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
+        (issues.length ? " " + issues.join(" ") : "");
+    } catch (err) {
+      $("config-status").textContent = err.name === "AbortError" ? "Folder selection canceled; configuration unchanged." : "Could not use folder: " + (err.message || err);
+    } finally { $("choose-folder").disabled = false; }
   });
 
   $("btn-config").addEventListener("click", function () {

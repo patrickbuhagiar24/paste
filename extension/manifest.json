@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Pastex",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Text snippets stored in Google Drive, with a Side Panel and an in-page picker.",
-  "minimum_chrome_version": "114",
+  "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -23,6 +23,6 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "permissions": ["sidePanel", "scripting", "activeTab", "clipboardWrite", "nativeMessaging", "storage"],
+  "permissions": ["sidePanel", "scripting", "activeTab", "clipboardWrite", "storage", "offscreen"],
   "host_permissions": ["http://*/*", "https://*/*"]
 }
