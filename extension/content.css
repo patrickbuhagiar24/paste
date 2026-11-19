@@ -1,5 +1,2 @@
-/* Pastex in-page hosts: take no layout space (all UI lives in Shadow DOM). */
-#pastex-float-host,
-#pastex-picker-host {
-  display: contents;
-}
+/* The floating host takes no layout space. */
+#pastex-float-host { display: contents; }

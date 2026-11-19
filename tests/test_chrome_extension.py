@@ -68,7 +68,7 @@ def test_picker_has_no_shortcut_escape_handler_or_context_menu():
         assert '"Escape"' not in source
         assert "Ctrl+Shift+V" not in source
         assert "pastex-toggle-picker" not in source
-    assert "togglePicker();" in (EXT / "content.js").read_text(encoding="utf-8")
+    assert "pastex-open-panel" in (EXT / "content.js").read_text(encoding="utf-8")
 
 
 def test_snippet_cache_is_session_only_and_mutations_stay_in_drive():

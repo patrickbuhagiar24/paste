@@ -52,7 +52,7 @@ cannot load. Some browser variants may not support the folder picker.
 
 After modifying site JSON, choose the folder again to update script registration
 and reload open tabs. Existing tabs may retain a script until reloaded, but
-insertion and picker requests re-check the current allowlist. Changes to Drive
+insertion requests re-check the current allowlist. The in-page launcher checks the allowlist on focus and refreshes that authorization while the field stays focused; it expires after 30 seconds. Changes to Drive
 configuration are picked up on refresh. The service-account key is not logged,
 stored in Chrome storage or displayed; it is read into extension memory and used
 to sign authentication requests to Google.
@@ -60,8 +60,8 @@ to sign authentication requests to Google.
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
 Drive trash. After changes, Pastex reloads the library from Drive. The side
-panel and in-page picker share an in-memory Chrome session cache: reopening
-either does not download the library again, and closing the browser clears the
+panel uses an in-memory Chrome session cache: reopening it does not download
+the library again, and closing the browser clears the
 cache. The cache contains snippet text (not the service-account key) and is
 accessible to the extension, not websites. If the library exceeds Chrome's
 session-storage quota, Pastex falls back to the service worker's memory; the
@@ -98,7 +98,7 @@ needed to keep the same extension identity across upgrades.
 
 Open the side panel with the toolbar icon to create, edit, search and organize
 snippets. On an allowed site, focus an editable field and click the floating
-**⚡** button to open the picker; click it again to close the picker. There is
+**⚡** button to open the Pastex side panel. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
 to insert it; its row has **Rename**, **Edit**, and **Delete** actions. If no editable field is focused on an allowed page, it is copied
 to the clipboard. Restricted browser pages cannot receive scripts. Sites not
@@ -144,7 +144,7 @@ An enterprise administrator may configure `ExtensionInstallForcelist` with
 an update manifest; the package does not silently force-install extensions.
 
 Permissions: `sidePanel`, `scripting` and `activeTab` provide
-the editor and approved-site picker; `storage` provides the temporary session
+the editor and approved-site launcher; `storage` provides the temporary session
 cache; `clipboardWrite` is the fallback on approved sites; `offscreen` reads user-granted folder handles in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites
 and the Google API endpoints; Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

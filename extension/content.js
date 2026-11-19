@@ -1,9 +1,8 @@
 /* Pastex in-page layer: insert snippets at the cursor.
  *
  *  - Tracks the last focused editable (input, textarea, contenteditable).
- *  - Shows a small floating button next to the focused field that opens
- *    the picker at the cursor, on configured sites only.
- *  - The picker is a Shadow DOM popup: page styles cannot leak in or out.
+ *  - Shows a small button next to the focused field to open the side panel,
+ *    on configured sites only.
  *  - Responds to side-panel insertion requests from the background worker.
  */
 
@@ -15,25 +14,14 @@
   }
   window.__pastexContentLoaded = true;
 
-  var MAX_ROWS = 12;
   var BUTTON_HIDE_DELAY_MS = 180;
 
   var lastEditable = null;
   var buttonHost = null;
   var buttonHideTimer = 0;
-  var pickerHost = null;
-  var pickerState = null;
-  var pickerRequest = 0;
-  var pickerOpening = false;
-
-  async function siteAllowed() {
-    try {
-      var response = await chrome.runtime.sendMessage({ type: "pastex-site-allowed" });
-      return !!(response && response.allowed);
-    } catch (err) {
-      return false;
-    }
-  }
+  var capability = "";
+  var authTimer = 0;
+  var focusGeneration = 0;
 
   function isEditable(el) {
     if (!el || el === document.body || el === document.documentElement) {
@@ -54,44 +42,6 @@
       return ["text", "search", "url", "tel", "email", "password", "number"].indexOf(type) !== -1;
     }
     return false;
-  }
-
-  // Request the session-cached Drive library from the background worker.
-  // The worker rechecks both the site allowlist and current configuration.
-  async function loadTree() {
-    var response = await chrome.runtime.sendMessage({ type: "pastex-get-library" });
-    if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
-    return response;
-  }
-
-  function flattenWithPaths(nodes, trail, out) {
-    trail = trail || [];
-    out = out || [];
-    (nodes || []).forEach(function (node) {
-      if (node.kind === "text" && !node.loadError) {
-        out.push({ path: trail.concat(node.name).join("/"), node: node });
-      } else if (node.kind === "folder") {
-        flattenWithPaths(node.children || [], trail.concat(node.name), out);
-      }
-    });
-    return out;
-  }
-
-  function searchEntries(entries, query) {
-    var q = (query || "").trim().toLowerCase();
-    if (!q) {
-      return entries;
-    }
-    var nameHits = [];
-    var bodyHits = [];
-    entries.forEach(function (entry) {
-      if ((entry.node.name || "").toLowerCase().indexOf(q) !== -1) {
-        nameHits.push(entry);
-      } else if ((entry.node.text || "").toLowerCase().indexOf(q) !== -1) {
-        bodyHits.push(entry);
-      }
-    });
-    return nameHits.concat(bodyHits);
   }
 
   // --- text insertion ---
@@ -156,13 +106,16 @@
       ".pastex-float:hover{background:#d3e5fb}";
     var button = document.createElement("button");
     button.className = "pastex-float";
-    button.title = "Paste a Pastex snippet";
+    button.title = "Open Pastex side panel";
     button.textContent = "⚡";
     button.addEventListener("mousedown", function (event) {
       // Mousedown (not click): grabbing focus first would blur the field
       // and move the button away before the click lands.
+      if (!event.isTrusted || !capability) return;
       event.preventDefault();
-      togglePicker();
+      chrome.runtime.sendMessage({ type: "pastex-open-panel", capability: capability }).then(function (response) {
+        if (!response || !response.ok) button.title = "Could not open Pastex; use its toolbar icon.";
+      }).catch(function () { button.title = "Could not open Pastex; use its toolbar icon."; });
     });
     shadow.appendChild(style);
     shadow.appendChild(button);
@@ -195,7 +148,7 @@
   function scheduleHideButton() {
     window.clearTimeout(buttonHideTimer);
     buttonHideTimer = window.setTimeout(function () {
-      if (!pickerHost) hideButton();
+      hideButton();
     }, BUTTON_HIDE_DELAY_MS);
   }
 
@@ -203,238 +156,39 @@
     window.clearTimeout(buttonHideTimer);
   }
 
-  // --- picker popup ---
-
-  function closePicker() {
-    pickerRequest++;
-    pickerOpening = false;
-    if (pickerHost) {
-      pickerHost.remove();
-      pickerHost = null;
-    }
-    pickerState = null;
-  }
-
-  async function openPicker(target) {
-    var request = ++pickerRequest;
-    pickerOpening = true;
-    var allowed = await siteAllowed();
-    if (request !== pickerRequest) return;
-    pickerOpening = false;
-    if (!allowed) { hideButton(); closePicker(); return; }
-    closePicker();
-    cancelHideButton();
-    var state = { target: target && document.contains(target) ? target : lastEditable,
-      entries: [], matches: [], index: 0, error: "Loading Google Drive…" };
-    pickerState = state;
-    renderPicker("");
-    try {
-      var result = await loadTree();
-      if (pickerState !== state) return; // closed or replaced while loading
-      state.entries = flattenWithPaths(result.tree);
-      state.error = result.warnings && result.warnings.length ? "Unreadable Drive item: " + result.warnings[0] : "";
-      renderPicker(pickerHost.__pastexInput.value);
-    } catch (err) {
-      if (pickerState !== state) return;
-      state.error = "Drive: " + (err.message || err);
-      renderPicker(pickerHost.__pastexInput.value);
-    }
-  }
-
-  function togglePicker() {
-    if (pickerHost || pickerOpening) {
-      var target = pickerState && pickerState.target;
-      closePicker();
-      if (target && document.contains(target)) target.focus({ preventScroll: true });
-      return;
-    }
-    openPicker(lastEditable);
-  }
-
-  function renderPicker(query) {
-    pickerState.matches = searchEntries(pickerState.entries, query);
-    pickerState.index = 0;
-    if (!pickerHost) {
-      pickerHost = document.createElement("div");
-      pickerHost.id = "pastex-picker-host";
-      var shadow = pickerHost.attachShadow({ mode: "closed" });
-      var style = document.createElement("style");
-      style.textContent =
-        ".pastex-picker{position:fixed;z-index:2147483647;width:380px;max-width:calc(100vw - 16px);" +
-        "background:#fff;border:1px solid #9ec1e8;border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.3);" +
-        "font:13px system-ui,sans-serif;color:#222;overflow:hidden}" +
-        ".pastex-picker input{box-sizing:border-box;width:calc(100% - 12px);margin:6px;padding:6px 8px;" +
-        "border:1px solid #c6d8ec;border-radius:5px;font:inherit;outline:none}" +
-        ".pastex-picker input:focus{border-color:#4a90d9}" +
-        ".pastex-picker ul{list-style:none;margin:0;padding:0 6px 6px;max-height:264px;overflow:auto}" +
-        ".pastex-picker li{padding:6px 8px;border-radius:5px;cursor:pointer;white-space:nowrap;" +
-        "overflow:hidden;text-overflow:ellipsis}" +
-        ".pastex-picker li.active{background:#e8f1fd}" +
-        ".pastex-picker .empty{padding:10px;color:#777;text-align:center}";
-      var box = document.createElement("div");
-      box.className = "pastex-picker";
-      var input = document.createElement("input");
-      input.type = "text";
-      input.placeholder = "Type to filter snippets…";
-      input.setAttribute("aria-label", "Filter snippets");
-      var list = document.createElement("ul");
-      var warning = document.createElement("div");
-      warning.setAttribute("role", "status");
-      warning.style.cssText = "padding:0 8px;color:#9a4310;font-size:11px";
-      box.appendChild(input);
-      box.appendChild(warning);
-      box.appendChild(list);
-      shadow.appendChild(style);
-      shadow.appendChild(box);
-      document.documentElement.appendChild(pickerHost);
-      // Equal z-index elements paint in DOM order: keep the toggle above the
-      // popup even when the picker overlaps the field near the viewport edge.
-      if (buttonHost) document.documentElement.appendChild(buttonHost);
-      pickerHost.__pastexBox = box;
-      pickerHost.__pastexInput = input;
-      pickerHost.__pastexList = list;
-      pickerHost.__pastexWarning = warning;
-
-      input.addEventListener("input", function () {
-        renderPicker(input.value);
-      });
-      input.addEventListener("keydown", function (event) {
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          event.preventDefault();
-          movePicker(event.key === "ArrowDown" ? 1 : -1);
-        } else if (event.key === "Enter") {
-          event.preventDefault();
-          choosePicker();
-        }
-      });
-      input.addEventListener("blur", function () {
-        // A delayed blur from an old picker must not close a newly opened one.
-        var blurredHost = pickerHost;
-        window.setTimeout(function () {
-          if (pickerHost === blurredHost && pickerHost && !pickerHost.__pastexHover) {
-            closePicker();
-          }
-        }, 150);
-      });
-      list.addEventListener("mousedown", function (event) {
-        var item = event.target && event.target.closest ? event.target.closest("li[data-index]") : null;
-        if (item) {
-          event.preventDefault();
-          pickerState.index = parseInt(item.getAttribute("data-index"), 10) || 0;
-          choosePicker();
-        }
-      });
-      list.addEventListener("mouseover", function () {
-        pickerHost.__pastexHover = true;
-      });
-      list.addEventListener("mouseout", function () {
-        pickerHost.__pastexHover = false;
-      });
-      placePicker(box);
-      input.focus();
-    }
-    pickerHost.__pastexWarning.textContent = pickerState.entries.length ? (pickerState.error || "") : "";
-    paintPickerList();
-  }
-
-  function placePicker(box) {
-    // At the focused field when there is one, else near the pointer-fed
-    // position is impossible without tracking, so use the viewport corner
-    // offset: the common case (button while typing) has a field.
-    var x = window.innerWidth - 400;
-    var y = 60;
-    var target = pickerState && pickerState.target;
-    if (target && document.contains(target)) {
-      var rect = target.getBoundingClientRect();
-      x = Math.min(window.innerWidth - 396, Math.max(8, rect.left));
-      y = rect.bottom + 6;
-      if (y + 320 > window.innerHeight) {
-        y = Math.max(8, rect.top - 326);
+  // Refresh short-lived authorization while an editable field stays focused.
+  // The click itself must be sent synchronously to preserve Chrome's gesture.
+  function authorize(el, generation) {
+    chrome.runtime.sendMessage({ type: "pastex-site-allowed" }).then(function (response) {
+      if (generation !== focusGeneration) return;
+      if (!response || !response.allowed || !response.capability || !document.hasFocus() || document.activeElement !== el) {
+        capability = "";
+        hideButton();
+        return;
       }
-    }
-    box.style.left = Math.max(8, x) + "px";
-    box.style.top = Math.max(8, y) + "px";
+      capability = response.capability;
+      cancelHideButton();
+      positionButton(el);
+      authTimer = window.setTimeout(function () { authorize(el, generation); }, 10000);
+    }).catch(function () { if (generation === focusGeneration) { capability = ""; hideButton(); } });
   }
 
-  function paintPickerList() {
-    if (!pickerHost) {
-      return;
-    }
-    var list = pickerHost.__pastexList;
-    list.textContent = "";
-    var matches = pickerState.matches.slice(0, MAX_ROWS);
-    if (!matches.length) {
-      var empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = pickerState.error || (pickerState.entries.length ? "No snippets match." : "No snippets in Google Drive.");
-      list.appendChild(empty);
-      return;
-    }
-    matches.forEach(function (entry, i) {
-      var item = document.createElement("li");
-      item.textContent = entry.path;
-      item.title = entry.path;
-      item.setAttribute("data-index", String(i));
-      if (i === pickerState.index) {
-        item.classList.add("active");
-      }
-      item.addEventListener("mousemove", function () {
-        pickerState.index = i;
-        paintPickerList();
-      });
-      list.appendChild(item);
-    });
-  }
+  document.addEventListener("focusin", function (event) {
+    var el = event.target;
+    if (!isEditable(el)) return;
+    lastEditable = el;
+    capability = "";
+    window.clearTimeout(authTimer);
+    var generation = ++focusGeneration;
+    authorize(el, generation);
+  }, true);
 
-  function movePicker(delta) {
-    if (!pickerState || !pickerState.matches.length) {
-      return;
-    }
-    var count = Math.min(pickerState.matches.length, MAX_ROWS);
-    pickerState.index = (pickerState.index + delta + count) % count;
-    paintPickerList();
-  }
-
-  async function choosePicker() {
-    if (!(await siteAllowed())) { hideButton(); closePicker(); return; }
-    if (!pickerState || !pickerState.matches.length) {
-      return;
-    }
-    var entry = pickerState.matches[Math.min(pickerState.index, pickerState.matches.length - 1)];
-    var target = pickerState.target;
-    closePicker();
-    if (entry) insertText(target, entry.node.text || "");
-  }
-
-  // --- focus tracking + button visibility ---
-
-  document.addEventListener(
-    "focusin",
-    function (event) {
-      var el = event.target;
-      if (isEditable(el)) {
-        lastEditable = el;
-        siteAllowed().then(function (allowed) {
-          if (allowed && document.hasFocus() && document.activeElement === el) {
-            cancelHideButton();
-            positionButton(el);
-          } else if (!allowed) {
-            hideButton();
-            closePicker();
-          }
-        });
-      }
-    },
-    true
-  );
-
-  document.addEventListener(
-    "focusout",
-    function () {
-      scheduleHideButton();
-    },
-    true
-  );
+  document.addEventListener("focusout", function () {
+    focusGeneration++;
+    capability = "";
+    window.clearTimeout(authTimer);
+    scheduleHideButton();
+  }, true);
 
   window.addEventListener(
     "scroll",
