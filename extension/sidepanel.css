@@ -50,6 +50,7 @@ header {
 .toolbar {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
   margin-top: 6px;
 }
 
@@ -242,6 +243,18 @@ main {
   justify-content: flex-end;
   margin-top: 12px;
 }
+
+#selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid #d8e4f2;
+}
+
+#selection-actions[hidden] { display: none; }
+#selection-count { flex: 1; }
+#btn-select[aria-pressed="true"] { background: #cfe2f8; }
 
 #status {
   padding: 5px 8px;

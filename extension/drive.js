@@ -240,7 +240,7 @@
     do {
       var query = {
         q: "'" + folderId + "' in parents and trashed = false",
-        fields: "nextPageToken,files(id,name,mimeType,modifiedTime)",
+        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,properties)",
         pageSize: "1000",
         includeItemsFromAllDrives: "true",
         orderBy: "folder,name",
@@ -276,6 +276,14 @@
     return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
       method: "PATCH", contentType: "application/json; charset=UTF-8",
       query: { fields: "id,name" }, body: JSON.stringify({ name: name }), fetchImpl: fetchImpl,
+    });
+  }
+
+  async function setOrder(token, fileId, order, fetchImpl) {
+    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      method: "PATCH", contentType: "application/json; charset=UTF-8",
+      query: { fields: "id,properties" },
+      body: JSON.stringify({ properties: { pastex_order: String(order) } }), fetchImpl: fetchImpl,
     });
   }
 
@@ -353,6 +361,7 @@
     getFolder: getFolder,
     downloadText: downloadText,
     renameFile: renameFile,
+    setOrder: setOrder,
     trashFile: trashFile,
     createFolder: createFolder,
     uploadNew: uploadNew,

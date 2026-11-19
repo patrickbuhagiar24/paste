@@ -32,5 +32,44 @@
     });
     return names.concat(contents);
   }
-  return { walk: walk, flatten: flatten, findById: findById, search: search };
+  // Move each selected block one position among its siblings, never across
+  // folders. Return only groups that actually changed.
+  function reorderGroups(nodes, selected, direction) {
+    var groups = [];
+    function visit(siblings) {
+      var ordered = siblings.slice();
+      if (direction < 0) {
+        for (var i = 1; i < ordered.length; i++) {
+          if (selected.has(ordered[i].id) && !selected.has(ordered[i - 1].id)) {
+            var before = ordered[i - 1]; ordered[i - 1] = ordered[i]; ordered[i] = before;
+          }
+        }
+      } else {
+        for (var j = ordered.length - 2; j >= 0; j--) {
+          if (selected.has(ordered[j].id) && !selected.has(ordered[j + 1].id)) {
+            var after = ordered[j + 1]; ordered[j + 1] = ordered[j]; ordered[j] = after;
+          }
+        }
+      }
+      if (ordered.some(function (node, index) { return node !== siblings[index]; }))
+        groups.push(ordered.map(function (node) { return node.id; }));
+      siblings.forEach(function (node) { if (node.kind === "folder") visit(node.children || []); });
+    }
+    visit(nodes || []);
+    return groups;
+  }
+
+  function selectedRoots(nodes, selected) {
+    var result = [];
+    function visit(siblings) {
+      (siblings || []).forEach(function (node) {
+        if (selected.has(node.id)) result.push(node);
+        else if (node.kind === "folder") visit(node.children);
+      });
+    }
+    visit(nodes);
+    return result;
+  }
+  return { walk: walk, flatten: flatten, findById: findById, search: search,
+    reorderGroups: reorderGroups, selectedRoots: selectedRoots };
 });

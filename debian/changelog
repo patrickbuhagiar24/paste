@@ -1,3 +1,10 @@
+pastex (2.3.0-1) unstable; urgency=medium
+
+  * Cache the Drive library for the browser session and refresh after edits.
+  * Add multi-select, persistent Drive ordering, and bulk deletion.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 10:00:00 +0000
+
 pastex (2.2.1-1) unstable; urgency=medium
 
   * Improve Drive loading and configuration import in the side panel.

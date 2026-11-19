@@ -55,3 +55,15 @@ test("search matches names before contents", () => {
     ["name", "body"]
   );
 });
+
+test("multi-select moves blocks within each folder and ignores selected descendants on delete", () => {
+  const tree = [
+    { id: "a", kind: "text" }, { id: "b", kind: "text" },
+    { id: "c", kind: "text" }, { id: "d", kind: "text" },
+    { id: "folder", kind: "folder", children: [ { id: "x", kind: "text" }, { id: "y", kind: "text" } ] },
+  ];
+  const selected = new Set(["b", "c", "y"]);
+  assert.deepEqual(Store.reorderGroups(tree, selected, -1), [["b", "c", "a", "d", "folder"], ["y", "x"]]);
+  assert.deepEqual(Store.reorderGroups(tree, selected, 1), [["a", "d", "b", "c", "folder"]]);
+  assert.deepEqual(Store.selectedRoots(tree, new Set(["folder", "x", "b"])).map((n) => n.id), ["b", "folder"]);
+});

@@ -19,9 +19,9 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "preview-title", "preview", "btn-insert", "btn-edit", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "import-drive", "import-account", "import-sites"];
+  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "preview-title", "preview", "btn-edit", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "import-drive", "import-account", "import-sites", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
-  const records = [
+  const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
     { id: "folder1", name: "Empty Folder", mimeType: "folder", parent: "root" },
   ];
@@ -51,14 +51,52 @@ function panelHarness(fail, options = {}) {
   };
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), addEventListener() {} };
   const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, confirm: () => options.confirm !== false, setTimeout, clearTimeout };
-  const context = vm.createContext({ document, window, chrome: { runtime: { sendMessage: async (message) => { messages.push(message); return { ok: true }; } } }, navigator: { clipboard: { writeText: async () => {} } }, console });
+  let progress = () => {};
+  let cache;
+  const runtime = {
+    connect: () => ({ onMessage: { addListener(fn) { progress = fn; } } }),
+    sendMessage: async (message) => {
+      messages.push(message);
+      if (message.type === "pastex-panel-library") {
+        if (!message.force && cache) return { ok: true, result: { ...cache, cached: true } };
+        try {
+          const result = await Library.load(native, drive, (tree, session) => progress({ tree, rootId: session.rootId }));
+          cache = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings };
+          return { ok: true, result: { ...cache, cached: false } };
+        } catch (err) { return { ok: false, error: err.message }; }
+      }
+      if (message.type === "pastex-panel-mutate") {
+        const c = message.command;
+        try {
+          let result = {};
+          if (c.action === "save") {
+            if (c.mode === "new-folder") result.id = await drive.createFolder("token", c.name, c.parentId);
+            else if (c.mode === "new-text") result.id = (await drive.uploadNew("token", c.parentId, c.name, c.text)).id;
+            else {
+              result.id = c.node.id;
+              if (c.mode === "edit-text" && c.text !== c.node.text) await drive.updateText("token", c.node.id, c.text);
+              if (c.name !== c.node.name) await drive.renameFile("token", c.node.id, c.name + (c.node.driveName.endsWith(".txt") ? ".txt" : ""));
+            }
+          } else if (c.action === "delete") {
+            for (const id of c.ids) await drive.trashFile("token", id);
+          } else if (c.action === "reorder") {
+            for (const group of c.groups) for (let i = 0; i < group.length; i++) records.find((r) => r.id === group[i]).properties = { pastex_order: String(i) };
+          }
+          cache = null;
+          return { ok: true, result };
+        } catch (err) { cache = null; return { ok: false, error: err.message }; }
+      }
+      return { ok: true };
+    },
+  };
+  const context = vm.createContext({ document, window, chrome: { runtime }, navigator: { clipboard: { writeText: async () => {} } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
   return { elements, records, context, imports, messages };
 }
 function allText(el) { return [el.textContent, ...el.children.map(allText)].join(" "); }
 async function settled() { await new Promise(setImmediate); await new Promise(setImmediate); }
 
-test("side panel loads Drive items on open and displays them, without local storage", async () => {
+test("side panel loads Drive items on open and displays them", async () => {
   const { elements } = panelHarness(false);
   await settled();
   assert.match(allText(elements.tree), /Synced/);
@@ -153,4 +191,35 @@ test("side panel shows discovered Drive items before downloads finish", async ()
   resume();
   await settled();
   assert.match(elements["drive-status"].textContent, /connected/);
+});
+
+test("select mode prevents paste, moves multiple selected items and deletes them", async () => {
+  const records = ["A", "B", "C", "D"].map((name) => ({ id: name, name: name + ".txt", mimeType: "text/plain", text: name, parent: "root" }));
+  const { elements, messages } = panelHarness(false, { records });
+  await settled();
+  const rowFor = (name) => elements.tree.children.find((row) => row.children.some((c) => c.className === "label" && c.textContent.endsWith(name)));
+  rowFor("A").listeners.click();
+  await settled();
+  assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
+  elements["btn-select"].listeners.click();
+  assert.equal(elements["selection-actions"].hidden, false);
+  rowFor("B").listeners.click();
+  rowFor("C").listeners.click();
+  assert.equal(elements["selection-count"].textContent, "2 selected");
+  assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
+  assert.equal(elements["btn-up"].disabled, false);
+  elements["btn-up"].listeners.click();
+  await settled();
+  await settled();
+  assert.deepEqual(elements.tree.children.map((row) => row.children.find((c) => c.className === "label").textContent.replace(/^[☑☐] /, "")), ["B", "C", "A", "D"]);
+  assert.deepEqual(messages.find((m) => m.type === "pastex-panel-mutate" && m.command.action === "reorder").command.groups[0].join(","), "B,C,A,D");
+  assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
+  elements["btn-delete-selected"].listeners.click();
+  await settled(); await settled();
+  assert.equal(records.find((r) => r.id === "B").trashed, true);
+  assert.equal(records.find((r) => r.id === "C").trashed, true);
+  assert.equal(records.find((r) => r.id === "A").trashed, undefined);
+  assert.equal(elements["selection-count"].textContent, "0 selected");
+  elements["btn-select"].listeners.click();
+  assert.equal(elements["selection-actions"].hidden, true);
 });

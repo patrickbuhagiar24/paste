@@ -214,3 +214,11 @@ test("Drive pagination rejects a repeated token instead of loading forever", asy
   const fetchImpl = async () => jsonResponse({ files: [], nextPageToken: "same" });
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
 });
+
+test("Drive reorder writes a property rather than renaming or moving a file", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
+  await Drive.setOrder("tok", "id", 2, fetchImpl);
+  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2" } });
+  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get("supportsAllDrives"), "true");
+});

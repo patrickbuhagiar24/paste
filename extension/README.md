@@ -78,7 +78,8 @@ so a removed site is denied even before restart.
    automatically deleted on upgrade; remove them via Chrome's extension
    storage developer tools if desired, after verifying your file setup.
 4. Open the Pastex side panel. It loads the folder and its `.txt` files from
-   Drive automatically; use **↻ Refresh** to reload after external changes.
+   Drive on first use; subsequent openings reuse the browser-session cache.
+   Use **↻ Refresh** to reload after changes made outside Pastex.
    The service account key never leaves the machine; only signed authentication
    requests are sent to Google's token endpoint.
 
@@ -94,10 +95,28 @@ browser after manually changing sites).
 
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
-Drive trash. The side panel and in-page picker load from Drive and hold data
-only in memory while open; there is no offline snippet library or local sync
-copy. Drive must be reachable to load, edit or paste snippets. Folder and file
-order follows Drive's name ordering; manual reordering is not supported.
+Drive trash. After changes, Pastex reloads the library from Drive. The side
+panel and in-page picker share an in-memory Chrome session cache: reopening
+either does not download the library again, and closing the browser clears the
+cache. The cache contains snippet text (not the service-account key) and is
+accessible to the extension, not websites. If the library exceeds Chrome's
+session-storage quota, Pastex falls back to the service worker's memory; the
+cache may then disappear when the worker stops.
+
+Cached content can be stale, including after a folder is changed or access is
+revoked elsewhere. Use **↻ Refresh** to fetch current Drive contents; explicit
+Drive permission errors clear the cached snapshot. An internet connection is
+required for the initial load and all changes. Account or folder configuration
+changes invalidate the snapshot. No snippet changes are queued for offline sync.
+
+**Select** enables multi-selection instead of pasting. Use **Up** or **Down**
+to move selected items within their own folders, and **Delete** to move them to
+Drive trash after confirmation. Click the folder arrow to expand or collapse it
+while selecting. Moving is disabled during search; clear the search first.
+Manual order is saved in each item's Google Drive `pastex_order` property, so
+other Pastex instances can see it after refreshing. Unranked new files follow
+ranked items in Drive's normal order. Concurrent reordering on different devices
+can overwrite the same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
@@ -151,8 +170,8 @@ An enterprise administrator may configure `ExtensionInstallForcelist` with
 an update manifest; the package does not silently force-install extensions.
 
 Permissions: `sidePanel`, `scripting` and `activeTab` provide
-the editor and approved-site picker;
-`clipboardWrite` is the fallback on approved sites; `nativeMessaging` reads
+the editor and approved-site picker; `storage` provides the temporary session
+cache; `clipboardWrite` is the fallback on approved sites; `nativeMessaging` reads
 the config files. HTTP/HTTPS host permission covers dynamic user-approved sites
 and the Google API endpoints; Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

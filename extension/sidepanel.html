@@ -13,6 +13,7 @@
         <button id="btn-text" title="New snippet">＋ Text</button>
         <button id="btn-sync" title="Reload from Google Drive">↻ Refresh</button>
         <button id="btn-config" title="Import configuration files">Config</button>
+        <button id="btn-select" aria-pressed="false" title="Select items to move or delete">Select</button>
       </div>
       <div id="drive-bar" aria-live="polite">
         <span id="drive-status">Drive: not connected.</span>
@@ -30,7 +31,6 @@
       <div id="preview-title">Select a snippet.</div>
       <pre id="preview"></pre>
       <div id="preview-actions">
-        <button id="btn-insert" disabled>⚡ Insert into page</button>
         <button id="btn-edit" disabled>Edit</button>
       </div>
     </section>
@@ -64,10 +64,14 @@
       </div>
     </div>
     <footer id="status" aria-live="polite">Ready.</footer>
+    <div id="selection-actions" role="toolbar" aria-label="Selected item actions" hidden>
+      <span id="selection-count">0 selected</span>
+      <button id="btn-up" disabled>↑ Up</button>
+      <button id="btn-down" disabled>↓ Down</button>
+      <button id="btn-delete-selected" disabled>🗑 Delete</button>
+    </div>
     <script src="store.js"></script>
-    <script src="drive.js"></script>
     <script src="native.js"></script>
-    <script src="library.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

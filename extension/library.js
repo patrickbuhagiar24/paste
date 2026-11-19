@@ -1,4 +1,4 @@
-/* Google Drive is the source of truth. No snippet data is persisted locally. */
+/* Google Drive is the source of truth; session caching is handled separately. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexLibrary = factory();
@@ -40,6 +40,16 @@
       if (visited.has(folderId)) throw new Error("Drive folder cycle detected.");
       visited.add(folderId);
       var files = await request(function () { return drive.listChildren(token, folderId); });
+      // Unranked/new files retain Drive's natural order after ranked entries.
+      function rank(file) {
+        var raw = file.properties && file.properties.pastex_order;
+        if (typeof raw !== "string" || !/^(0|[1-9][0-9]*)$/.test(raw)) return Number.MAX_SAFE_INTEGER;
+        var value = Number(raw);
+        return Number.isSafeInteger(value) ? value : Number.MAX_SAFE_INTEGER;
+      }
+      files = files.map(function (file, index) { return { file: file, index: index }; });
+      files.sort(function (a, b) { return rank(a.file) - rank(b.file) || a.index - b.index; });
+      files = files.map(function (item) { return item.file; });
       var jobs = [];
       files.forEach(function (file) {
         if (file.mimeType === drive.FOLDER_MIME) {
