@@ -8,7 +8,7 @@
   async function connect(native, drive) {
     var config = await native.readConfig();
     if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Configure service-account.json in ~/.config/pastex.");
-    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Configure google-drive.json in ~/.config/pastex.");
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Configure pastex-google-drive.json in ~/.config/pastex.");
     var account = drive.parseServiceAccount(JSON.stringify(config.serviceAccount));
     var token = await drive.fetchAccessToken(account);
     var rootId = config.drive.folderId;

@@ -30,7 +30,7 @@ If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/pastex` instead of
 
 ## Choose sites
 
-Edit `~/.config/pastex/sites.json`, for example:
+Edit `~/.config/pastex/pastex-sites.json`, for example:
 
 ```json
 {
@@ -51,7 +51,7 @@ unavailable, no sites are enabled. The extension requests access to HTTP/HTTPS
 in Chrome so it can register your chosen sites dynamically; it registers its
 content script only for the configured origins.
 
-After editing `sites.json` manually, restart the browser and reload open tabs.
+After editing `pastex-sites.json` manually, restart the browser and reload open tabs.
 If imported through **Config** in the side panel, registrations update immediately;
 reload open tabs to load the new script. Already-open tabs can retain an earlier
 injected script until reloaded.
@@ -66,7 +66,7 @@ so a removed site is denied even before restart.
    `client_email` as an Editor.
 2. Copy the downloaded JSON key to `~/.config/pastex/service-account.json`.
    It must contain `type`, `client_email` and `private_key`. Keep it private.
-3. Edit `~/.config/pastex/google-drive.json`, for example:
+3. Edit `~/.config/pastex/pastex-google-drive.json`, for example:
 
    ```json
    {"folder_url": "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"}
@@ -83,15 +83,24 @@ so a removed site is denied even before restart.
    The service account key never leaves the machine; only signed authentication
    requests are sent to Google's token endpoint.
 
-Alternatively, click **Config** in the side panel to open an import dialog and
-choose JSON files for the Drive folder, service account and allowed sites. Each
-selection replaces the corresponding file in `~/.config/pastex` (or the XDG
-config directory) only after confirmation and validation. The native host must
-be installed; the browser file chooser does not give the extension unrestricted
-access to your files. The key is not shown, logged, or saved to browser storage.
-Importing Drive configuration starts a reload; reload open tabs after importing
-sites. Changes made manually can be loaded with **↻ Refresh** (restart the
-browser after manually changing sites).
+Alternatively, click **Config** in the side panel and choose a source folder.
+Pastex detects `pastex-google-drive.json`, `pastex-sites.json` and
+`service-account.json` in the folder itself, as well as a Google-downloaded
+service-account JSON with a project-specific filename. If several keys are
+found, use a folder containing only one or name the desired key
+`service-account.json`. Subfolders are not searched. Old `google-drive.json`
+and `sites.json` names are also recognized as import sources; if both names are
+present, the new name takes precedence.
+
+The detected files are validated and copied to `~/.config/pastex` (or the XDG
+config directory) only after confirmation. Missing files remain unchanged. If a
+filesystem write fails after another succeeds, the dialog reports which files
+were imported. The native host must be installed; folder selection does not
+give the extension unrestricted access to your files. The key is not shown,
+logged, or saved to browser storage. To select `~/.config/pastex` in a Linux
+file chooser, you may need to show hidden folders with **Ctrl+H**. Importing
+Drive configuration reloads the library; reload open tabs after importing sites.
+For manual site changes, restart the browser and reload tabs.
 
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
@@ -120,6 +129,12 @@ can overwrite the same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
+On first use, existing `google-drive.json` and `sites.json` are copied to
+`pastex-google-drive.json` and `pastex-sites.json` if the new names do not
+already exist. The old files are left untouched as backups; after migration,
+edit the new names because the old names are no longer read. Existing new-name
+files always take precedence and are never overwritten during migration.
+
 Before upgrading, sync any browser-only snippets to Drive using the previous
 version and verify them in Google Drive. The new version does not read, migrate,
 or erase the old browser-storage library; unsynchronized local snippets will
@@ -133,9 +148,9 @@ Open the side panel with the toolbar icon to create, edit, search and organize
 snippets. On an allowed site, focus an editable field and click the floating
 **⚡** button to open the picker; click it again to close the picker. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it. If no editable field is focused on an allowed page, it is copied
+to insert it; its row has **Rename**, **Edit**, and **Delete** actions. If no editable field is focused on an allowed page, it is copied
 to the clipboard. Restricted browser pages cannot receive scripts. Sites not
-listed in `sites.json` are not injected or targeted.
+listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 

@@ -27,13 +27,6 @@
         <button id="btn-empty-text">＋ New snippet</button>
       </div>
     </main>
-    <section id="preview-pane" aria-label="Preview">
-      <div id="preview-title">Select a snippet.</div>
-      <pre id="preview"></pre>
-      <div id="preview-actions">
-        <button id="btn-edit" disabled>Edit</button>
-      </div>
-    </section>
     <div id="editor-overlay" hidden>
       <div id="editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
         <h2 id="editor-title">New snippet</h2>
@@ -54,11 +47,10 @@
     <div id="config-overlay" hidden>
       <div id="config-dialog" role="dialog" aria-modal="true" aria-labelledby="config-title">
         <h2 id="config-title">Import configuration</h2>
-        <p>Select a JSON file for each configuration you want to replace. Existing files will be overwritten after confirmation.</p>
-        <label>Google Drive folder (google-drive.json)<input id="import-drive" type="file" accept=".json,application/json" /></label>
-        <label>Service account (service-account.json)<input id="import-account" type="file" accept=".json,application/json" /></label>
-        <label>Allowed sites (sites.json)<input id="import-sites" type="file" accept=".json,application/json" /></label>
-        <p>Keys stay local. Reload open pages after changing allowed sites.</p>
+        <p>Choose a source folder. Pastex detects the Drive, service-account and site JSON files in that folder and asks before replacing the current configuration.</p>
+        <label for="import-folder">Configuration source folder</label>
+        <input id="import-folder" type="file" webkitdirectory directory multiple />
+        <p>Keys stay local. Missing files are left unchanged. Reload open pages after changing allowed sites.</p>
         <p id="config-status" aria-live="polite"></p>
         <button id="config-close">Close</button>
       </div>
@@ -72,6 +64,7 @@
     </div>
     <script src="store.js"></script>
     <script src="native.js"></script>
+    <script src="config-import.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -343,7 +343,7 @@ def test_extension_readme_documents_setup_and_signing():
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
         "~/.config/pastex",
-        "google-drive.json",
+        "pastex-google-drive.json",
         "service-account.json",
         "com.pastex.native",
     ):
@@ -392,13 +392,13 @@ def test_native_host_is_executable_and_init_only(tmp_path):
     config = tmp_path / ".config" / "pastex"
     assert proc.stdout.strip() == str(config)
     assert stat.S_IMODE(config.stat().st_mode) == 0o700
-    for name in ("google-drive.json", "service-account.json", "sites.json"):
+    for name in ("pastex-google-drive.json", "pastex-sites.json", "service-account.json"):
         path = config / name
         assert path.is_file(), name
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, name
         json.loads(path.read_text(encoding="utf-8"))  # valid JSON templates
     assert sorted(path.name for path in config.iterdir()) == [
-        "google-drive.json", "service-account.json", "sites.json"
+        "pastex-google-drive.json", "pastex-sites.json", "service-account.json"
     ]
 
 
@@ -407,7 +407,7 @@ def test_native_host_does_not_modify_existing_readme_or_json(tmp_path):
     config.mkdir(parents=True)
     readme = config / "README.txt"
     readme.write_text("User notes: keep these.\n", encoding="utf-8")
-    drive = config / "google-drive.json"
+    drive = config / "pastex-google-drive.json"
     drive.write_text('{"folder_id": "existing"}\n', encoding="utf-8")
     _run_host(tmp_path, [{"type": "pastex-status"}], "chrome-extension://" + "a" * 32 + "/")
     assert readme.read_text(encoding="utf-8") == "User notes: keep these.\n"
@@ -428,6 +428,7 @@ def test_native_host_does_not_modify_existing_readme_or_json(tmp_path):
     "changing sites.json. Setup instructions: /usr/share/doc/pastex/README.md.gz.\n"
     "The folder is created automatically on login and on extension startup.\n",
 ])
+
 def test_native_host_removes_only_unmodified_built_in_readme(tmp_path, contents):
     config = tmp_path / ".config" / "pastex"
     config.mkdir(parents=True)
@@ -436,7 +437,7 @@ def test_native_host_removes_only_unmodified_built_in_readme(tmp_path, contents)
     _run_host(tmp_path, [{"type": "pastex-status"}], "chrome-extension://" + "a" * 32 + "/")
     assert not readme.exists()
     assert sorted(path.name for path in config.iterdir()) == [
-        "google-drive.json", "service-account.json", "sites.json"
+        "pastex-google-drive.json", "pastex-sites.json", "service-account.json"
     ]
 
 
@@ -446,7 +447,7 @@ def test_native_host_accepts_chrome_origin_and_creates_files(tmp_path, extra):
     status, = _run_host(tmp_path, [{"type": "pastex-status"}], origin, *extra)
     assert status["ok"] is True
     directory = tmp_path / ".config" / "pastex"
-    assert (directory / "google-drive.json").is_file()
+    assert (directory / "pastex-google-drive.json").is_file()
     assert (directory / "service-account.json").is_file()
 
 
@@ -456,7 +457,7 @@ def test_native_host_respects_xdg_config_home(tmp_path):
                             env={"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(config), "PATH": "/usr/bin:/bin"},
                             capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
-    assert (config / "pastex" / "google-drive.json").is_file()
+    assert (config / "pastex" / "pastex-google-drive.json").is_file()
     assert (config / "pastex" / "service-account.json").is_file()
 
 
@@ -479,9 +480,9 @@ def test_native_host_reports_unconfigured_files(tmp_path):
 def test_native_host_reads_config_files_and_site_allowlist(tmp_path):
     _run_host(tmp_path, [{"type": "pastex-status"}])
     config = tmp_path / ".config" / "pastex"
-    (config / "google-drive.json").write_text(json.dumps({"folder_url": "https://drive.google.com/drive/folders/1AbC_xyz-9"}))
+    (config / "pastex-google-drive.json").write_text(json.dumps({"folder_url": "https://drive.google.com/drive/folders/1AbC_xyz-9"}))
     (config / "service-account.json").write_text(json.dumps({"type": "service_account", "client_email": "e@x.iam", "private_key": "k"}))
-    (config / "sites.json").write_text(json.dumps({"allowed_sites": ["https://example.com"]}))
+    (config / "pastex-sites.json").write_text(json.dumps({"allowed_sites": ["https://example.com"]}))
     drive, sites = _run_host(tmp_path, [{"type": "pastex-read-config"}, {"type": "pastex-read-sites"}])
     assert drive["drive"]["folderId"] == "1AbC_xyz-9"
     assert drive["serviceAccount"]["client_email"] == "e@x.iam"
@@ -491,7 +492,7 @@ def test_native_host_reads_config_files_and_site_allowlist(tmp_path):
 def test_native_host_rejects_bad_requests_and_sites(tmp_path):
     _run_host(tmp_path, [{"type": "pastex-status"}])
     config = tmp_path / ".config" / "pastex"
-    (config / "sites.json").write_text('{"allowed_sites": "https://example.com"}')
+    (config / "pastex-sites.json").write_text('{"allowed_sites": "https://example.com"}')
     unknown, sites = _run_host(tmp_path, [{"type": "bogus"}, {"type": "pastex-read-sites"}])
     assert not unknown["ok"] and not sites["ok"]
 
@@ -504,7 +505,7 @@ def test_native_host_reads_key_without_folder_and_handles_invalid_json_objects(t
     assert responses[0]["serviceAccount"]["client_email"] == "e@x.iam"
     assert responses[0]["drive"] is None
     config = tmp_path / ".config" / "pastex"
-    (config / "google-drive.json").write_text('[]')
+    (config / "pastex-google-drive.json").write_text('[]')
     (config / "service-account.json").write_text('[1]')
     status, read = _run_host(tmp_path, [{"type": "pastex-status"}, {"type": "pastex-read-config"}])
     assert not status["drive"]["configured"] and status["drive"]["error"]
@@ -558,13 +559,13 @@ def test_native_host_import_validates_and_atomically_replaces_only_config_files(
     import os
     account = {"type": "service_account", "client_email": "svc@example.com", "private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"}
     requests = [
-        {"type": "pastex-import-config", "name": "google-drive.json", "data": {"folder_id": "folder123"}},
+        {"type": "pastex-import-config", "name": "pastex-google-drive.json", "data": {"folder_id": "folder123"}},
         {"type": "pastex-import-config", "name": "service-account.json", "data": account},
-        {"type": "pastex-import-config", "name": "sites.json", "data": {"allowed_sites": ["https://example.com"]}},
+        {"type": "pastex-import-config", "name": "pastex-sites.json", "data": {"allowed_sites": ["https://example.com"]}},
         {"type": "pastex-read-config"},
         {"type": "pastex-read-sites"},
         {"type": "pastex-import-config", "name": "../other", "data": {}},
-        {"type": "pastex-import-config", "name": "sites.json", "data": {"allowed_sites": ["https://*"]}},
+        {"type": "pastex-import-config", "name": "pastex-sites.json", "data": {"allowed_sites": ["https://*"]}},
         {"type": "pastex-import-config", "name": "service-account.json", "data": {"type": "service_account"}},
     ]
     responses = _run_host(tmp_path, requests)
@@ -574,8 +575,8 @@ def test_native_host_import_validates_and_atomically_replaces_only_config_files(
     assert all(not r["ok"] for r in responses[5:])
     config = tmp_path / ".config" / "pastex"
     assert json.loads((config / "service-account.json").read_text()) == account
-    assert json.loads((config / "sites.json").read_text())["allowed_sites"] == ["https://example.com"]
-    assert all(os.stat(config / name).st_mode & 0o777 == 0o600 for name in ("service-account.json", "sites.json", "google-drive.json"))
+    assert json.loads((config / "pastex-sites.json").read_text())["allowed_sites"] == ["https://example.com"]
+    assert all(os.stat(config / name).st_mode & 0o777 == 0o600 for name in ("service-account.json", "pastex-sites.json", "pastex-google-drive.json"))
     assert not (tmp_path / ".config" / "other").exists()
     assert not list(config.glob(".pastex-import-*"))
 
@@ -585,3 +586,85 @@ def test_release_requires_new_crx_secret():
     assert "secrets.PASTEX_CRX_PRIVATE_KEY" in workflow
     assert "secrets.PASTEX_CRX_KEY" not in workflow
     assert 'elif [ "$GITHUB_REF" = refs/heads/main ]' in workflow
+
+
+def test_native_host_migrates_legacy_config_without_deleting_or_overwriting(tmp_path):
+    config = tmp_path / ".config" / "pastex"
+    config.mkdir(parents=True)
+    old_drive = '{"folder_id": "legacy-folder"}\n'
+    old_sites = '{"allowed_sites": ["https://old.example"]}\n'
+    (config / "google-drive.json").write_text(old_drive)
+    (config / "sites.json").write_text(old_sites)
+    read, sites = _run_host(tmp_path, [{"type": "pastex-read-config"}, {"type": "pastex-read-sites"}])
+    assert read["drive"]["folderId"] == "legacy-folder"
+    assert sites["allowedSites"] == ["https://old.example"]
+    assert (config / "pastex-google-drive.json").read_text() == old_drive
+    assert (config / "pastex-sites.json").read_text() == old_sites
+    assert (config / "google-drive.json").read_text() == old_drive
+    assert (config / "sites.json").read_text() == old_sites
+    (config / "pastex-google-drive.json").write_text('{"folder_id":"new-folder"}')
+    (config / "pastex-sites.json").write_text('{"allowed_sites":[]}')
+    read, sites = _run_host(tmp_path, [{"type": "pastex-read-config"}, {"type": "pastex-read-sites"}])
+    assert read["drive"]["folderId"] == "new-folder"
+    assert sites["allowedSites"] == []
+    assert (config / "google-drive.json").read_text() == old_drive
+
+
+def test_native_host_preserves_invalid_legacy_files_instead_of_masking_errors(tmp_path):
+    config = tmp_path / ".config" / "pastex"
+    config.mkdir(parents=True)
+    (config / "google-drive.json").write_text("not valid json")
+    (config / "sites.json").write_text("not valid json")
+    status, sites = _run_host(tmp_path, [{"type": "pastex-status"}, {"type": "pastex-read-sites"}])
+    assert not status["drive"]["configured"] and "not valid JSON" in status["drive"]["error"]
+    assert not sites["ok"]
+    assert (config / "pastex-google-drive.json").read_text() == "not valid json"
+    assert (config / "pastex-sites.json").read_text() == "not valid json"
+
+
+def test_native_host_validates_all_imported_files_before_any_write(tmp_path):
+    _run_host(tmp_path, [{"type": "pastex-status"}])
+    directory = tmp_path / ".config" / "pastex"
+    before = (directory / "pastex-google-drive.json").read_bytes()
+    failed, = _run_host(tmp_path, [{"type": "pastex-import-configs", "files": {
+        "pastex-google-drive.json": {"folder_id": "new"},
+        "pastex-sites.json": {"allowed_sites": ["https://*"]},
+    }}])
+    assert not failed["ok"]
+    assert (directory / "pastex-google-drive.json").read_bytes() == before
+    imported, drive, sites = _run_host(tmp_path, [
+        {"type": "pastex-import-configs", "files": {
+            "pastex-google-drive.json": {"folder_id": "new"},
+            "pastex-sites.json": {"allowed_sites": ["https://example.com"]},
+        }}, {"type": "pastex-read-config"}, {"type": "pastex-read-sites"}])
+    assert imported["ok"] and imported["error"] == ""
+    assert set(imported["imported"]) == {"pastex-google-drive.json", "pastex-sites.json"}
+    assert drive["drive"]["folderId"] == "new"
+    assert sites["allowedSites"] == ["https://example.com"]
+
+
+def test_preview_removed_and_folder_picker_available():
+    html = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    assert 'id="preview-pane"' not in html
+    assert 'id="btn-insert"' not in html and 'id="btn-edit"' not in html
+    assert 'id="import-folder"' in html and "webkitdirectory" in html
+
+
+def test_concurrent_host_migration_publishes_complete_files(tmp_path):
+    import os
+    config = tmp_path / ".config" / "pastex"
+    config.mkdir(parents=True)
+    old_drive = '{"folder_id":"original-folder"}\n'
+    old_sites = '{"allowed_sites":["https://allowed.example"]}\n'
+    (config / "google-drive.json").write_text(old_drive)
+    (config / "sites.json").write_text(old_sites)
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    processes = [subprocess.Popen([sys.executable, str(HOST), "--init-only"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(8)]
+    for process in processes:
+        _, err = process.communicate(timeout=10)
+        assert process.returncode == 0, err
+    assert (config / "pastex-google-drive.json").read_text() == old_drive
+    assert (config / "pastex-sites.json").read_text() == old_sites
+    assert os.stat(config / "pastex-google-drive.json").st_mode & 0o777 == 0o600
+    assert os.stat(config / "pastex-sites.json").st_mode & 0o777 == 0o600
+    assert not list(config.glob(".pastex-init-*"))

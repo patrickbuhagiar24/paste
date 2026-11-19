@@ -11,7 +11,7 @@ globalThis.test = function test(name, fn) {
 };
 
 (async function main() {
-  for (const file of ["store.test.js", "drive.test.js", "library.test.js", "library-partial.test.js", "library-integration.test.js", "cache.test.js", "sidepanel.test.js", "content.test.js", "native.test.js", "sites.test.js", "background.test.js"]) {
+  for (const file of ["store.test.js", "drive.test.js", "library.test.js", "library-partial.test.js", "library-integration.test.js", "cache.test.js", "config-import.test.js", "sidepanel.test.js", "content.test.js", "native.test.js", "sites.test.js", "background.test.js"]) {
     require(path.join(__dirname, file));
   }
   let passed = 0;

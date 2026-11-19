@@ -76,9 +76,10 @@ test("helpers send the right message types", async () => {
     Native.resetCache();
     await Native.readConfig();
     await Native.readSites();
+    await Native.importConfigs({ "pastex-sites.json": { allowed_sites: [] } });
     assert.deepEqual(
       calls.map((c) => c.message.type),
-      ["pastex-read-config", "pastex-read-sites"]
+      ["pastex-read-config", "pastex-read-sites", "pastex-import-configs"]
     );
   } finally {
     uninstallStub();
