@@ -36,9 +36,7 @@ def test_manifest_is_valid_mv3_with_matching_version():
 def test_manifest_permissions_are_minimal_and_documented():
     manifest = _manifest()
     assert set(manifest["permissions"]) == {
-        "storage",
         "sidePanel",
-        "contextMenus",
         "scripting",
         "activeTab",
         "clipboardWrite",
@@ -56,8 +54,33 @@ def test_manifest_entry_points_exist():
     assert "options_page" not in manifest
     assert "content_scripts" not in manifest
     assert (EXT / "sites.js").is_file()
-    assert "toggle-picker" in manifest["commands"]
+    assert "commands" not in manifest
     assert manifest["action"]["default_title"]
+
+
+def test_picker_has_no_shortcut_escape_handler_or_context_menu():
+    manifest = _manifest()
+    assert "commands" not in manifest
+    assert "contextMenus" not in manifest["permissions"]
+    for name in ("background.js", "content.js", "sidepanel.js"):
+        source = (EXT / name).read_text(encoding="utf-8")
+        assert '"Escape"' not in source
+        assert "Ctrl+Shift+V" not in source
+        assert "pastex-toggle-picker" not in source
+    assert "togglePicker();" in (EXT / "content.js").read_text(encoding="utf-8")
+
+
+def test_snippet_data_is_not_persisted_in_browser_storage():
+    manifest = _manifest()
+    assert "storage" not in manifest["permissions"]
+    for name in ("store.js", "sidepanel.js", "content.js", "background.js"):
+        source = (EXT / name).read_text(encoding="utf-8")
+        assert "chrome.storage" not in source
+        assert "pastex.tree.v1" not in source
+    panel = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+    assert "Library.load(Native, Drive)" in panel
+    assert "Drive.uploadNew" in panel and "Drive.updateText" in panel
+    assert "Drive.trashFile" in panel
 
 
 def test_manifest_icons_exist_and_match_sizes():
@@ -370,7 +393,47 @@ def test_native_host_is_executable_and_init_only(tmp_path):
         assert path.is_file(), name
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, name
         json.loads(path.read_text(encoding="utf-8"))  # valid JSON templates
-    assert (config / "README.txt").is_file()
+    assert sorted(path.name for path in config.iterdir()) == [
+        "google-drive.json", "service-account.json", "sites.json"
+    ]
+
+
+def test_native_host_does_not_modify_existing_readme_or_json(tmp_path):
+    config = tmp_path / ".config" / "pastex"
+    config.mkdir(parents=True)
+    readme = config / "README.txt"
+    readme.write_text("User notes: keep these.\n", encoding="utf-8")
+    drive = config / "google-drive.json"
+    drive.write_text('{"folder_id": "existing"}\n', encoding="utf-8")
+    _run_host(tmp_path, [{"type": "pastex-status"}], "chrome-extension://" + "a" * 32 + "/")
+    assert readme.read_text(encoding="utf-8") == "User notes: keep these.\n"
+    assert drive.read_text(encoding="utf-8") == '{"folder_id": "existing"}\n'
+
+
+@pytest.mark.parametrize("contents", [
+    "Pastex configuration.\n"
+    "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
+    "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
+    "Both are managed from the Pastex Settings page; this folder is created\n"
+    "automatically on login and on first use.\n",
+    "Pastex configuration.\n"
+    "- google-drive.json: the shared Drive folder (folder_id or folder_url).\n"
+    "- service-account.json: the Google Cloud JSON key for Drive sync.\n"
+    "- sites.json: allowed_sites lists allowed HTTP(S) site origins.\n"
+    "Edit these files directly. Restart the browser and reload open pages after\n"
+    "changing sites.json. Setup instructions: /usr/share/doc/pastex/README.md.gz.\n"
+    "The folder is created automatically on login and on extension startup.\n",
+])
+def test_native_host_removes_only_unmodified_built_in_readme(tmp_path, contents):
+    config = tmp_path / ".config" / "pastex"
+    config.mkdir(parents=True)
+    readme = config / "README.txt"
+    readme.write_text(contents, encoding="utf-8")
+    _run_host(tmp_path, [{"type": "pastex-status"}], "chrome-extension://" + "a" * 32 + "/")
+    assert not readme.exists()
+    assert sorted(path.name for path in config.iterdir()) == [
+        "google-drive.json", "service-account.json", "sites.json"
+    ]
 
 
 @pytest.mark.parametrize("extra", [[], ["--parent-window=123"]])

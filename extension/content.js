@@ -4,7 +4,7 @@
  *  - Shows a small floating button next to the focused field that opens
  *    the picker at the cursor, on configured sites only.
  *  - The picker is a Shadow DOM popup: page styles cannot leak in or out.
- *  - Responds to background messages: toggle-picker, insert text.
+ *  - Responds to side-panel insertion requests from the background worker.
  */
 
 (function () {
@@ -23,6 +23,8 @@
   var buttonHideTimer = 0;
   var pickerHost = null;
   var pickerState = null;
+  var pickerRequest = 0;
+  var pickerOpening = false;
 
   async function siteAllowed() {
     try {
@@ -54,39 +56,19 @@
     return false;
   }
 
-  // --- storage reads (content scripts can use chrome.storage directly) ---
-
-  function loadTree() {
-    return new Promise(function (resolve) {
-      chrome.storage.local.get("pastex.tree.v1", function (obj) {
-        resolve(Array.isArray(obj["pastex.tree.v1"]) ? obj["pastex.tree.v1"] : []);
-      });
-    });
-  }
-
-  function pushRecent(id) {
-    return new Promise(function (resolve) {
-      chrome.storage.local.get("pastex.recent.v1", function (obj) {
-        var recent = Array.isArray(obj["pastex.recent.v1"]) ? obj["pastex.recent.v1"] : [];
-        recent = [id].concat(
-          recent.filter(function (other) {
-            return other !== id;
-          })
-        );
-        var update = {};
-        update["pastex.recent.v1"] = recent.slice(0, 50);
-        chrome.storage.local.set(update, function () {
-          resolve();
-        });
-      });
-    });
+  // Request the current Drive library from the background worker; snippet
+  // contents are never written to browser storage.
+  async function loadTree() {
+    var response = await chrome.runtime.sendMessage({ type: "pastex-get-library" });
+    if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
+    return response;
   }
 
   function flattenWithPaths(nodes, trail, out) {
     trail = trail || [];
     out = out || [];
     (nodes || []).forEach(function (node) {
-      if (node.kind === "text") {
+      if (node.kind === "text" && !node.loadError) {
         out.push({ path: trail.concat(node.name).join("/"), node: node });
       } else if (node.kind === "folder") {
         flattenWithPaths(node.children || [], trail.concat(node.name), out);
@@ -180,7 +162,7 @@
       // Mousedown (not click): grabbing focus first would blur the field
       // and move the button away before the click lands.
       event.preventDefault();
-      openPicker(lastEditable);
+      togglePicker();
     });
     shadow.appendChild(style);
     shadow.appendChild(button);
@@ -212,7 +194,9 @@
 
   function scheduleHideButton() {
     window.clearTimeout(buttonHideTimer);
-    buttonHideTimer = window.setTimeout(hideButton, BUTTON_HIDE_DELAY_MS);
+    buttonHideTimer = window.setTimeout(function () {
+      if (!pickerHost) hideButton();
+    }, BUTTON_HIDE_DELAY_MS);
   }
 
   function cancelHideButton() {
@@ -222,6 +206,8 @@
   // --- picker popup ---
 
   function closePicker() {
+    pickerRequest++;
+    pickerOpening = false;
     if (pickerHost) {
       pickerHost.remove();
       pickerHost = null;
@@ -230,23 +216,36 @@
   }
 
   async function openPicker(target) {
-    if (!(await siteAllowed())) { hideButton(); closePicker(); return; }
-    loadTree().then(function (tree) {
-      var entries = flattenWithPaths(tree);
-      if (!entries.length) {
-        return;
-      }
-      closePicker();
-      cancelHideButton();
-      hideButton();
-      pickerState = { target: target && document.contains(target) ? target : lastEditable, entries: entries, matches: entries, index: 0 };
-      renderPicker("");
-    });
+    var request = ++pickerRequest;
+    pickerOpening = true;
+    var allowed = await siteAllowed();
+    if (request !== pickerRequest) return;
+    pickerOpening = false;
+    if (!allowed) { hideButton(); closePicker(); return; }
+    closePicker();
+    cancelHideButton();
+    var state = { target: target && document.contains(target) ? target : lastEditable,
+      entries: [], matches: [], index: 0, error: "Loading Google Drive…" };
+    pickerState = state;
+    renderPicker("");
+    try {
+      var result = await loadTree();
+      if (pickerState !== state) return; // closed or replaced while loading
+      state.entries = flattenWithPaths(result.tree);
+      state.error = result.warnings && result.warnings.length ? "Unreadable Drive item: " + result.warnings[0] : "";
+      renderPicker(pickerHost.__pastexInput.value);
+    } catch (err) {
+      if (pickerState !== state) return;
+      state.error = "Drive: " + (err.message || err);
+      renderPicker(pickerHost.__pastexInput.value);
+    }
   }
 
   function togglePicker() {
-    if (pickerHost) {
+    if (pickerHost || pickerOpening) {
+      var target = pickerState && pickerState.target;
       closePicker();
+      if (target && document.contains(target)) target.focus({ preventScroll: true });
       return;
     }
     openPicker(lastEditable);
@@ -279,14 +278,22 @@
       input.placeholder = "Type to filter snippets…";
       input.setAttribute("aria-label", "Filter snippets");
       var list = document.createElement("ul");
+      var warning = document.createElement("div");
+      warning.setAttribute("role", "status");
+      warning.style.cssText = "padding:0 8px;color:#9a4310;font-size:11px";
       box.appendChild(input);
+      box.appendChild(warning);
       box.appendChild(list);
       shadow.appendChild(style);
       shadow.appendChild(box);
       document.documentElement.appendChild(pickerHost);
+      // Equal z-index elements paint in DOM order: keep the toggle above the
+      // popup even when the picker overlaps the field near the viewport edge.
+      if (buttonHost) document.documentElement.appendChild(buttonHost);
       pickerHost.__pastexBox = box;
       pickerHost.__pastexInput = input;
       pickerHost.__pastexList = list;
+      pickerHost.__pastexWarning = warning;
 
       input.addEventListener("input", function () {
         renderPicker(input.value);
@@ -298,15 +305,13 @@
         } else if (event.key === "Enter") {
           event.preventDefault();
           choosePicker();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          closePicker();
         }
       });
       input.addEventListener("blur", function () {
-        // Let a list click land before closing.
+        // A delayed blur from an old picker must not close a newly opened one.
+        var blurredHost = pickerHost;
         window.setTimeout(function () {
-          if (pickerHost && !pickerHost.__pastexHover) {
+          if (pickerHost === blurredHost && pickerHost && !pickerHost.__pastexHover) {
             closePicker();
           }
         }, 150);
@@ -325,24 +330,17 @@
       list.addEventListener("mouseout", function () {
         pickerHost.__pastexHover = false;
       });
-      document.addEventListener("keydown", escClosesPicker, true);
       placePicker(box);
       input.focus();
     }
+    pickerHost.__pastexWarning.textContent = pickerState.entries.length ? (pickerState.error || "") : "";
     paintPickerList();
-  }
-
-  function escClosesPicker(event) {
-    if (event.key === "Escape" && pickerHost) {
-      closePicker();
-      document.removeEventListener("keydown", escClosesPicker, true);
-    }
   }
 
   function placePicker(box) {
     // At the focused field when there is one, else near the pointer-fed
     // position is impossible without tracking, so use the viewport corner
-    // offset: the common case (button/shortcut while typing) has a field.
+    // offset: the common case (button while typing) has a field.
     var x = window.innerWidth - 400;
     var y = 60;
     var target = pickerState && pickerState.target;
@@ -368,7 +366,7 @@
     if (!matches.length) {
       var empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "No snippets match.";
+      empty.textContent = pickerState.error || (pickerState.entries.length ? "No snippets match." : "No snippets in Google Drive.");
       list.appendChild(empty);
       return;
     }
@@ -405,9 +403,7 @@
     var entry = pickerState.matches[Math.min(pickerState.index, pickerState.matches.length - 1)];
     var target = pickerState.target;
     closePicker();
-    if (entry && insertText(target, entry.node.text || "")) {
-      pushRecent(entry.node.id);
-    }
+    if (entry) insertText(target, entry.node.text || "");
   }
 
   // --- focus tracking + button visibility ---
@@ -456,27 +452,14 @@
     if (!message || typeof message.type !== "string" || message.type.indexOf("pastex-") !== 0) {
       return false;
     }
-    if (message.type === "pastex-ping") {
-      sendResponse({ ok: true });
-      return true;
-    }
-    if (message.type === "pastex-toggle-picker") {
-      togglePicker();
-      sendResponse({ ok: true });
-      return true;
-    }
     if (message.type === "pastex-insert") {
       var target = lastEditable && document.contains(lastEditable) ? lastEditable : null;
       if (!target) {
-        // No field focused: show the picker instead of failing silently.
-        openPicker(null);
+        // The side panel can offer its clipboard fallback instead.
         sendResponse({ ok: false, reason: "no-editable" });
         return true;
       }
       var done = insertText(target, message.text || "");
-      if (done && message.id) {
-        pushRecent(message.id);
-      }
       sendResponse({ ok: done });
       return true;
     }

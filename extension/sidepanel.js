@@ -11,18 +11,16 @@
   var Store = window.PastexStore;
   var Drive = window.PastexDrive;
   var Native = window.PastexNative;
+  var Library = window.PastexLibrary;
 
   var tree = [];
-  var settings = Store.defaultSettings();
-  var drive = Store.defaultDrive();
-  // Credentials from ~/.config/pastex via the native host (apt installs).
-  // Drive configuration comes only from the per-user files.
-  var fileFolderId = "";
-  var syncFolderId = "";
+  var settings = { collapsed: [] };
+  var rootId = "";
+  var ready = false;
   var selectedId = "";
   var query = "";
   var searchTimer = 0;
-  var syncing = false;
+  var busy = false;
 
   function $(id) {
     return document.getElementById(id);
@@ -49,7 +47,6 @@
     } else if (!collapsed && at !== -1) {
       settings.collapsed.splice(at, 1);
     }
-    Store.saveSettings(settings);
   }
 
   function clearTree() {
@@ -84,8 +81,8 @@
 
     var label = document.createElement("span");
     label.className = "label";
-    label.textContent = esc(node.name) || "(untitled)";
-    label.title = esc(node.name);
+    label.textContent = (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
+    label.title = node.loadError || esc(node.name);
     row.appendChild(label);
 
     if (node.kind === "text") {
@@ -95,16 +92,6 @@
         })
       );
     }
-    row.appendChild(
-      miniButton("Move up", "↑", function () {
-        moveSelected(node.id, -1);
-      })
-    );
-    row.appendChild(
-      miniButton("Move down", "↓", function () {
-        moveSelected(node.id, 1);
-      })
-    );
     row.appendChild(
       miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
         openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
@@ -150,8 +137,8 @@
       row.appendChild(icon);
       var label = document.createElement("span");
       label.className = "label";
-      label.textContent = esc(node.name) || "(untitled)";
-      label.title = esc(node.name);
+      label.textContent = (esc(node.name) || "(untitled)") + (node.loadError ? " ⚠" : "");
+      label.title = node.loadError || esc(node.name);
       row.appendChild(label);
       row.appendChild(
         miniButton("Insert into page", "⚡", function () {
@@ -182,7 +169,7 @@
       var hasNodes = tree.length > 0;
       $("empty").hidden = hasNodes;
       if (!hasNodes) {
-        $("empty").querySelector("p").innerHTML = "No snippets yet.<br />Create a folder or a text snippet to begin.";
+        $("empty").querySelector("p").textContent = ready ? "No snippets in the Google Drive folder yet." : "Connect to Google Drive to show your snippets.";
       }
     }
     renderPreview();
@@ -201,22 +188,53 @@
     var node = selectedNode();
     var isText = !!node && node.kind === "text";
     $("preview-title").textContent = node ? esc(node.name) : "Select a snippet.";
-    $("preview").textContent = isText ? node.text || "" : "";
-    $("btn-insert").disabled = !isText;
-    $("btn-edit").disabled = !isText;
+    $("preview").textContent = node && node.loadError ? "Could not read from Drive: " + node.loadError : (isText ? node.text || "" : "");
+    $("btn-insert").disabled = !isText || !!node.loadError;
+    $("btn-edit").disabled = !isText || !!node.loadError;
+  }
+
+  function renderDriveBar() {
+    $("drive-status").textContent = busy ? "Drive: loading…" : (ready ? "Google Drive connected" : "Google Drive unavailable");
+    $("btn-sync").disabled = busy;
+    $("btn-folder").disabled = busy || !ready;
+    $("btn-text").disabled = busy || !ready;
+    $("btn-empty-text").disabled = busy || !ready;
   }
 
   async function refresh() {
-    tree = await Store.loadTree();
-    if (selectedId && !Store.findById(tree, selectedId)) {
+    if (busy) return false;
+    busy = true;
+    renderDriveBar();
+    setStatus("Loading snippets from Google Drive…");
+    try {
+      var result = await Library.load(Native, Drive);
+      tree = result.tree;
+      rootId = result.session.rootId;
+      ready = true;
+      if (selectedId && !Store.findById(tree, selectedId)) selectedId = "";
+      render();
+      var warnings = result.warnings || [];
+      setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
+        "Google Drive loaded: " + Store.flatten(tree).length + " snippets.");
+      return true;
+    } catch (err) {
+      tree = [];
+      rootId = "";
+      ready = false;
       selectedId = "";
+      render();
+      setStatus("Could not load Google Drive: " + (err.message || err));
+      return false;
+    } finally {
+      busy = false;
+      renderDriveBar();
     }
-    render();
   }
 
   // --- insert into the page (or copy as the fallback) ---
 
   async function insertNode(node) {
+    if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError); return; }
     setStatus("Inserting…");
     var response = null;
     try {
@@ -229,7 +247,6 @@
       response = { ok: false };
     }
     if (response && response.ok) {
-      await Store.pushRecent(node.id);
       setStatus("Inserted into the page.");
       return;
     }
@@ -261,6 +278,10 @@
   }
 
   function openEditor(mode, node) {
+    if (node && node.loadError && mode === "edit-text") {
+      setStatus("Cannot edit an unreadable Drive item: " + node.loadError);
+      return;
+    }
     editorMode = mode;
     editorNodeId = node ? node.id : "";
     var titles = {
@@ -304,233 +325,91 @@
     $("editor-overlay").hidden = true;
   }
 
+  async function currentSession() {
+    if (!ready) throw new Error("Load Google Drive first.");
+    var session = await Library.connect(Native, Drive);
+    if (session.rootId !== rootId) throw new Error("Drive folder changed; refresh the list first.");
+    return session;
+  }
+
+  async function ensureAvailable(session, parentId, name, exceptId) {
+    var children = await Drive.listChildren(session.token, parentId);
+    if (children.some(function (child) { return child.name === name && child.id !== exceptId; })) {
+      throw new Error("An item with that name already exists in this folder.");
+    }
+  }
+
+  function parentOf(nodes, id, parentId) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].id === id) return parentId;
+      if (nodes[i].kind === "folder") {
+        var found = parentOf(nodes[i].children || [], id, nodes[i].id);
+        if (found) return found;
+      }
+    }
+    return "";
+  }
+
   async function saveEditor() {
     var name = $("editor-name").value.trim();
-    if (!name) {
-      setStatus("A name is required.");
+    if (!name || name.indexOf("/") !== -1) {
+      setStatus("Enter a name without /.");
       return;
     }
-    if (editorMode === "new-folder" || editorMode === "new-text") {
-      var parentId = $("editor-parent").value;
-      var created = editorMode === "new-folder" ? Store.makeFolder(name) : Store.makeText(name, $("editor-text").value);
-      if (!parentId) {
-        tree.push(created);
-      } else {
-        var parent = Store.findById(tree, parentId);
-        if (!parent || parent.kind !== "folder") {
-          setStatus("That folder no longer exists.");
-          return;
-        }
-        parent.children = parent.children || [];
-        parent.children.push(created);
-        Store.touch(parent);
-      }
-      selectedId = created.id;
-    } else {
-      var node = Store.findById(tree, editorNodeId);
-      if (!node) {
-        setStatus("That snippet no longer exists.");
-        closeEditor();
-        await refresh();
-        return;
-      }
-      node.name = name;
-      if (editorMode === "edit-text") {
-        node.text = $("editor-text").value;
-      }
-      Store.touch(node);
+    if (busy) return;
+    var mode = editorMode;
+    var node = Store.findById(tree, editorNodeId);
+    var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
+    if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
+      setStatus("That item or folder is no longer available; refresh first.");
+      return;
     }
-    await Store.saveTree(tree);
-    closeEditor();
+    busy = true;
+    renderDriveBar();
+    setStatus("Saving to Google Drive…");
+    var failure = "";
+    try {
+      var session = await currentSession();
+      var driveName = mode === "new-text" ? name.replace(/\.txt$/i, "") + ".txt" : name;
+      if (node && node.kind === "text") driveName = name.replace(/\.txt$/i, "") + (/\.txt$/i.test(node.driveName || "") ? ".txt" : "");
+      if (!node || driveName !== node.driveName && driveName !== node.name) {
+        await ensureAvailable(session, parentId, driveName, node && node.id);
+      }
+      if (mode === "new-folder") selectedId = await Drive.createFolder(session.token, name, parentId);
+      else if (mode === "new-text") {
+        var created = await Drive.uploadNew(session.token, parentId, name.replace(/\.txt$/i, ""), $("editor-text").value);
+        selectedId = created.id;
+      } else {
+        if (mode === "edit-text" && $("editor-text").value !== node.text) {
+          await Drive.updateText(session.token, node.id, $("editor-text").value);
+        }
+        if (driveName !== (node.driveName || node.name)) await Drive.renameFile(session.token, node.id, driveName);
+      }
+      closeEditor();
+    } catch (err) {
+      failure = "Could not save to Drive (some changes may have succeeded): " + (err.message || err);
+    } finally {
+      busy = false;
+    }
     await refresh();
-    setStatus("Saved.");
+    if (failure) setStatus(failure);
   }
 
   async function deleteNode(node) {
     var what = node.kind === "folder" ? 'folder "' + node.name + '" and everything inside it' : 'snippet "' + node.name + '"';
-    if (!window.confirm("Delete " + what + "?")) {
-      return;
-    }
-    Store.removeById(tree, node.id);
-    if (selectedId === node.id) {
-      selectedId = "";
-    }
-    await Store.saveTree(tree);
-    await refresh();
-    setStatus("Deleted.");
-  }
-
-  async function moveSelected(id, delta) {
-    Store.moveNode(tree, id, delta);
-    await Store.saveTree(tree);
-    await refresh();
-  }
-
-  // --- Google Drive sync ---
-
-  function effectiveFolderId() {
-    return fileFolderId;
-  }
-
-  async function refreshNative() {
-    fileFolderId = "";
-    try {
-      var status = await Native.status();
-      if (status && status.drive && status.drive.configured) {
-        fileFolderId = status.drive.folderId || "";
-      }
-    } catch (err) {
-      /* Sync requires the native host and configuration files. */
-    }
+    if (!window.confirm("Move " + what + " to Google Drive trash?")) return;
+    if (busy) return;
+    busy = true;
     renderDriveBar();
-  }
-
-  async function resolveServiceAccount() {
-    var config = await Native.readConfig();
-    return config && config.serviceAccount ? Drive.parseServiceAccount(JSON.stringify(config.serviceAccount)) : null;
-  }
-
-  function driveStatusLine() {
-    if (syncing) {
-      return "Drive: syncing…";
-    }
-    if (!effectiveFolderId()) {
-      return "Drive: not connected.";
-    }
-    if (drive.lastSyncAt) {
-      var when = drive.lastSyncAt.slice(0, 16).replace("T", " ");
-      return "Drive (files): synced " + when + (drive.lastSummary ? " (" + drive.lastSummary + ")" : "");
-    }
-    return "Drive (files): connected, never synced.";
-  }
-
-  function renderDriveBar() {
-    $("drive-status").textContent = driveStatusLine();
-    $("drive-status").title = fileFolderId ? "Folder ID: " + fileFolderId : "";
-    var busy = syncing;
-    $("btn-sync").disabled = busy;
-    $("btn-upload-all").disabled = busy;
-    $("btn-download-all").disabled = busy;
-  }
-
-  async function runDriveSync(mode) {
-    if (syncing) {
-      return;
-    }
-    await refreshNative();
-    var sa;
-    try { sa = await resolveServiceAccount(); } catch (err) {
-      setStatus("Cannot read service-account.json; see README: " + (err.message || err));
-      return;
-    }
-    if (!sa) {
-      setStatus("Configure ~/.config/pastex/service-account.json; see README.");
-      return;
-    }
-    var folderId = effectiveFolderId();
-    if (!folderId) {
-      setStatus("Configure ~/.config/pastex/google-drive.json; see README.");
-      return;
-    }
-    syncFolderId = folderId;
-    if (mode === "upload" && !window.confirm("Upload ALL local snippets to Drive, overwriting newer remote copies?")) {
-      return;
-    }
-    if (mode === "download" && !window.confirm("Replace ALL local snippets with the Drive copies?")) {
-      return;
-    }
-    syncing = true;
-    renderDriveBar();
+    var failure = "";
     try {
-      setStatus("Drive: signing in…");
-      var token = await Drive.fetchAccessToken(sa);
-      setStatus("Drive: listing folder…");
-      var remote = await Drive.walkRemote(token, folderId);
-      tree = await Store.loadTree();
-      var localEntries = Store.flattenWithPaths(tree).map(function (entry) {
-        return { path: entry.path, updatedAt: entry.node.updatedAt || "" };
-      });
-      var ops;
-      if (mode === "upload") {
-        ops = Drive.planUploadAll(localEntries, remote.texts);
-      } else if (mode === "download") {
-        tree = [];
-        ops = Drive.planDownloadAll(remote.texts);
-      } else {
-        ops = Drive.planSync(localEntries, remote.texts);
-      }
-      var counts = { up: 0, down: 0, same: 0, errors: [] };
-      var folderCache = {};
-      var localByPath = {};
-      Store.flattenWithPaths(tree).forEach(function (entry) {
-        localByPath[entry.path] = entry.node;
-      });
-      var total = ops.length;
-      for (var i = 0; i < ops.length; i++) {
-        var op = ops[i];
-        setStatus("Drive: " + (i + 1) + "/" + total + " " + op.path);
-        try {
-          await applyOp(token, op, localByPath, folderCache, counts);
-        } catch (err) {
-          counts.errors.push(op.path + ": " + (err && err.message ? err.message : err));
-        }
-      }
-      await Store.saveTree(tree);
-      var summary = counts.up + " up, " + counts.down + " down, " + counts.same + " same";
-      if (counts.errors.length) {
-        summary += ", " + counts.errors.length + " failed";
-      }
-      drive.lastSyncAt = new Date().toISOString();
-      drive.lastSummary = summary;
-      await Store.saveDrive(drive);
-      await refresh();
-      if (counts.errors.length) {
-        setStatus("Drive sync finished with errors: " + counts.errors[0]);
-      } else {
-        setStatus("Drive sync finished: " + summary + ".");
-      }
-    } catch (err) {
-      setStatus("Drive sync failed: " + (err && err.message ? err.message : err));
-    } finally {
-      syncing = false;
-      renderDriveBar();
-    }
-  }
-
-  async function applyOp(token, op, localByPath, folderCache, counts) {
-    if (op.type === "noop") {
-      counts.same++;
-      return;
-    }
-    if (op.type === "upload-new" || op.type === "upload-update") {
-      var node = localByPath[op.path];
-      if (!node) {
-        return;
-      }
-      var segments = op.path.split("/");
-      if (op.type === "upload-new") {
-        var parentId = await Drive.ensureFolderPath(token, syncFolderId, segments.slice(0, -1), undefined, folderCache);
-        var created = await Drive.uploadNew(token, parentId, segments[segments.length - 1], node.text || "");
-        node.updatedAt = (created && created.modifiedTime) || Store.nowIso();
-      } else {
-        var updated = await Drive.updateText(token, op.remoteId, node.text || "");
-        node.updatedAt = (updated && updated.modifiedTime) || Store.nowIso();
-      }
-      counts.up++;
-      return;
-    }
-    if (op.type === "download-new" || op.type === "download-update") {
-      var text = await Drive.downloadText(token, op.remoteId);
-      Store.mergeDownloaded(tree, [{ segments: op.path.split("/"), text: text, updatedAt: op.remoteModified || Store.nowIso() }]);
-      var merged = Store.flattenWithPaths(tree);
-      for (var i = 0; i < merged.length; i++) {
-        if (merged[i].path === op.path) {
-          localByPath[op.path] = merged[i].node;
-        }
-      }
-      counts.down++;
-      return;
-    }
+      var session = await currentSession();
+      await Drive.trashFile(session.token, node.id);
+      if (selectedId === node.id) selectedId = "";
+    } catch (err) { failure = "Could not delete from Drive: " + (err.message || err); }
+    finally { busy = false; }
+    await refresh();
+    if (failure) setStatus(failure);
   }
 
   // --- events ---
@@ -556,15 +435,7 @@
   });
 
   $("btn-sync").addEventListener("click", function () {
-    runDriveSync("sync");
-  });
-
-  $("btn-upload-all").addEventListener("click", function () {
-    runDriveSync("upload");
-  });
-
-  $("btn-download-all").addEventListener("click", function () {
-    runDriveSync("download");
+    refresh();
   });
 
   $("btn-insert").addEventListener("click", function () {
@@ -588,42 +459,7 @@
       closeEditor();
     }
   });
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "Escape" && !$("editor-overlay").hidden) {
-      closeEditor();
-    }
-  });
-
-  chrome.storage.onChanged.addListener(function (changes, area) {
-    if (area !== "local") {
-      return;
-    }
-    if (changes[Store.TREE_KEY]) {
-      refresh();
-    }
-    if (changes[Store.DRIVE_KEY]) {
-      Store.loadDrive().then(function (loaded) {
-        drive = loaded;
-        renderDriveBar();
-      });
-    }
-  });
-
-  // --- init ---
-
-  // The user may edit config files while the panel sits open.
-  window.addEventListener("focus", function () {
-    refreshNative();
-  });
-
-  (async function init() {
-    try {
-      settings = await Store.loadSettings();
-      drive = await Store.loadDrive();
-      await refresh();
-      await refreshNative();
-    } catch (err) {
-      setStatus("Storage is unavailable: " + (err && err.message ? err.message : err));
-    }
-  })();
+  // Re-read Drive on opening the panel or using the refresh button.
+  renderDriveBar();
+  refresh();
 })();

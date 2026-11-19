@@ -1,8 +1,9 @@
 # Pastex for Chrome and Chromium
 
-Pastex is a browser extension for text snippets, with a side panel and optional
-Google Drive sync. It operates on **only the sites you choose**. There is no
-settings window: configure Pastex by editing the files below.
+Pastex is a browser extension for text snippets stored directly in Google
+Drive. It operates on **only the sites you choose**. There is no settings
+window: configure Pastex by editing the files below. A working internet
+connection and access to the configured Drive folder are required.
 
 ## Install
 
@@ -48,7 +49,7 @@ and all subdomains. HTTP and HTTPS are separate; matching includes any port.
 If the file is malformed, contains an invalid entry, or the native host is
 unavailable, no sites are enabled. The extension requests access to HTTP/HTTPS
 in Chrome so it can register your chosen sites dynamically; it registers its
-content script and context menu only for the configured origins.
+content script only for the configured origins.
 
 **After changing sites.json, completely restart the browser and reload open
 tabs.** Already-open tabs can retain an earlier injected script until reloaded.
@@ -56,7 +57,7 @@ When upgrading, Chrome may ask you to re-enable the extension because its site
 permissions changed. Insertion requests also check the current file each time,
 so a removed site is denied even before restart.
 
-## Configure Google Drive (optional)
+## Configure Google Drive (required)
 
 1. Enable the **Drive API** in Google Cloud, create a service account, and
    download its JSON key. Share the desired Drive folder with the key's
@@ -74,22 +75,36 @@ so a removed site is denied even before restart.
    credential fallback is used. Older browser-storage credentials are not
    automatically deleted on upgrade; remove them via Chrome's extension
    storage developer tools if desired, after verifying your file setup.
-4. Open the Pastex side panel and press **⇄ Sync**. The service account key
-   never leaves the machine; only signed authentication requests are sent to
-   Google's token endpoint.
+4. Open the Pastex side panel. It loads the folder and its `.txt` files from
+   Drive automatically; use **↻ Refresh** to reload after external changes.
+   The service account key never leaves the machine; only signed authentication
+   requests are sent to Google's token endpoint.
 
-Each snippet maps to a `.txt` file. Sync merges newest-wins per path; upload
-all and download all overwrite the other side after confirmation. Deletions
-never propagate automatically. Snippets themselves remain in browser storage.
+Each snippet maps to a Drive text file. Creating, editing and renaming write
+straight to Drive; deleting moves the item (including a folder's contents) to
+Drive trash. The side panel and in-page picker load from Drive and hold data
+only in memory while open; there is no offline snippet library or local sync
+copy. Drive must be reachable to load, edit or paste snippets. Folder and file
+order follows Drive's name ordering; manual reordering is not supported.
+
+### Upgrading from an older version
+
+Before upgrading, sync any browser-only snippets to Drive using the previous
+version and verify them in Google Drive. The new version does not read, migrate,
+or erase the old browser-storage library; unsynchronized local snippets will
+not appear in the new interface. Do not clear the old extension's data until
+all needed snippets have been safely backed up. A stable CRX signing key is
+needed to keep the same extension identity across upgrades.
 
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. On an allowed site, focus an editable field and press `Ctrl+Shift+V`,
-click the floating lightning button, or use the editable-field context menu.
-Click a side-panel snippet to insert it. If no editable field is focused on an
-allowed page, it is copied to the clipboard. Restricted browser pages cannot
-receive scripts. Sites not listed in `sites.json` are not injected or targeted.
+snippets. On an allowed site, focus an editable field and click the floating
+**⚡** button to open the picker; click it again to close the picker. There is
+no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
+to insert it. If no editable field is focused on an allowed page, it is copied
+to the clipboard. Restricted browser pages cannot receive scripts. Sites not
+listed in `sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
@@ -120,8 +135,8 @@ for testing only. Verify with `python3 scripts/pack-crx.py --verify FILE.crx`.
 An enterprise administrator may configure `ExtensionInstallForcelist` with
 an update manifest; the package does not silently force-install extensions.
 
-Permissions: `storage` holds snippets and UI state; `sidePanel`, `contextMenus`,
-`scripting` and `activeTab` provide the editor and approved-site picker;
+Permissions: `sidePanel`, `scripting` and `activeTab` provide
+the editor and approved-site picker;
 `clipboardWrite` is the fallback on approved sites; `nativeMessaging` reads
 the config files. HTTP/HTTPS host permission covers dynamic user-approved sites
 and the Google API endpoints; Chrome displays this as access to all sites even
