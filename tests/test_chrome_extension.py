@@ -400,6 +400,9 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "btn-collapse-all" in script
     assert "Google Drive • session cache · " in script
     assert "Session cache: " not in script
+    assert "Snippets loaded from session cache." not in script
+    assert "pastex_collapsed" in (EXT / "library.js").read_text(encoding="utf-8")
+    assert "pastex_collapsed" in (EXT / "drive.js").read_text(encoding="utf-8")
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content
     assert 'typeof node.text === "string" ? node.text : ""' in script

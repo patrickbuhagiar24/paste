@@ -88,6 +88,11 @@ function panelHarness(fail, options = {}) {
             }
           } else if (c.action === "delete") {
             for (const id of c.ids) await drive.trashFile("token", id);
+          } else if (c.action === "collapse") {
+            for (const id of c.ids) {
+              const folder = records.find((r) => r.id === id);
+              if (folder) folder.properties = { ...(folder.properties || {}), pastex_collapsed: c.collapsed ? "1" : "0" };
+            }
           } else if (c.action === "reorder") {
             for (const group of c.groups) for (let i = 0; i < group.length; i++) records.find((r) => r.id === group[i]).properties = { pastex_order: String(i) };
           }
@@ -280,11 +285,20 @@ test("collapse all folds every folder and clears an active search", async () => 
   elements.search.value = "Synced";
   elements.search.listeners.input({ target: elements.search });
   await new Promise((resolve) => setTimeout(resolve, 170));
-  elements["btn-collapse-all"].listeners.click();
+  await elements["btn-collapse-all"].listeners.click();
+  await settled(); await settled();
   assert.equal(elements.search.value, "");
-  assert.match(elements.status.textContent, /All folders collapsed/);
+  assert.match(elements.status.textContent, /Google Drive loaded/);
   const folderRow = elements.tree.children.find((row) => allText(row).includes("Empty Folder"));
   assert.equal(folderRow.children[0].textContent, "▸");
+});
+
+test("collapsed folders loaded from Drive stay collapsed in a new panel", async () => {
+  const records = [{ id: "f", name: "Saved Folder", mimeType: "folder", parent: "root", properties: { pastex_collapsed: "1" } }];
+  const { elements } = panelHarness(false, { records });
+  await settled();
+  const row = elements.tree.children[0];
+  assert.equal(row.children[0].textContent, "▸");
 });
 
 test("session cache count is shown in the drive bar, not the footer", async () => {
@@ -292,6 +306,6 @@ test("session cache count is shown in the drive bar, not the footer", async () =
   const { elements } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
   await settled();
   assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
-  assert.doesNotMatch(elements.status.textContent, /Session cache:/);
-  assert.match(elements.status.textContent, /loaded from session cache/);
+  assert.doesNotMatch(elements.status.textContent, /session cache/i);
+  assert.match(elements.status.textContent, /Ready\./);
 });

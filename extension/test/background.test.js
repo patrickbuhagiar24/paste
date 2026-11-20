@@ -179,14 +179,16 @@ test("worker handles create, rename, order and bulk trash with Drive, denying ch
   drive.renameFile = async (t, id, name) => { writes.push(["rename", id, name]); };
   drive.trashFile = async (t, id) => { writes.push(["trash", id]); };
   drive.setOrder = async (t, id, order) => { writes.push(["order", id, order]); };
+  drive.setCollapsed = async (t, id, collapsed) => { writes.push(["collapse", id, collapsed]); };
   const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
   assert.equal((await send({ rootId: "root", action: "save", mode: "new-folder", name: "Folder", parentId: "root" })).result.id, "f");
   assert.equal((await send({ rootId: "root", action: "save", mode: "new-text", name: "Note", text: "text", parentId: "root" })).result.id, "n");
   assert.equal((await send({ rootId: "root", action: "save", mode: "rename-text", name: "Renamed", parentId: "root", node: { id: "n", kind: "text", name: "Note", driveName: "Note.txt" } })).ok, true);
   assert.equal((await send({ rootId: "root", action: "reorder", groups: [["n", "f"]] })).ok, true);
+  assert.equal((await send({ rootId: "root", action: "collapse", ids: ["f"], collapsed: true })).ok, true);
   assert.equal((await send({ rootId: "root", action: "delete", ids: ["n", "f"] })).ok, true);
   assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
-  assert.deepEqual(writes, [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"], ["order", "n", 0], ["order", "f", 1], ["trash", "n"], ["trash", "f"]]);
+  assert.deepEqual(writes, [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"], ["order", "n", 0], ["order", "f", 1], ["collapse", "f", true], ["trash", "n"], ["trash", "f"]]);
 });
 
 test("repeated paste requests reuse the cached site allowlist", async () => {

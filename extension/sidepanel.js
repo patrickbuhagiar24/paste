@@ -58,6 +58,23 @@
     }
   }
 
+  // Folder collapse state is stored in Drive properties, so a reload or a
+  // different computer sees the same structure as the ordering metadata.
+  function applyCollapsedFromTree() {
+    settings.collapsed = [];
+    Store.walk(tree, function (node) {
+      if (node.kind === "folder" && node.collapsed) settings.collapsed.push(node.id);
+    });
+  }
+
+  async function persistCollapsed(ids, collapsed) {
+    var before = settings.collapsed.slice();
+    ids.forEach(function (id) { setCollapsed(id, collapsed); });
+    render();
+    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed });
+    if (!result) { settings.collapsed = before; render(); }
+  }
+
   function clearTree() {
     var host = $("tree");
     while (host.firstChild) {
@@ -117,8 +134,7 @@
       toggle.tabIndex = 0;
       function toggleFolder(event) {
         event.stopPropagation();
-        setCollapsed(node.id, !isCollapsed(node.id));
-        render();
+        persistCollapsed([node.id], !isCollapsed(node.id));
       }
       toggle.addEventListener("click", toggleFolder);
       toggle.addEventListener("keydown", function (event) {
@@ -130,8 +146,7 @@
       if (selecting) {
         toggleSelection(node.id);
       } else if (node.kind === "folder") {
-        setCollapsed(node.id, !isCollapsed(node.id));
-        render();
+        persistCollapsed([node.id], !isCollapsed(node.id));
       } else {
         selectNode(node.id);
         insertNode(node);
@@ -285,12 +300,13 @@
       rootId = result.rootId;
       fromCache = result.cached;
       ready = true;
+      applyCollapsedFromTree();
       if (selectedId && !Store.findById(tree, selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!Store.findById(tree, id)) selectedItems.delete(id); });
       render();
       var warnings = result.warnings || [];
       setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        (fromCache ? "Snippets loaded from session cache." : "Google Drive loaded: " + Store.flatten(tree).length + " snippets."));
+        (fromCache ? "Ready." : "Google Drive loaded: " + Store.flatten(tree).length + " snippets."));
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
@@ -547,15 +563,13 @@
   });
 
   $("btn-sync").addEventListener("click", function () { refresh(true); });
-  $("btn-collapse-all").addEventListener("click", function () {
+  $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
-    settings.collapsed = [];
-    Store.walk(tree, function (node) {
-      if (node.kind === "folder" && settings.collapsed.indexOf(node.id) === -1) settings.collapsed.push(node.id);
-    });
+    var ids = [];
+    Store.walk(tree, function (node) { if (node.kind === "folder") ids.push(node.id); });
+    if (!ids.length) return;
     if (query) { query = ""; $("search").value = ""; }
-    render();
-    setStatus("All folders collapsed.");
+    await persistCollapsed(ids, true);
   });
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;

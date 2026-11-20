@@ -53,7 +53,10 @@
       var jobs = [];
       files.forEach(function (file) {
         if (file.mimeType === drive.FOLDER_MIME) {
-          var folder = { id: file.id, kind: "folder", name: file.name, children: [] };
+          var folder = {
+            id: file.id, kind: "folder", name: file.name, children: [],
+            collapsed: !!(file.properties && file.properties.pastex_collapsed === "1"),
+          };
           nodes.push(folder);
           jobs.push(visit(file.id, folder.children).catch(function (err) {
             folder.loadError = err.message || String(err);

@@ -78,3 +78,16 @@ test("Drive tree respects persistent item properties, then Drive order for unran
   const result = await Library.load(native, drive);
   assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
 });
+
+test("folder collapse state is loaded from Drive metadata", async () => {
+  const drive = fakeDrive();
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "open", name: "Open", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+    { id: "unset", name: "Unset", mimeType: drive.FOLDER_MIME },
+  ] : [];
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => [node.id, node.collapsed]), [
+    ["closed", true], ["open", false], ["unset", false],
+  ]);
+});

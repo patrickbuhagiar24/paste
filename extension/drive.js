@@ -279,12 +279,31 @@
     });
   }
 
-  async function setOrder(token, fileId, order, fetchImpl) {
+  async function getProperties(token, fileId, fetchImpl) {
+    var data = await driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      query: { fields: "properties" }, fetchImpl: fetchImpl,
+    });
+    return data && data.properties ? data.properties : {};
+  }
+
+  async function patchProperties(token, fileId, values, fetchImpl) {
+    // Drive replaces the whole properties map on PATCH; merge first so order
+    // and collapse metadata on the same folder never erase each other.
+    var properties = await getProperties(token, fileId, fetchImpl);
+    Object.keys(values).forEach(function (key) { properties[key] = values[key]; });
     return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
       method: "PATCH", contentType: "application/json; charset=UTF-8",
       query: { fields: "id,properties" },
-      body: JSON.stringify({ properties: { pastex_order: String(order) } }), fetchImpl: fetchImpl,
+      body: JSON.stringify({ properties: properties }), fetchImpl: fetchImpl,
     });
+  }
+
+  async function setOrder(token, fileId, order, fetchImpl) {
+    return patchProperties(token, fileId, { pastex_order: String(order) }, fetchImpl);
+  }
+
+  async function setCollapsed(token, fileId, collapsed, fetchImpl) {
+    return patchProperties(token, fileId, { pastex_collapsed: collapsed ? "1" : "0" }, fetchImpl);
   }
 
   async function trashFile(token, fileId, fetchImpl) {
@@ -362,6 +381,7 @@
     downloadText: downloadText,
     renameFile: renameFile,
     setOrder: setOrder,
+    setCollapsed: setCollapsed,
     trashFile: trashFile,
     createFolder: createFolder,
     uploadNew: uploadNew,

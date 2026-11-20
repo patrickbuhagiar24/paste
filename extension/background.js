@@ -172,6 +172,13 @@ async function mutateDrive(command) {
       }
       return {};
     }
+    if (command.action === "collapse") {
+      var ids = command.ids || [];
+      for (var c = 0; c < ids.length; c++) {
+        if (ids[c]) await PastexDrive.setCollapsed(token, ids[c], !!command.collapsed);
+      }
+      return {};
+    }
     throw new Error("Unknown Drive operation.");
   });
 }

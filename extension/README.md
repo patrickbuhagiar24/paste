@@ -82,10 +82,13 @@ invalidate the snapshot. No snippet changes are queued for offline sync.
 to move selected items within their own folders, and **Delete** to move them to
 Drive trash after confirmation. Click the folder arrow to expand or collapse it
 while selecting. Moving is disabled during search; clear the search first.
-Manual order is saved in each item's Google Drive `pastex_order` property, so
-other Pastex instances can see it after refreshing. Unranked new files follow
-ranked items in Drive's normal order. Concurrent reordering on different devices
-can overwrite the same metadata; refresh before editing shared lists.
+Manual order is saved in each item's Google Drive `pastex_order` property, and
+a folder's collapsed state in its `pastex_collapsed` property. Both are Drive
+metadata, so the whole structure survives a panel reload, a browser restart and
+a move to another computer using the same Drive folder. **Collapse all** writes
+`pastex_collapsed` to every folder. Unranked new files follow ranked items in
+Drive's normal order. Concurrent reordering on different devices can overwrite
+the same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 

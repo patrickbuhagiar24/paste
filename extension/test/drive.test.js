@@ -215,10 +215,22 @@ test("Drive pagination rejects a repeated token instead of loading forever", asy
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
 });
 
-test("Drive reorder writes a property rather than renaming or moving a file", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
+test("Drive reorder merges properties instead of erasing collapse state", async () => {
+  const fetchImpl = stubFetch((url, options, n) => n === 1
+    ? jsonResponse({ properties: { pastex_order: "4", pastex_collapsed: "1" } })
+    : jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
   await Drive.setOrder("tok", "id", 2, fetchImpl);
-  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2" } });
-  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get("supportsAllDrives"), "true");
+  assert.equal(fetchImpl.calls[1].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
+  assert.equal(new URL(fetchImpl.calls[1].url).searchParams.get("supportsAllDrives"), "true");
+});
+
+test("Drive collapse merges properties instead of erasing saved order", async () => {
+  const fetchImpl = stubFetch((url, options, n) => n % 2 === 1
+    ? jsonResponse({ properties: { pastex_order: "3", pastex_collapsed: "0" } })
+    : jsonResponse({ id: "folder", properties: { pastex_collapsed: "1" } }));
+  await Drive.setCollapsed("tok", "folder", true, fetchImpl);
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "3", pastex_collapsed: "1" } });
+  await Drive.setCollapsed("tok", "folder", false, fetchImpl);
+  assert.deepEqual(JSON.parse(fetchImpl.calls[3].options.body), { properties: { pastex_order: "3", pastex_collapsed: "0" } });
 });
