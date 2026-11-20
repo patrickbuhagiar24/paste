@@ -492,7 +492,8 @@
   // --- configuration: one JSON manifest with links ---
 
   async function applyConfiguration(load) {
-    $("choose-manifest").disabled = true;
+    var button = $("btn-config");
+    button.disabled = true;
     try {
       var applied = await load();
       var found = applied.found;
@@ -505,25 +506,29 @@
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
       render(); renderDriveBar();
-      refresh(true);
-      $("config-status").textContent = applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
-        (issues.length ? " " + issues.join(" ") : "");
+      // Let an in-flight panel load finish so its status cannot overwrite
+      // the configuration result; then force one clean Drive reload.
+      refreshRequested = false;
+      while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
+      await refresh(true);
+      setStatus(applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
+        (issues.length ? " " + issues.join(" ") : ""));
     } catch (err) {
-      $("config-status").textContent = err.name === "AbortError" ?
+      setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        "Could not use configuration: " + (err.message || err);
+        "Could not use configuration: " + (err.message || err));
     } finally {
-      $("choose-manifest").disabled = false;
+      button.disabled = false;
     }
   }
 
-  $("choose-manifest").addEventListener("click", function () {
+  $("btn-config").addEventListener("click", function () {
     if (typeof window.showOpenFilePicker !== "function") {
-      $("config-status").textContent = "This browser does not support selecting a manifest file.";
+      setStatus("This browser does not support selecting a manifest file.");
       return;
     }
     // The picker must be called directly from the user gesture.
-    applyConfiguration(async function () {
+    return applyConfiguration(async function () {
       var handles = await window.showOpenFilePicker({
         multiple: false,
         types: [{ description: "JSON manifest", accept: { "application/json": [".json"] } }],
@@ -533,12 +538,6 @@
       return { found: found, label: "Using manifest " + file.name };
     });
   });
-
-  $("btn-config").addEventListener("click", function () {
-    $("config-status").textContent = "";
-    $("config-overlay").hidden = false;
-  });
-  $("config-close").addEventListener("click", function () { $("config-overlay").hidden = true; });
 
   // --- events ---
 

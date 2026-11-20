@@ -20,7 +20,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "choose-manifest", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
@@ -45,6 +45,7 @@ function panelHarness(fail, options = {}) {
   };
   const imports = [];
   const messages = [];
+  let pickerCalls = 0;
   const clipboardTexts = [];
   const native = {
     readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }),
@@ -57,7 +58,10 @@ function panelHarness(fail, options = {}) {
       chooseManifestText: async (text) => { imports.push(text); return { drive: "linked drive.json", account: "linked account.json", sites: "linked sites.json" }; },
     }) },
     PastexHandleStore: {}, PastexSites: {}, PastexManifest: {},
-    showOpenFilePicker: options.manifestPicker || (async () => [{ getFile: async () => ({ name: "config.json", text: async () => "{}" }) }]),
+    showOpenFilePicker: async (opts) => {
+      pickerCalls++;
+      return options.manifestPicker ? options.manifestPicker(opts) : [{ getFile: async () => ({ name: "config.json", text: async () => "{}" }) }];
+    },
     confirm: () => options.confirm !== false, setTimeout, clearTimeout };
   let progress = () => {};
   let cache;
@@ -106,7 +110,7 @@ function panelHarness(fail, options = {}) {
   };
   const context = vm.createContext({ document, window, chrome: { runtime }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
-  return { elements, records, context, imports, messages, clipboardTexts };
+  return { elements, records, context, imports, messages, clipboardTexts, pickerCalls: () => pickerCalls };
 }
 function allText(el) { return [el.textContent, ...el.children.map(allText)].join(" "); }
 async function settled() { await new Promise(setImmediate); await new Promise(setImmediate); }
@@ -164,13 +168,12 @@ test("side panel creates, edits and trashes files directly in Drive", async () =
   assert.doesNotMatch(allText(elements.tree), /Synced/);
 });
 
-test("configuration dialog opens before choosing a manifest", async () => {
-  const { elements } = panelHarness(false);
+test("Config opens the JSON file picker immediately", async () => {
+  const { elements, pickerCalls } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
-  assert.equal(elements["config-overlay"].hidden, false);
-  elements["config-close"].listeners.click();
-  assert.equal(elements["config-overlay"].hidden, true);
+  assert.equal(pickerCalls(), 1);
+  await settled();
 });
 
 test("side panel shows discovered Drive items before downloads finish", async () => {
@@ -261,21 +264,19 @@ test("clipboard fallback runs only when no editable field is focused", async () 
 
 test("manifest picker loads one JSON with links and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
-  await elements["choose-manifest"].listeners.click();
-  await settled();
+  await elements["btn-config"].listeners.click();
   assert.deepEqual(imports, ["{}"]);
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements["config-status"].textContent, /Using manifest config\.json/);
-  assert.match(elements["config-status"].textContent, /linked drive\.json/);
+  assert.match(elements.status.textContent, /Using manifest config\.json/);
+  assert.match(elements.status.textContent, /linked drive\.json/);
 });
 
 test("canceling the manifest picker leaves configuration unchanged", async () => {
   const { elements, imports } = panelHarness(false, { manifestPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
-  await elements["choose-manifest"].listeners.click();
-  await settled();
+  await elements["btn-config"].listeners.click();
   assert.equal(imports.length, 0);
-  assert.match(elements["config-status"].textContent, /unchanged/);
+  assert.match(elements.status.textContent, /unchanged/);
 });
 
 test("collapse all folds every folder and clears an active search", async () => {

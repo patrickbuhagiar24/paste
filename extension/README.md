@@ -38,8 +38,8 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
    An empty list allows no sites. Use HTTP(S) origins only, without paths,
    ports, credentials or global wildcards. Wildcard subdomains include the
    base domain. If missing, invalid or inaccessible, the allowlist fails closed.
-4. Open the side panel, click **Config** then **Choose manifest (.json)**, and
-   select a local JSON file with exactly these three keys:
+4. Open the side panel and click **Config**. The file picker opens directly;
+   select a local JSON manifest file with exactly these three keys:
 
    ```json
    {

@@ -347,7 +347,7 @@ def test_extension_readme_documents_setup_and_signing():
         "IndexedDB",
         "pastex-google-drive.json",
         "service-account.json",
-        "Choose manifest (.json)",
+        "The file picker opens directly",
         "only the three download URLs",
     ):
         assert required in readme, f"README misses {required!r}"
@@ -380,9 +380,12 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
         assert "~/.config/pastex" not in text
         assert "pastex-native-host" not in text
     html = (EXT / "sidepanel.html").read_text()
-    assert 'id="choose-manifest"' in html
+    assert 'id="btn-config"' in html
+    assert 'id="config-overlay"' not in html and 'id="choose-manifest"' not in html
     assert 'id="choose-folder"' not in html
-    assert "showOpenFilePicker" in (EXT / "sidepanel.js").read_text()
+    script = (EXT / "sidepanel.js").read_text()
+    assert '$("btn-config").addEventListener' in script
+    assert "showOpenFilePicker({" in script
     assert "showDirectoryPicker" not in (EXT / "sidepanel.js").read_text()
     assert "config-manifest.js" in html
     assert "config-manifest.js" in (EXT / "config-reader.html").read_text()

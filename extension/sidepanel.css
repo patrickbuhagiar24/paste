@@ -158,8 +158,7 @@ main {
   font-size: 34px;
 }
 
-#editor-overlay,
-#config-overlay {
+#editor-overlay {
   position: fixed;
   inset: 0;
   background: rgba(30, 50, 70, 0.35);
@@ -169,13 +168,11 @@ main {
   z-index: 10;
 }
 
-#editor-overlay[hidden],
-#config-overlay[hidden] {
+#editor-overlay[hidden] {
   display: none;
 }
 
-#editor,
-#config-dialog {
+#editor {
   background: #fff;
   border-radius: 8px;
   padding: 12px;
@@ -185,14 +182,12 @@ main {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
 }
 
-#editor h2,
-#config-dialog h2 {
+#editor h2 {
   margin: 0 0 8px;
   font-size: 15px;
 }
 
-#editor label,
-#config-dialog label {
+#editor label {
   display: block;
   margin: 8px 0 3px;
   color: #5a6b7d;
@@ -206,12 +201,6 @@ main {
   padding: 6px 8px;
   border: 1px solid #c6d8ec;
   border-radius: 5px;
-}
-
-#config-dialog input[type="file"] {
-  display: block;
-  max-width: 100%;
-  margin: 4px 0 12px;
 }
 
 .editor-buttons {
