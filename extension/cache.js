@@ -1,6 +1,10 @@
 /* Browser-session cache of a Drive library, shared by the worker and panel.
  * Credentials are never stored. Chrome's session storage is memory-only and
  * is not exposed to content scripts. Drive remains the source of truth.
+ *
+ * The tree snapshot is invalidated after every mutation, but verified text
+ * bodies are keyed by Drive's modifiedTime and survive those invalidations.
+ * That lets forced refreshes and folder expansion reuse unchanged snippets.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
@@ -11,6 +15,8 @@
 
   function create(native, drive, library, storage, cryptoApi) {
     var memory = null;
+    var bodies = {};
+    var identityCache = { config: null, value: "" };
     var revision = 0;
     var inflight = null;
     var mutations = Promise.resolve();
@@ -21,25 +27,41 @@
         throw new Error(config.serviceAccountError || "Configure a service-account.json link in the configuration manifest.");
       if (!config.drive || !config.drive.folderId)
         throw new Error(config.driveError || "Configure a pastex-google-drive.json link in the configuration manifest.");
+      if (identityCache.config === config) return identityCache.value;
       var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
-      return Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      identityCache.value = Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      identityCache.config = config;
+      return identityCache.value;
     }
 
-    async function discard() {
+    async function clearSnapshot() {
       memory = null;
       try { if (storage) await storage.remove(KEY); } catch (ignored) { /* memory-only fallback */ }
     }
 
+    async function discardAll() {
+      await clearSnapshot();
+      bodies = {};
+      identityCache = { config: null, value: "" };
+    }
+
     async function invalidate() {
       revision++;
-      await discard();
+      // Mutation invalidation must not throw away verified text bodies.
+      await clearSnapshot();
     }
 
     async function readStored() {
-      if (memory) return memory;
-      try { if (storage) memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
+      if (!memory && storage) {
+        try { memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
+      }
+      bodies = (memory && memory.bodies) || {};
       return memory;
+    }
+
+    function mergeBodies(next) {
+      Object.keys(next || {}).forEach(function (id) { bodies[id] = next[id]; });
     }
 
     async function get(force, onUpdate) {
@@ -47,10 +69,10 @@
       var currentRevision = revision;
       var key;
       try { key = await identity(); }
-      catch (err) { await discard(); throw err; }
+      catch (err) { await discardAll(); throw err; }
       var saved = await readStored();
       if (currentRevision !== revision) return get(force, onUpdate);
-      if (saved && saved.identity !== key) { await discard(); saved = null; }
+      if (saved && saved.identity !== key) { await discardAll(); saved = null; }
       if (!force && saved) return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true };
       if (inflight) {
         if (!force && inflight.identity === key) return inflight.promise;
@@ -62,21 +84,22 @@
       flight.promise = (async function () {
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
-        });
+        }, { bodies: bodies, deferCollapsed: true });
+        mergeBodies(result.bodies);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [], cached: false };
         // Never replace a complete snapshot with a partial/error listing.
         // Explicit revocation of an item also invalidates the older snapshot.
-        if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discard();
+        if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
         if (!response.warnings.length) {
-          memory = { identity: key, rootId: response.rootId, tree: response.tree };
+          memory = { identity: key, rootId: response.rootId, tree: response.tree, bodies: bodies };
           try { if (storage) await storage.set({ [KEY]: memory }); }
           catch (ignored) {
             // A failed replacement must not leave an older snapshot in session
             // storage for the next worker lifetime.
             try { if (storage) await storage.remove(KEY); } catch (ignoredAgain) {}
           }
-          if (started !== revision) { await discard(); throw new Error("Drive library changed while loading; refresh again."); }
+          if (started !== revision) { await clearSnapshot(); throw new Error("Drive library changed while loading; refresh again."); }
         }
         return response;
       })();
@@ -85,7 +108,7 @@
       catch (err) {
         // If Drive explicitly denies access, do not serve the old snapshot on
         // the next opening. A mere offline/timeout failure may keep it.
-        if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) await discard();
+        if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) await discardAll();
         throw err;
       } finally { if (inflight === flight) inflight = null; }
     }

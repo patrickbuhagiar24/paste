@@ -1,3 +1,12 @@
+pastex (2.7.0-1) unstable; urgency=medium
+
+  * Open the JSON manifest picker directly from the Config button.
+  * Memoize linked configuration, reuse unchanged snippet text and defer
+    bodies inside collapsed folders for faster panel loads.
+  * Index snippet lookups and coalesce progress renders.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 10:49:58 +0000
+
 pastex (2.6.0-1) unstable; urgency=medium
 
   * Persist folder collapse state alongside snippet ordering in Drive.

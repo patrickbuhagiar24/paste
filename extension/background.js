@@ -63,7 +63,7 @@ function invalidatePatterns() { cachedPatterns = null; cachedPatternsAt = 0; }
 // delay; configureSites() and config reloads force a refresh immediately.
 async function allowedSitePatterns(force) {
   if (!force && cachedPatterns && Date.now() - cachedPatternsAt < PATTERN_TTL_MS) return cachedPatterns;
-  var data = await PastexConfig.readSites();
+  var data = await PastexConfig.readSites(!!force);
   var patterns = PastexSites.parse(data.allowedSites);
   cachedPatterns = patterns;
   cachedPatternsAt = Date.now();
@@ -204,7 +204,8 @@ chrome.action.onClicked.addListener(async function (tab) {
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
-    configureSites().then(function () { sendResponse({ ok: true }); })
+    var refreshed = PastexConfig.invalidate ? PastexConfig.invalidate() : Promise.resolve();
+    Promise.resolve(refreshed).catch(function () {}).then(function () { return configureSites(); }).then(function () { sendResponse({ ok: true }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }

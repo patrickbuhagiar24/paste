@@ -64,3 +64,29 @@ test("a missing or malformed manifest is rejected before any request", async () 
   await assert.rejects(h.source.chooseManifestText("{"), /not valid JSON/);
   assert.equal(h.stored, undefined);
 });
+
+test("linked files are downloaded in parallel and memoized per manifest", async () => {
+  const bodies = manifestBodies();
+  let stored;
+  const store = { get: async () => stored, set: async (value) => { stored = value; } };
+  const calls = [];
+  let active = 0, max = 0;
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    active++; max = Math.max(max, active);
+    await new Promise(setImmediate);
+    active--;
+    return { ok: true, status: 200, headers: { get: () => undefined }, text: async () => bodies[url] };
+  };
+  const source = create(store, Discovery, Sites, Manifest, fetchImpl);
+  await source.chooseManifestText(manifestText());
+  assert.equal(calls.length, 3);
+  assert.equal(max, 3, "the three linked files must not be fetched sequentially");
+  await source.readConfig();
+  await source.readSites();
+  await source.readConfig();
+  assert.equal(calls.length, 3, "repeat reads must use the in-memory linked files");
+  source.invalidate();
+  await source.readConfig();
+  assert.equal(calls.length, 5, "invalidation refetches only the two config links");
+});

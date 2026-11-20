@@ -9,7 +9,15 @@ const ConfigImport = require("../config-import.js");
 
 class Element {
   constructor(tag) { this.tagName = tag; this.children = []; this.style = {}; this.listeners = {}; this.value = ""; this.hidden = false; this.textContent = ""; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) {
+    if (child.tagName === "fragment") {
+      this.children.push(...child.children);
+      child.children = [];
+    } else {
+      this.children.push(child);
+    }
+    return child;
+  }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
   get firstChild() { return this.children[0]; }
   setAttribute() {}
@@ -52,7 +60,7 @@ function panelHarness(fail, options = {}) {
     resetCache() {},
     importConfigs: async (files) => { imports.push(files); return options.importResult || { imported: Object.keys(files), error: "" }; },
   };
-  const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), addEventListener() {} };
+  const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element("fragment"), addEventListener() {} };
   const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport,
     PastexConfigSource: { create: () => ({
       chooseManifestText: async (text) => { imports.push(text); return { drive: "linked drive.json", account: "linked account.json", sites: "linked sites.json" }; },

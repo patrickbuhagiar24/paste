@@ -119,3 +119,40 @@ test("an explicit Drive permission denial clears an old snapshot", async () => {
   await assert.rejects(cache.get(true), /403/);
   assert.equal(x.data[Cache.KEY], undefined);
 });
+
+test("verified text bodies survive mutation invalidation and are reused on refresh", async () => {
+  const x = setup();
+  let observed;
+  x.library.load = async (native, drive, onUpdate, options) => {
+    observed = options;
+    const cached = options.bodies && options.bodies.item;
+    return {
+      tree: [{ id: "item", kind: "text", name: "Item", text: cached ? cached.text : "fresh" }],
+      session: { rootId: "root" }, warnings: [],
+      bodies: { item: { modifiedTime: "v1", text: "fresh" } },
+    };
+  };
+  const cache = x.make();
+  await cache.get(false);
+  await cache.mutate(async () => {});
+  assert.equal(x.data[Cache.KEY], undefined, "the tree snapshot must be invalidated");
+  await cache.get(true);
+  assert.equal(observed.bodies.item.text, "fresh");
+  assert.equal(x.data[Cache.KEY].bodies.item.text, "fresh");
+});
+
+test("configuration identity is memoized while the config object is unchanged", async () => {
+  const x = setup();
+  const stable = structuredClone(x.config);
+  x.native.readConfig = async () => stable;
+  const cache = x.make();
+  await cache.get(false);
+  const digests = [];
+  const original = webcrypto.subtle.digest;
+  webcrypto.subtle.digest = async (...args) => { digests.push(args); return original(...args); };
+  try {
+    await cache.get(false);
+    await cache.get(false);
+    assert.equal(digests.length, 0);
+  } finally { webcrypto.subtle.digest = original; }
+});

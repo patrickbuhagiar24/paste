@@ -158,7 +158,10 @@ signed package from the APT repository.
 The apt package ships `/usr/share/pastex/pastex.crx`, the unpacked extension,
 and external extension metadata for Chrome and Chromium. `external_crx`
 registers the CRX in `/usr/share/google-chrome/extensions` and
-`/usr/share/chromium/extensions`. It does not install a native host.
+`/usr/share/chromium/extensions`. It does not install a native host. Chrome
+reads those registration files when the browser process starts, not on every
+window close: after an upgrade, quit the browser completely (or reboot) before
+checking that the new extension version is active.
 
 CRX IDs come from the signing key. Configure the `PASTEX_CRX_PRIVATE_KEY` GitHub Actions secret for
 release CI (use `PASTEX_CRX_KEY` as the local build environment variable) and use the same key on every upgrade. Without it, local builds use

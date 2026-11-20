@@ -19,7 +19,12 @@
 
   // Limit network requests, not recursion: folders can be traversed in
   // parallel without deadlocking when all workers encounter subfolders.
-  async function loadTree(drive, token, rootId, onUpdate) {
+  // Cached text bodies are keyed by Drive's modifiedTime; files inside a
+  // collapsed folder are left deferred until the folder is opened.
+  async function loadTree(drive, token, rootId, onUpdate, options) {
+    options = options || {};
+    var saved = options.bodies || {};
+    var bodies = {};
     var active = 0, waiting = [];
     function request(fn) {
       return new Promise(function (resolve, reject) {
@@ -33,10 +38,20 @@
         if (active < 6) run(); else waiting.push(run);
       });
     }
+    function remember(file, text) {
+      bodies[file.id] = { modifiedTime: file.modifiedTime || "", text: String(text) };
+      return bodies[file.id].text;
+    }
+    function cachedText(file) {
+      var entry = saved[file.id];
+      if (!entry || typeof entry.text !== "string") return null;
+      if (file.modifiedTime && entry.modifiedTime && file.modifiedTime !== entry.modifiedTime) return null;
+      return entry.text;
+    }
     var visited = new Set();
     var tree = [];
     function update() { if (onUpdate) onUpdate(tree); }
-    async function visit(folderId, nodes) {
+    async function visit(folderId, nodes, deferred) {
       if (visited.has(folderId)) throw new Error("Drive folder cycle detected.");
       visited.add(folderId);
       var files = await request(function () { return drive.listChildren(token, folderId); });
@@ -53,37 +68,47 @@
       var jobs = [];
       files.forEach(function (file) {
         if (file.mimeType === drive.FOLDER_MIME) {
+          var collapsed = !!(file.properties && file.properties.pastex_collapsed === "1");
           var folder = {
-            id: file.id, kind: "folder", name: file.name, children: [],
-            collapsed: !!(file.properties && file.properties.pastex_collapsed === "1"),
+            id: file.id, kind: "folder", name: file.name, children: [], collapsed: collapsed,
           };
           nodes.push(folder);
-          jobs.push(visit(file.id, folder.children).catch(function (err) {
+          jobs.push(visit(file.id, folder.children, deferred || collapsed).catch(function (err) {
             folder.loadError = err.message || String(err);
           }).finally(update));
         } else if ((file.mimeType || "").indexOf("application/vnd.google-apps.") !== 0 &&
                    (file.mimeType === drive.TEXT_MIME || /\.txt$/i.test(file.name || ""))) {
+          var cached = cachedText(file);
           var node = { id: file.id, kind: "text", name: (file.name || "").replace(/\.txt$/i, ""),
-            driveName: file.name, text: "", loadError: "Loading from Google Drive…" };
+            driveName: file.name, text: cached || "", modifiedTime: file.modifiedTime || "" };
           nodes.push(node);
-          jobs.push(request(function () { return drive.downloadText(token, file.id); }).then(function (text) {
-            node.text = text;
-            delete node.loadError;
-          }).catch(function (err) { node.loadError = err.message || String(err); }).finally(update));
+          if (cached) {
+            node.text = remember(file, cached);
+          } else if (deferred) {
+            node.deferred = true;
+          } else {
+            node.loadError = "Loading from Google Drive…";
+            jobs.push(request(function () { return drive.downloadText(token, file.id); }).then(function (text) {
+              node.text = text;
+              delete node.loadError;
+              remember(file, text);
+            }).catch(function (err) { node.loadError = err.message || String(err); }).finally(update));
+          }
         }
       });
       update();
       await Promise.all(jobs);
     }
-    await visit(rootId, tree);
-    return tree;
+    await visit(rootId, tree, false);
+    return { tree: tree, bodies: bodies };
   }
 
-  async function load(native, drive, onUpdate) {
+  async function load(native, drive, onUpdate, options) {
     var session = await connect(native, drive);
-    var tree = await loadTree(drive, session.token, session.rootId, function (partial) {
+    var result = await loadTree(drive, session.token, session.rootId, function (partial) {
       if (onUpdate) onUpdate(partial, session);
-    });
+    }, options);
+    var tree = result.tree;
     var warnings = [];
     function collect(nodes) {
       nodes.forEach(function (node) {
@@ -92,7 +117,7 @@
       });
     }
     collect(tree);
-    return { tree: tree, session: session, warnings: warnings };
+    return { tree: tree, session: session, warnings: warnings, bodies: result.bodies };
   }
 
   return { connect: connect, loadTree: loadTree, load: load };

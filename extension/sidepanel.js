@@ -15,6 +15,8 @@
   );
 
   var tree = [];
+  var index = Store.createIndex([]);
+  var renderPending = false;
   var settings = { collapsed: [] };
   var rootId = "";
   var ready = false;
@@ -33,6 +35,18 @@
 
   function $(id) {
     return document.getElementById(id);
+  }
+
+  function rebuildIndex() {
+    index = Store.createIndex(tree);
+  }
+
+  // Coalesce progress updates into one paint per frame.
+  function scheduleRender() {
+    if (renderPending) return;
+    renderPending = true;
+    var frame = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+    frame(function () { renderPending = false; render(); });
   }
 
   function setStatus(text) {
@@ -61,10 +75,8 @@
   // Folder collapse state is stored in Drive properties, so a reload or a
   // different computer sees the same structure as the ordering metadata.
   function applyCollapsedFromTree() {
-    settings.collapsed = [];
-    Store.walk(tree, function (node) {
-      if (node.kind === "folder" && node.collapsed) settings.collapsed.push(node.id);
-    });
+    settings.collapsed = index.folders.filter(function (node) { return node.collapsed; })
+      .map(function (node) { return node.id; });
   }
 
   async function persistCollapsed(ids, collapsed) {
@@ -174,7 +186,7 @@
 
   function renderSearchResults(matches) {
     clearTree();
-    var host = $("tree");
+    var host = document.createDocumentFragment();
     matches.forEach(function (node) {
       var row = document.createElement("div");
       row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
@@ -203,6 +215,7 @@
       });
       host.appendChild(row);
     });
+    $("tree").appendChild(host);
     $("empty").hidden = matches.length > 0;
     if (!matches.length) {
       $("empty").querySelector("p").innerHTML = "No snippets match.<br />Clear the search to browse everything.";
@@ -211,13 +224,14 @@
 
   function render() {
     if (query) {
-      renderSearchResults(Store.search(tree, query));
+      renderSearchResults(index.search(query));
     } else {
       clearTree();
-      var host = $("tree");
+      var host = document.createDocumentFragment();
       tree.forEach(function (node) {
         renderRow(node, 0, host);
       });
+      $("tree").appendChild(host);
       var hasNodes = tree.length > 0;
       $("empty").hidden = hasNodes;
       if (!hasNodes) {
@@ -249,14 +263,13 @@
   }
 
   function selectedNode() {
-    return selectedId ? Store.findById(tree, selectedId) : null;
+    return selectedId ? index.byId.get(selectedId) || null : null;
   }
 
   function renderDriveBar() {
-    var folders = 0;
-    Store.walk(tree, function (node) { if (node.kind === "folder") folders++; });
+    var folders = index.folders.length;
     var label = busy ? "Drive: loading…" :
-      (ready ? (fromCache ? "Google Drive • session cache · " + Store.flatten(tree).length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
+      (ready ? (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
     $("drive-status").textContent = label;
     $("btn-sync").disabled = busy;
     $("btn-collapse-all").disabled = busy || !ready || !folders;
@@ -270,10 +283,11 @@
     tree = partial;
     rootId = id;
     ready = true;
+    rebuildIndex();
     if (!progressTimer) progressTimer = window.setTimeout(function () {
       progressTimer = 0;
-      render();
-      setStatus("Loading Google Drive… " + Store.flatten(tree).length + " snippets found.");
+      scheduleRender();
+      setStatus("Loading Google Drive… " + index.texts.length + " snippets found.");
     }, 100);
   }
 
@@ -300,13 +314,14 @@
       rootId = result.rootId;
       fromCache = result.cached;
       ready = true;
+      rebuildIndex();
       applyCollapsedFromTree();
-      if (selectedId && !Store.findById(tree, selectedId)) selectedId = "";
-      selectedItems.forEach(function (id) { if (!Store.findById(tree, id)) selectedItems.delete(id); });
+      if (selectedId && !index.byId.has(selectedId)) selectedId = "";
+      selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
       var warnings = result.warnings || [];
       setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        (fromCache ? "Ready." : "Google Drive loaded: " + Store.flatten(tree).length + " snippets."));
+        (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."));
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
@@ -463,7 +478,7 @@
     if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /."); return; }
     if (busy) return;
     var mode = editorMode;
-    var node = Store.findById(tree, editorNodeId);
+    var node = index.byId.get(editorNodeId) || null;
     var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
     if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
       setStatus("That item or folder is no longer available; refresh first."); return;
@@ -505,7 +520,7 @@
       configVersion++;
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
-      render(); renderDriveBar();
+      rebuildIndex(); render(); renderDriveBar();
       // Let an in-flight panel load finish so its status cannot overwrite
       // the configuration result; then force one clean Drive reload.
       refreshRequested = false;
@@ -564,8 +579,7 @@
   $("btn-sync").addEventListener("click", function () { refresh(true); });
   $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
-    var ids = [];
-    Store.walk(tree, function (node) { if (node.kind === "folder") ids.push(node.id); });
+    var ids = index.folders.map(function (node) { return node.id; });
     if (!ids.length) return;
     if (query) { query = ""; $("search").value = ""; }
     await persistCollapsed(ids, true);

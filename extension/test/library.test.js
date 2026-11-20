@@ -91,3 +91,41 @@ test("folder collapse state is loaded from Drive metadata", async () => {
     ["closed", true], ["open", false], ["unset", false],
   ]);
 });
+
+test("cached text is reused by modifiedTime and stale bodies are refreshed", async () => {
+  const drive = fakeDrive();
+  const downloads = [];
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "folder", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "top", name: "Top.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" },
+  ] : [{ id: "nested", name: "Nested.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" }];
+  drive.downloadText = async (token, id) => { downloads.push(id); return "fresh " + id; };
+  const result = await Library.load(native, drive, undefined, { bodies: {
+    nested: { modifiedTime: "v2", text: "cached nested" },
+    top: { modifiedTime: "v1", text: "stale" },
+  } });
+  assert.deepEqual(downloads, ["top"]);
+  assert.equal(result.tree[0].children[0].text, "cached nested");
+  assert.equal(result.tree[1].text, "fresh top");
+  assert.equal(result.bodies.nested.text, "cached nested");
+  assert.equal(result.bodies.top.text, "fresh top");
+});
+
+test("text inside a collapsed folder is deferred until the folder is opened", async () => {
+  const drive = fakeDrive();
+  let downloads = 0;
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+  ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
+  drive.downloadText = async () => { downloads++; return "loaded"; };
+  const closed = await Library.load(native, drive);
+  assert.equal(closed.tree[0].children[0].deferred, true);
+  assert.equal(closed.tree[0].children[0].loadError, undefined);
+  assert.equal(downloads, 0);
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+  ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
+  const opened = await Library.load(native, drive, undefined, { bodies: closed.bodies });
+  assert.equal(opened.tree[0].children[0].text, "loaded");
+  assert.equal(downloads, 1);
+});

@@ -67,3 +67,13 @@ test("multi-select moves blocks within each folder and ignores selected descenda
   assert.deepEqual(Store.reorderGroups(tree, selected, 1), [["a", "d", "b", "c", "folder"]]);
   assert.deepEqual(Store.selectedRoots(tree, new Set(["folder", "x", "b"])).map((n) => n.id), ["b", "folder"]);
 });
+
+test("createIndex precomputes id, folder and lowercase search lookups", () => {
+  const tree = sampleTree();
+  const index = Store.createIndex(tree);
+  assert.equal(index.byId.get("t2").name, "Follow Up");
+  assert.equal(index.folders.length, 1);
+  assert.equal(index.texts.length, 3);
+  assert.deepEqual(index.search("PING").map((n) => n.id), ["t2"]);
+  assert.deepEqual(index.search("").map((n) => n.id), ["t1", "t2", "t3"]);
+});
