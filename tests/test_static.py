@@ -157,3 +157,61 @@ def test_the_deploy_job_only_runs_on_main():
     deploy = text.split("  deploy:", 1)[1]
     head = deploy.split("steps:", 1)[0]
     assert "github.ref == 'refs/heads/main'" in head
+
+
+def test_manifest_and_changelog_versions_match():
+    """The CI version guard must not be defeated by stale metadata."""
+    import json
+    import re
+
+    manifest = json.loads((ROOT / "extension" / "manifest.json").read_text())
+    changelog = (ROOT / "debian" / "changelog").read_text()
+    first = re.search(r"^pastex \(([^)]+)\)", changelog, re.MULTILINE)
+    assert first, "debian/changelog has no pastex version header"
+    assert first.group(1) == manifest["version"] + "-1"
+
+
+def test_runtime_package_has_no_python_dependency():
+    """The native host is gone, so neither control file may require python3."""
+    control = (ROOT / "debian" / "control").read_text()
+    assert "Depends: ${misc:Depends}\n" in control
+    assert "python3" not in control.split("\n\n", 1)[1]
+
+    script = (ROOT / "scripts" / "build-deb.sh").read_text()
+    assert "Depends: python3" not in script
+
+
+def test_postrm_does_not_delete_system_groups():
+    """Cleanup must be limited to files this package created."""
+    text = (ROOT / "debian" / "postrm").read_text()
+    for forbidden in ("groupdel", "getent", "pastex group", "GROUP="):
+        assert forbidden not in text
+
+
+def test_install_script_is_marked_development_only():
+    text = (ROOT / "scripts" / "install.sh").read_text()
+    assert "DEVELOPMENT ONLY" in text
+    assert "development-only local install" in text
+
+
+def test_workflow_pins_every_action_to_a_commit():
+    """Floating action tags are a supply-chain risk (YouTube pins all of them)."""
+    import re
+
+    workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
+    uses = re.findall(r"^\s*-?\s*uses:\s*([^\s]+)", workflow, re.MULTILINE)
+    assert uses, "no actions found in the workflow"
+    for action in uses:
+        assert "@" in action and re.search(r"@[0-9a-f]{40}$", action), action
+
+
+def test_tag_build_creates_a_release_with_verification_data():
+    """Tags provide an immutable second channel for fingerprint verification."""
+    workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
+    assert "tags: ['v*']" in workflow
+    assert "Check version alignment" in workflow
+    assert 'tag="${GITHUB_REF#refs/tags/v}"' in workflow
+    assert "gh release create" in workflow
+    assert "site/archive-keyring.fingerprint.txt site/checksums.txt site/extension-id.txt" in workflow
+    assert "site/extension-id.txt" in workflow
+    assert "site/checksums.txt" in workflow

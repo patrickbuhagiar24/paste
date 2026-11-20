@@ -207,6 +207,11 @@
       return false;
     }
     if (message.type === "pastex-insert") {
+      // Only our background worker may ask this page to insert text.
+      if (!sender || sender.id !== chrome.runtime.id) {
+        sendResponse({ ok: false, reason: "unauthorized" });
+        return true;
+      }
       var target = lastEditable && document.contains(lastEditable) ? lastEditable : null;
       if (!target) {
         // The side panel can offer its clipboard fallback instead.

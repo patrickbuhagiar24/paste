@@ -10,17 +10,34 @@
   <h1>Pastex APT repository</h1>
   <p>This repository provides the <code>pastex</code> package for Linux Mint (archive suite <code>mint</code>). Its packages are architecture-independent.</p>
   <!--sgn:start-->
-  <p>Install the keyring in <code>/etc/apt/keyrings</code> (local administrator configuration) rather than <code>/usr/share/keyrings</code> (files shipped by packages) or <code>/etc/apt/trusted.gpg.d</code> (trusted by every repository). Verify <a href="archive-keyring.fingerprint.txt">the signing-key fingerprint</a> against the fingerprint published by the maintainer before installing the key, and never use <code>trusted=yes</code> or disable signature verification for a signed archive.</p>
-  <pre>sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt
-curl -fsSL --proto '=https' -o /tmp/pastex.gpg https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
-gpg --show-keys --with-fingerprint /tmp/pastex.gpg
-sudo install -m 0644 /tmp/pastex.gpg /etc/apt/keyrings/pastex.gpg
-curl -fsSL -o /tmp/pastex.sources https://patrickbuhagiar24.github.io/paste/pastex.sources
-sudo install -m 0644 /tmp/pastex.sources /etc/apt/sources.list.d/pastex.sources
-sudo apt update
-sudo apt install pastex</pre>
-  <p>Both fingerprints must match. APT reads keyrings as the unprivileged <code>_apt</code> user, so <code>ls -l /etc/apt/keyrings/pastex.gpg</code> must show <code>-rw-r--r--</code>; a file only root can read makes <code>apt update</code> reject the repository. APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste mint InRelease</code>.</p>
+  <p>Install the keyring in <code>/etc/apt/keyrings</code> (local administrator configuration) rather than <code>/usr/share/keyrings</code> (files shipped by packages) or <code>/etc/apt/trusted.gpg.d</code> (trusted by every repository). Compare <a href="archive-keyring.fingerprint.txt">the published fingerprint</a> with an independent maintainer announcement, and never use <code>trusted=yes</code> or disable signature verification for a signed archive. The published <code>pastex.sources</code> file is installed verbatim after verification.</p>
+  <pre>(
+  set -euo pipefail
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/archive-keyring.gpg" \
+    https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
+  fingerprint=$(gpg --batch --with-colons --show-keys "$tmpdir/archive-keyring.gpg" |
+    awk -F: '$1 == "pub" { count++; want = 1; next }
+      want &amp;&amp; $1 == "fpr" { print $10; want = 0 }
+      END { if (count != 1) exit 1 }')
+  [[ "$fingerprint" =~ ^[A-F0-9]{40}$ ]] || { echo 'Invalid key fingerprint.' &gt;&amp;2; exit 1; }
+  printf 'Downloaded key fingerprint: %s\n' "$fingerprint"
+  read -r -p 'Enter the independently verified fingerprint: ' expected
+  expected=${expected//[[:space:]]/}
+  [[ "${expected^^}" == "$fingerprint" ]] || { echo 'Fingerprint mismatch; nothing installed.' &gt;&amp;2; exit 1; }
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/pastex.sources" \
+    https://patrickbuhagiar24.github.io/paste/pastex.sources
+  sudo install -d -m 0755 /etc/apt/keyrings
+  sudo install -m 0644 "$tmpdir/archive-keyring.gpg" /etc/apt/keyrings/pastex.gpg
+  sudo install -m 0644 "$tmpdir/pastex.sources" /etc/apt/sources.list.d/pastex.sources
+  sudo apt update
+  sudo apt install pastex
+)</pre>
+  <p>The printed fingerprint must match the published file and the independently announced value. APT reads keyrings as the unprivileged <code>_apt</code> user, so <code>ls -l /etc/apt/keyrings/pastex.gpg</code> must show <code>-rw-r--r--</code>; a file only root can read makes <code>apt update</code> reject the repository. APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste mint InRelease</code>.</p>
+  <p>Compare the Chrome extension ID shown at <code>chrome://extensions</code> with <a href="extension-id.txt">extension-id.txt</a>. Release <a href="checksums.txt">checksums.txt</a> contains SHA-256 digests for the published package and signed CRX.</p>
   <!--sgn:end-->
   <!--uns:start-->
   <p>This archive is published without a signing key. Download <a href="pastex-unsigned.sources">pastex-unsigned.sources</a> to <code>/etc/apt/sources.list.d/pastex.sources</code>; it marks the repository <code>Trusted: yes</code>, which skips verification.</p>

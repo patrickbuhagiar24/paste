@@ -1,4 +1,4 @@
-/* Identify configuration files only within the selected folder itself. */
+/* Identify configuration files in the flat set fetched from a manifest. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexConfigImport = factory();

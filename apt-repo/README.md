@@ -6,7 +6,7 @@ Pastex publishes a standard APT archive through GitHub Pages, using the same lay
 index.html
 .nojekyll
 pastex.sources                       (signed archive)
-pastex-unsigned.sources              (archive without a signing key)
+pastex-unsigned.sources              (local test builds only; never published to Pages)
 archive-keyring.asc
 archive-keyring.gpg
 archive-keyring.fingerprint.txt
@@ -26,18 +26,37 @@ Hit:6 https://patrickbuhagiar24.github.io/paste mint InRelease
 
 ## Use the published archive
 
+The published `pastex.sources` file is installed verbatim, after the key fingerprint has been confirmed through an independent channel. This keeps the deb822 entry in sync with the signed `dists/mint/InRelease` metadata.
+
 ```bash
-sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg \
-  | sudo tee /etc/apt/keyrings/pastex.gpg > /dev/null
-sudo chmod 0644 /etc/apt/keyrings/pastex.gpg
-curl -fsSL https://patrickbuhagiar24.github.io/paste/pastex.sources \
-  | sudo tee /etc/apt/sources.list.d/pastex.sources > /dev/null
-sudo apt update
-sudo apt install pastex
+(
+  set -euo pipefail
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/archive-keyring.gpg" \
+    https://patrickbuhagiar24.github.io/paste/archive-keyring.gpg
+  fingerprint=$(gpg --batch --with-colons --show-keys "$tmpdir/archive-keyring.gpg" |
+    awk -F: '$1 == "pub" { count++; want = 1; next }
+      want && $1 == "fpr" { print $10; want = 0 }
+      END { if (count != 1) exit 1 }')
+  [[ "$fingerprint" =~ ^[A-F0-9]{40}$ ]] || { echo 'Invalid key fingerprint.' >&2; exit 1; }
+  printf 'Downloaded key fingerprint: %s\n' "$fingerprint"
+  read -r -p 'Enter the independently verified fingerprint: ' expected
+  expected=${expected//[[:space:]]/}
+  [[ "${expected^^}" == "$fingerprint" ]] || { echo 'Fingerprint mismatch; nothing installed.' >&2; exit 1; }
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/pastex.sources" \
+    https://patrickbuhagiar24.github.io/paste/pastex.sources
+  sudo install -d -m 0755 /etc/apt/keyrings
+  sudo install -m 0644 "$tmpdir/archive-keyring.gpg" /etc/apt/keyrings/pastex.gpg
+  sudo install -m 0644 "$tmpdir/pastex.sources" /etc/apt/sources.list.d/pastex.sources
+  sudo apt update
+  sudo apt install pastex
+)
 ```
 
-Verify `archive-keyring.fingerprint.txt` against a trusted maintainer announcement before installing the key. Do not use `[trusted=yes]`, `--allow-unauthenticated`, or `apt-key` for a signed archive.
+Verify `archive-keyring.fingerprint.txt` against a trusted maintainer announcement before installing the key. Do not use `[trusted=yes]`, `--allow-unauthenticated`, or `apt-key` for a signed archive. The key must be world-readable (`0644`) because APT reads it as the unprivileged `_apt` user.
 
 ## Migrating from the old flat repository
 
@@ -58,7 +77,11 @@ Then follow [Use the published archive](#use-the-published-archive) above.
 2. Under **Settings → Environments → github-pages**, allow the branch that publishes the archive (`main`), or choose **No restriction**.
 3. Merge to `main`, or run **Actions → Build .deb & APT repo → Run workflow**.
 
-The workflow builds the `.deb`, generates the archive with `scripts/build-apt-repository.sh`, signs it with `scripts/sign-apt-repository.sh`, deploys `site/` to Pages, and uploads the `.deb` as a build artifact.
+The workflow checks that `extension/manifest.json` and `debian/changelog` agree, builds the `.deb`, generates the archive with `scripts/build-apt-repository.sh`, signs it with `scripts/sign-apt-repository.sh`, deploys `site/` to Pages, and uploads the `.deb`, CRX and extension ID as build artifacts. `site/extension-id.txt` and `site/checksums.txt` are published with the archive.
+
+### Release tags
+
+Push a `vX.Y.Z` tag **after** the matching version has been merged and published from `main`. A tag build verifies the tag against the manifest version and creates an immutable GitHub Release containing the `.deb`, signed CRX, `checksums.txt`, `extension-id.txt`, and both public keyring exports. The release notes repeat the full signing fingerprint and the extension ID, giving users a second, tag-pinned place to cross-check them against the repository website. Tag builds do not deploy to Pages; the `github-pages` environment remains limited to `main`.
 
 ## Signing key
 
@@ -83,7 +106,16 @@ The workflow imports the key into an ephemeral keyring under `$RUNNER_TEMP`, der
 
 If signing fails, the workflow prints the last `gpg` lines and adds an `APT signing failed: …` error annotation to the run, so the reason is visible without downloading logs. A passphrase is only passed to `gpg` when `GPG_PASSPHRASE` is set; otherwise the key must be unprotected.
 
-Without `GPG_PRIVATE_KEY` the workflow still publishes, but with a warning: the archive stays unsigned and users must install `pastex-unsigned.sources` (`Trusted: yes`).
+Without `GPG_PRIVATE_KEY` the workflow fails before deploying, so a `Trusted: yes` archive is never published to the public Pages site. The unsigned source file exists only for local, explicitly trusted test archives.
+
+## Verify the key out of band
+
+A fingerprint served only by the repository website is not independent verification. Compare it with at least one separate channel before installing:
+
+- the GitHub Release notes for the version you are installing (created by the tag workflow);
+- a signed maintainer announcement or another maintainer-controlled channel you already trust.
+
+See [SECURITY.md](../SECURITY.md) for the verification checklist. If the values differ or the key has changed unexpectedly, stop and contact the maintainer.
 
 ## Build locally
 

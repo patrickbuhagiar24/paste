@@ -18,9 +18,9 @@
     async function identity() {
       var config = await native.readConfig();
       if (!config.serviceAccount || !config.serviceAccount.client_email || !config.serviceAccount.private_key)
-        throw new Error(config.serviceAccountError || "Configure service-account.json in the selected configuration folder.");
+        throw new Error(config.serviceAccountError || "Configure a service-account.json link in the configuration manifest.");
       if (!config.drive || !config.drive.folderId)
-        throw new Error(config.driveError || "Configure pastex-google-drive.json in the selected configuration folder.");
+        throw new Error(config.driveError || "Configure a pastex-google-drive.json link in the configuration manifest.");
       var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
       return Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");

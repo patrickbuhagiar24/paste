@@ -244,6 +244,15 @@ def test_workflow_signs_and_verifies_before_deploying() -> None:
     assert workflow.index("sign-apt-repository.sh") < workflow.index("deploy-pages")
 
 
+def test_workflow_never_publishes_an_unsigned_archive() -> None:
+    """The public Pages archive must fail closed like the YouTube publisher."""
+    workflow = _text(WORKFLOW)
+
+    assert "PASSTEX_SIGNED: '1'" in workflow
+    assert "refusing to publish an unsigned APT archive" in workflow
+    assert "pastex-unsigned.sources" not in workflow
+
+
 def test_documentation_uses_the_signed_deb822_source() -> None:
     readme = _text(ROOT / "README.md")
     apt_readme = _text(ROOT / "apt-repo" / "README.md")
@@ -253,6 +262,10 @@ def test_documentation_uses_the_signed_deb822_source() -> None:
         assert "pastex.sources" in document
         assert "mint" in document
         assert "/paste/apt/" not in document.split("Migrating")[0]
+        # The install command must consume the published source file, not
+        # hand-write a potentially stale copy of it.
+        assert 'curl --fail --silent --show-error --location --proto \'=https\' --proto-redir \'=https\' \\\n    -o "$tmpdir/pastex.sources"' in document
+        assert "cat > \"$tmpdir/pastex.sources\"" not in document
 
     assert "Hit:6 https://patrickbuhagiar24.github.io/paste mint InRelease" in apt_readme
 
@@ -423,3 +436,26 @@ def test_workflow_exports_the_fingerprint_before_signing() -> None:
     assert workflow.index('export APT_SIGNING_KEY_ID="$fingerprint"') < signer_call
     # Failures must surface as a readable annotation instead of a silent gap.
     assert "::error::APT signing failed" in workflow
+
+
+def test_extension_identity_and_checksums_are_published() -> None:
+    """The site and tag releases must carry the same verification artifacts."""
+    workflow = _text(WORKFLOW)
+    builder = _text(SCRIPTS / "build-deb.sh")
+    index = _text(PACKAGING / "apt-index.html")
+
+    assert "dist/pastex-id.txt" in builder
+    assert "cp dist/pastex-id.txt site/extension-id.txt" in workflow
+    assert ">site/checksums.txt" in workflow
+    assert 'href="extension-id.txt"' in index
+    assert 'href="checksums.txt"' in index
+
+
+def test_security_docs_require_two_channels() -> None:
+    security = _text(ROOT / "SECURITY.md")
+    apt_readme = _text(ROOT / "apt-repo" / "README.md")
+
+    for text in (security, apt_readme):
+        assert "independent" in text.lower()
+        assert "GitHub Release" in text
+    assert "sha256sum -c" in security

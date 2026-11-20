@@ -1,6 +1,6 @@
 /* The offscreen document reads granted handles on behalf of the service worker. */
 "use strict";
-var source = PastexConfigSource.create(PastexHandleStore, PastexConfigImport, PastexSites);
+var source = PastexConfigSource.create(PastexHandleStore, PastexConfigImport, PastexSites, PastexManifest);
 chrome.runtime.onMessage.addListener(function (message, sender, respond) {
   if (!message || message.target !== "pastex-config-reader") return false;
   if (!sender || sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("background.js")) return false;
