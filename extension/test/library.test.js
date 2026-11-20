@@ -129,3 +129,24 @@ test("text inside a collapsed folder is deferred until the folder is opened", as
   assert.equal(opened.tree[0].children[0].text, "loaded");
   assert.equal(downloads, 1);
 });
+
+test("unchanged nested folders are reused instead of being listed again", async () => {
+  const drive = fakeDrive();
+  let lists = 0;
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "root-v1" });
+  drive.listChildren = async (token, parent) => {
+    lists++;
+    if (parent === "root") return [{ id: "f", name: "Folder", mimeType: drive.FOLDER_MIME, modifiedTime: "f-v1", properties: { pastex_collapsed: "0" } }];
+    return [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "t-v1" }];
+  };
+  const first = await Library.load(native, drive);
+  assert.equal(lists, 2);
+  const second = await Library.load(native, drive, undefined, {
+    tree: first.tree,
+    bodies: first.bodies,
+    metadata: first.metadata,
+  });
+  assert.equal(lists, 3, "only the root should be listed; the unchanged folder is reused");
+  assert.equal(second.tree[0].children[0].text, first.tree[0].children[0].text);
+  assert.equal(second.metadata.f, "f-v1");
+});

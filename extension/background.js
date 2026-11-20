@@ -15,6 +15,34 @@ var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;
 
+// Bounded parallelism for independent Drive writes. A bulk collapse or
+// reorder no longer waits for one HTTP round trip per item.
+function mapLimit(items, limit, fn) {
+  var results = new Array(items.length);
+  var next = 0, active = 0, settled = false;
+  return new Promise(function (resolve, reject) {
+    function finish(error, index, value) {
+      if (settled) return;
+      if (error) { settled = true; reject(error); return; }
+      results[index] = value;
+      active--;
+      pump();
+    }
+    function pump() {
+      while (!settled && active < limit && next < items.length) {
+        var index = next++;
+        active++;
+        (function (i) {
+          Promise.resolve().then(function () { return fn(items[i], i); })
+            .then(function (value) { finish(null, i, value); }, function (error) { finish(error); });
+        })(index);
+      }
+      if (!settled && next >= items.length && active === 0) { settled = true; resolve(results); }
+    }
+    if (!items.length) { settled = true; resolve(results); } else pump();
+  });
+}
+
 function trustedPanel(sender) {
   return sender && sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("sidepanel.html");
 }
@@ -156,27 +184,28 @@ async function mutateDrive(command) {
       if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
       return { id: node.id };
     }
+    var known = command.properties || {};
     if (command.action === "delete") {
-      var failures = [];
-      for (var i = 0; i < command.ids.length; i++) {
-        try { await PastexDrive.trashFile(token, command.ids[i]); }
-        catch (err) { failures.push(err.message || String(err)); }
-      }
+      var results = await mapLimit(command.ids || [], 6, function (id) {
+        return PastexDrive.trashFile(token, id).then(function () { return ""; },
+          function (err) { return err.message || String(err); });
+      });
+      var failures = results.filter(Boolean);
       if (failures.length) throw new Error(failures.length + " item(s) could not be deleted: " + failures[0]);
       return {};
     }
     if (command.action === "reorder") {
       for (var j = 0; j < command.groups.length; j++) {
-        var ids = command.groups[j];
-        for (var k = 0; k < ids.length; k++) await PastexDrive.setOrder(token, ids[k], k);
+        await mapLimit(command.groups[j], 6, function (id, index) {
+          return PastexDrive.setOrder(token, id, index, undefined, known[id]);
+        });
       }
       return {};
     }
     if (command.action === "collapse") {
-      var ids = command.ids || [];
-      for (var c = 0; c < ids.length; c++) {
-        if (ids[c]) await PastexDrive.setCollapsed(token, ids[c], !!command.collapsed);
-      }
+      await mapLimit((command.ids || []).filter(Boolean), 6, function (id) {
+        return PastexDrive.setCollapsed(token, id, !!command.collapsed, undefined, known[id]);
+      });
       return {};
     }
     throw new Error("Unknown Drive operation.");

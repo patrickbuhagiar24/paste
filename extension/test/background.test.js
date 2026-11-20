@@ -188,7 +188,12 @@ test("worker handles create, rename, order and bulk trash with Drive, denying ch
   assert.equal((await send({ rootId: "root", action: "collapse", ids: ["f"], collapsed: true })).ok, true);
   assert.equal((await send({ rootId: "root", action: "delete", ids: ["n", "f"] })).ok, true);
   assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
-  assert.deepEqual(writes, [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"], ["order", "n", 0], ["order", "f", 1], ["collapse", "f", true], ["trash", "n"], ["trash", "f"]]);
+  // Bulk writes run with bounded parallelism, so only their grouping is deterministic.
+  const tupleSort = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b));
+  assert.deepEqual(writes.slice(0, 3), [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"]]);
+  assert.deepEqual(writes.slice(3, 5).sort(tupleSort), [["order", "n", 0], ["order", "f", 1]].sort(tupleSort));
+  assert.deepEqual(writes.slice(5, 6), [["collapse", "f", true]]);
+  assert.deepEqual(writes.slice(6, 8).sort(tupleSort), [["trash", "n"], ["trash", "f"]].sort(tupleSort));
 });
 
 test("repeated paste requests reuse the cached site allowlist", async () => {
@@ -204,4 +209,31 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     assert.equal(browser.launches, readsAfterStartup, "paste must not re-read linked configuration");
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("bulk Drive writes run with bounded parallelism and reuse loaded properties", async () => {
+  const browser = harness(os.tmpdir(), true);
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
+  const drive = browser.context.PastexDrive;
+  let active = 0, max = 0;
+  const calls = [];
+  async function track(kind, id, extra, known) {
+    active++; max = Math.max(max, active);
+    await new Promise(setImmediate);
+    active--;
+    calls.push([kind, id, extra, known]);
+  }
+  drive.setOrder = (t, id, order, impl, known) => track("order", id, order, known);
+  drive.setCollapsed = (t, id, collapsed, impl, known) => track("collapse", id, collapsed, known);
+  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+  const properties = { a: { pastex_order: "9", pastex_collapsed: "1" } };
+  assert.equal((await send({ rootId: "root", action: "reorder", groups: [ids], properties })).ok, true);
+  assert.equal(max, 6);
+  assert.deepEqual(calls.find((c) => c[1] === "a")[3], properties.a);
+  calls.length = 0; active = 0; max = 0;
+  assert.equal((await send({ rootId: "root", action: "collapse", ids, collapsed: true, properties })).ok, true);
+  assert.equal(max, 6);
+  assert.deepEqual(calls.find((c) => c[1] === "a")[3], properties.a);
 });

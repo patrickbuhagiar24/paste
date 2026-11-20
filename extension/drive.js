@@ -286,10 +286,14 @@
     return data && data.properties ? data.properties : {};
   }
 
-  async function patchProperties(token, fileId, values, fetchImpl) {
+  async function patchProperties(token, fileId, values, fetchImpl, known) {
     // Drive replaces the whole properties map on PATCH; merge first so order
-    // and collapse metadata on the same folder never erase each other.
-    var properties = await getProperties(token, fileId, fetchImpl);
+    // and collapse metadata on the same folder never erase each other. A
+    // caller that already loaded metadata with listChildren can pass it in
+    // and skip the extra GET.
+    var properties = known && typeof known === "object"
+      ? Object.assign({}, known)
+      : await getProperties(token, fileId, fetchImpl);
     Object.keys(values).forEach(function (key) { properties[key] = values[key]; });
     return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
       method: "PATCH", contentType: "application/json; charset=UTF-8",
@@ -298,12 +302,12 @@
     });
   }
 
-  async function setOrder(token, fileId, order, fetchImpl) {
-    return patchProperties(token, fileId, { pastex_order: String(order) }, fetchImpl);
+  async function setOrder(token, fileId, order, fetchImpl, known) {
+    return patchProperties(token, fileId, { pastex_order: String(order) }, fetchImpl, known);
   }
 
-  async function setCollapsed(token, fileId, collapsed, fetchImpl) {
-    return patchProperties(token, fileId, { pastex_collapsed: collapsed ? "1" : "0" }, fetchImpl);
+  async function setCollapsed(token, fileId, collapsed, fetchImpl, known) {
+    return patchProperties(token, fileId, { pastex_collapsed: collapsed ? "1" : "0" }, fetchImpl, known);
   }
 
   async function trashFile(token, fileId, fetchImpl) {

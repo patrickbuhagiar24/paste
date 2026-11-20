@@ -1,3 +1,11 @@
+pastex (2.7.1-1) unstable; urgency=medium
+
+  * Parallelize bulk Drive writes and reuse loaded properties to avoid an
+    extra GET for each order or collapse change.
+  * Reuse unchanged folder metadata so refreshes skip nested listings.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 11:09:56 +0000
+
 pastex (2.7.0-1) unstable; urgency=medium
 
   * Open the JSON manifest picker directly from the Config button.

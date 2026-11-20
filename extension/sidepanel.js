@@ -79,11 +79,21 @@
       .map(function (node) { return node.id; });
   }
 
+  function propertiesFor(ids) {
+    var known = {};
+    ids.forEach(function (id) {
+      var node = index.byId.get(id);
+      if (node && node.properties) known[id] = node.properties;
+    });
+    return known;
+  }
+
   async function persistCollapsed(ids, collapsed) {
     var before = settings.collapsed.slice();
     ids.forEach(function (id) { setCollapsed(id, collapsed); });
     render();
-    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed });
+    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed,
+      properties: propertiesFor(ids) });
     if (!result) { settings.collapsed = before; render(); }
   }
 
@@ -501,7 +511,8 @@
     if (busy || query) return;
     var groups = Store.reorderGroups(tree, selectedItems, direction);
     if (!groups.length) return;
-    await runMutation({ action: "reorder", groups: groups });
+    await runMutation({ action: "reorder", groups: groups,
+      properties: propertiesFor(groups.reduce(function (all, group) { return all.concat(group); }, [])) });
   }
 
   // --- configuration: one JSON manifest with links ---

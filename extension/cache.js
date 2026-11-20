@@ -84,7 +84,8 @@
       flight.promise = (async function () {
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
-        }, { bodies: bodies, deferCollapsed: true });
+        }, { bodies: bodies, deferCollapsed: true,
+          metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
         mergeBodies(result.bodies);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [], cached: false };
@@ -92,7 +93,8 @@
         // Explicit revocation of an item also invalidates the older snapshot.
         if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
         if (!response.warnings.length) {
-          memory = { identity: key, rootId: response.rootId, tree: response.tree, bodies: bodies };
+          memory = { identity: key, rootId: response.rootId, tree: response.tree,
+            bodies: bodies, metadata: result.metadata };
           try { if (storage) await storage.set({ [KEY]: memory }); }
           catch (ignored) {
             // A failed replacement must not leave an older snapshot in session

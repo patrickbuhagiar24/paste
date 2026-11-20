@@ -234,3 +234,10 @@ test("Drive collapse merges properties instead of erasing saved order", async ()
   await Drive.setCollapsed("tok", "folder", false, fetchImpl);
   assert.deepEqual(JSON.parse(fetchImpl.calls[3].options.body), { properties: { pastex_order: "3", pastex_collapsed: "0" } });
 });
+
+test("known Drive properties avoid the pre-PATCH GET while preserving other keys", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
+  await Drive.setOrder("tok", "id", 2, fetchImpl, { pastex_order: "4", pastex_collapsed: "1" });
+  assert.equal(fetchImpl.calls.length, 1, "metadata already loaded with listChildren must not be fetched again");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
+});
