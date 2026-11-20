@@ -143,8 +143,8 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. The toolbar reads **↻ Refresh**, **▸ Collapse all**, **＋ Text**,
-**Config**, **＋ Folder** and **Select**. **Collapse all** folds every folder
+snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Refresh**,
+**Config**, **＋ Text** and **＋ Folder**. **Collapse all** folds every folder
 and clears the search first. The drive bar shows
 `Google Drive • session cache · N snippets` when the list came from the
 session or local cache; the label is kept for compatibility, and the moment of

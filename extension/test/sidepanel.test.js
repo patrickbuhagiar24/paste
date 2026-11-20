@@ -343,7 +343,7 @@ test("the toolbar moves the create buttons to the end", () => {
   const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
   const toolbar = html.split('<div class="toolbar"')[1].split("</div>")[0];
   const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(order, ["btn-sync", "btn-collapse-all", "btn-text", "btn-config", "btn-folder", "btn-select"]);
+  assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]);
 });
 
 test("the panel shows when the library was last checked", async () => {
