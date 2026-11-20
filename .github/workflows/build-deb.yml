@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
-          changelog=$(awk '/^pastex \(/ { print $2; exit }' debian/changelog)
+          changelog=$(awk '/^pastex \(/ { gsub(/[()]/, "", $2); print $2; exit }' debian/changelog)
           [[ "$changelog" == "$version-1" ]] || {
             echo "::error::manifest version $version does not match changelog $changelog"
             exit 1
