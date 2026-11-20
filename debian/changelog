@@ -1,3 +1,11 @@
+pastex (2.10.2-1) unstable; urgency=medium
+
+  * Make the in-page launcher at the cursor stand out: a deep indigo disc
+    with a dark rim, a white inner ring, a coloured glow and a slow halo,
+    with larger rims for users who ask for more contrast.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:25:00 +0000
+
 pastex (2.10.1-1) unstable; urgency=medium
 
   * Order the side panel toolbar as Collapse all, Select, Refresh, Config,

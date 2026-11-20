@@ -151,7 +151,12 @@ session or local cache; the label is kept for compatibility, and the moment of
 the last check with Drive is shown next to it.
 
 On an allowed site, focus an editable field and click the floating
-**⚡** button to open the Pastex side panel. There is
+**⚡** button to open the Pastex side panel. The launcher is a deep indigo
+disc with a near-black rim, a white inner ring and a soft halo, so it reads
+at a glance on a light page, on a dark page and on a colourful one. The halo
+stops when the system asks for reduced motion, and the rim grows when the
+system asks for more contrast. `assets/launcher-preview.html` shows the
+launcher on all three backgrounds. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
 to insert it; its row has **Rename**, **Edit**, and **Delete** actions. The
 complete snippet text is inserted verbatim, including newlines and trailing
