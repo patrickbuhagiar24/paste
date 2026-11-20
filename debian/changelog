@@ -1,3 +1,11 @@
+pastex (2.8.0-1) unstable; urgency=medium
+
+  * Add a derived local snippet cache so the panel opens instantly after a
+    browser restart, with a silent background refresh for stale snapshots.
+  * Keep Drive as the source of truth and invalidate cached snapshots on writes.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 11:16:58 +0000
+
 pastex (2.7.1-1) unstable; urgency=medium
 
   * Parallelize bulk Drive writes and reuse loaded properties to avoid an

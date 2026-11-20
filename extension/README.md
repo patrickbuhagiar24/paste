@@ -54,6 +54,8 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
 Chrome stores only the three download URLs in extension IndexedDB, never the
 downloaded JSON or the service-account key. Pastex fetches them into memory on
 demand. The links keep working across restarts as long as they stay downloadable.
+Snippet text is cached separately in `chrome.storage.local`, keyed by a
+SHA-256 hash of the configuration; credentials are never written there.
 
 After modifying site JSON, open **Config** again and reselect the manifest to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
@@ -65,10 +67,12 @@ to sign authentication requests to Google.
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
 Drive trash. After changes, Pastex reloads the library from Drive. The side
-panel uses an in-memory Chrome session cache: reopening it does not download
-the library again, and closing the browser clears the
-cache. The cache contains snippet text (not the service-account key) and is
-accessible to the extension, not websites. If the library exceeds Chrome's
+panel uses an in-memory Chrome session cache plus a derived local cache:
+reopening it does not download the library again, and the first open after a
+browser restart is served from `chrome.storage.local` before a silent refresh
+starts. A snapshot older than one minute refreshes in the background. The
+cache contains snippet text (not the service-account key) and is accessible to
+the extension, not websites. If the library exceeds Chrome's
 session-storage quota, Pastex falls back to the service worker's memory; the
 cache may then disappear when the worker stops.
 
@@ -107,7 +111,7 @@ needed to keep the same extension identity across upgrades.
 Open the side panel with the toolbar icon to create, edit, search and organize
 snippets. **Collapse all** folds every folder and clears the search first. The
 Drive bar shows `Google Drive • session cache · N snippets` when the list came
-from the session cache.
+from the session or local cache; the label is kept for compatibility.
 
 On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. There is

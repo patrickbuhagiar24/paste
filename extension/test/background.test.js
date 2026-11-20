@@ -31,7 +31,11 @@ function harness(home, unavailable) {
   };
   const context = vm.createContext({
     chrome: {
-      runtime, offscreen: { hasDocument: async () => true, createDocument: async () => {} }, storage: { session: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
+      runtime, offscreen: { hasDocument: async () => true, createDocument: async () => {} },
+      storage: {
+        session: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+        local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+      },
       scripting: {
         getRegisteredContentScripts: async () => registered,
         unregisterContentScripts: async () => { registered = []; },

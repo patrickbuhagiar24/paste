@@ -71,13 +71,13 @@ def test_picker_has_no_shortcut_escape_handler_or_context_menu():
     assert "pastex-open-panel" in (EXT / "content.js").read_text(encoding="utf-8")
 
 
-def test_snippet_cache_is_session_only_and_mutations_stay_in_drive():
+def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     manifest = _manifest()
     assert "storage" in manifest["permissions"]
     background = (EXT / "background.js").read_text(encoding="utf-8")
     cache = (EXT / "cache.js").read_text(encoding="utf-8")
     assert "chrome.storage.session" in background
-    assert "storage.local" not in background + cache
+    assert "chrome.storage.local" in background
     assert "storage.sync" not in background + cache
     assert "libraryCache.mutate" in background
     assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background

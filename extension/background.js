@@ -10,7 +10,7 @@ importScripts("sites.js", "config-client.js", "drive.js", "library.js", "cache.j
 
 var PastexConfig = PastexConfigClient;
 
-var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto);
+var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto, chrome.storage.local);
 var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;

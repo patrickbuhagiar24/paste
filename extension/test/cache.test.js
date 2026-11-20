@@ -5,6 +5,7 @@ const Cache = require("../cache.js");
 
 function setup() {
   const data = {};
+  const localData = {};
   let calls = 0;
   const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "account", private_key: "private-secret" } };
   const storage = {
@@ -12,10 +13,15 @@ function setup() {
     async set(values) { Object.assign(data, structuredClone(values)); },
     async remove(key) { delete data[key]; },
   };
+  const local = {
+    async get(key) { return { [key]: localData[key] }; },
+    async set(values) { Object.assign(localData, structuredClone(values)); },
+    async remove(key) { delete localData[key]; },
+  };
   const native = { readConfig: async () => structuredClone(config) };
   const library = { load: async () => ({ tree: [{ id: String(++calls), kind: "text", name: "One", text: "contents" }], session: { rootId: config.drive.folderId }, warnings: [] }) };
-  function make() { return Cache.create(native, {}, library, storage, webcrypto); }
-  return { data, config, storage, native, library, make, get calls() { return calls; } };
+  function make() { return Cache.create(native, {}, library, storage, webcrypto, local); }
+  return { data, localData, config, storage, native, library, make, get calls() { return calls; } };
 }
 
 test("cache is session-only, shared after worker restart and keyed by account and folder", async () => {
@@ -155,4 +161,44 @@ test("configuration identity is memoized while the config object is unchanged", 
     await cache.get(false);
     assert.equal(digests.length, 0);
   } finally { webcrypto.subtle.digest = original; }
+});
+
+test("a local snapshot survives a browser restart and a stale one silently refreshes", async () => {
+  const x = setup();
+  const first = x.make();
+  await first.get(false);
+  assert.ok(x.localData[Cache.LKEY], "a successful load must persist a derived local snapshot");
+  const id = x.data[Cache.KEY].identity;
+  const second = x.make();
+  await x.storage.remove(Cache.KEY); // simulate a fresh browser process
+  x.localData[Cache.LKEY][id].savedAt = 0;
+  const result = await second.get(false);
+  assert.equal(result.cached, true);
+  assert.equal(result.tree[0].id, "1");
+  assert.equal(x.calls, 1, "opening from local cache must not block on Drive");
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(x.calls, 2, "a stale local snapshot should refresh in the background");
+});
+
+test("mutations clear derived local snapshots but keep verified bodies in memory", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  assert.ok(Object.keys(x.localData[Cache.LKEY]).length);
+  await cache.mutate(async () => {});
+  assert.deepEqual(x.localData[Cache.LKEY], {});
+  assert.equal(x.data[Cache.KEY], undefined);
+  const next = await cache.get(false);
+  assert.equal(next.tree[0].id, "2");
+});
+
+test("a configuration identity change clears the local snapshot", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  const old = x.data[Cache.KEY].identity;
+  assert.ok(x.localData[Cache.LKEY][old]);
+  x.config.drive.folderId = "other";
+  await cache.get(false);
+  assert.equal(x.localData[Cache.LKEY][old], undefined);
 });
