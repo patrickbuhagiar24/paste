@@ -397,6 +397,8 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
     content = (EXT / "content.js").read_text(encoding="utf-8")
     assert 'id="btn-collapse-all"' in html
+    assert "<footer" not in html
+    assert 'id="status"' in html and html.index('id="status"') < html.index("</header>")
     assert "btn-collapse-all" in script
     assert "Google Drive • session cache · " in script
     assert "Session cache: " not in script

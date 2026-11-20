@@ -70,6 +70,17 @@ header {
 }
 
 #drive-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#status {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -221,12 +232,3 @@ main {
 #selection-actions[hidden] { display: none; }
 #selection-count { flex: 1; }
 #btn-select[aria-pressed="true"] { background: #cfe2f8; }
-
-#status {
-  padding: 5px 8px;
-  border-top: 1px solid #d8e4f2;
-  color: #5a6b7d;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
