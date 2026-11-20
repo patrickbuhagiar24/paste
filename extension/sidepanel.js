@@ -28,6 +28,7 @@
   var refreshRequested = false;
   var progressTimer = 0;
   var fromCache = false;
+  var backgroundRefresh = false;
   var configVersion = 0;
   var loadConfigVersion = 0;
   var selecting = false;
@@ -303,10 +304,42 @@
 
   try {
     var progressPort = chrome.runtime.connect({ name: "pastex-library-progress" });
-    progressPort.onMessage.addListener(function (message) { onProgress(message.tree, message.rootId); });
+    progressPort.onMessage.addListener(function (message) {
+      if (!message) return;
+      // The background worker refreshed the cache while the user was away.
+      if (message.changed) { applyBackgroundChange(); return; }
+      onProgress(message.tree, message.rootId);
+    });
   } catch (ignored) { /* Loading still works without live progress. */ }
 
-  async function refresh(force) {
+  // A background sync already rewrote the cache, so this only reads the
+  // snapshot back: no Drive request, no loading state and no status spam.
+  async function applyBackgroundChange() {
+    if (busy || loading || backgroundRefresh) return;
+    if ($("editor-overlay") && !$("editor-overlay").hidden) return;
+    backgroundRefresh = true;
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library" });
+      if (!response || !response.ok) return;
+      var result = response.result;
+      if (!result || !result.tree) return;
+      tree = result.tree;
+      rootId = result.rootId;
+      fromCache = result.cached;
+      ready = true;
+      rebuildIndex();
+      applyCollapsedFromTree();
+      if (selectedId && !index.byId.has(selectedId)) selectedId = "";
+      selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
+      render();
+      renderDriveBar();
+    } catch (ignored) {
+      // A failed background update keeps the current list; the next manual
+      // refresh reloads it from Drive.
+    } finally { backgroundRefresh = false; }
+  }
+
+  async function refresh(force, quiet) {
     if (busy) { refreshRequested = true; return false; }
     var previous = { tree: tree, rootId: rootId, ready: ready, cached: fromCache };
     busy = true;
@@ -314,7 +347,7 @@
     loadConfigVersion = configVersion;
     renderDriveBar();
     render();
-    setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
+    if (!quiet) setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library", force: !!force });
       if (loadConfigVersion !== configVersion) return false;
@@ -330,8 +363,10 @@
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
       var warnings = result.warnings || [];
-      setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."));
+      if (!quiet) {
+        setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
+          (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."));
+      }
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
@@ -341,7 +376,7 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
-      setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
+      if (!quiet) setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
       return false;
     } finally {
       loading = false;

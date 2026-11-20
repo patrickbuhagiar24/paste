@@ -1,3 +1,12 @@
+pastex (2.9.0-1) unstable; urgency=medium
+
+  * Synchronize with Google Drive in the background only while the user is
+    away, and rewrite the cache only when Drive really reports a change.
+  * Keep the panel instant: a background refresh repaints an open panel
+    without a visible loading state.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 12:05:00 +0000
+
 pastex (2.8.0-1) unstable; urgency=medium
 
   * Add a derived local snippet cache so the panel opens instantly after a

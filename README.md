@@ -4,7 +4,9 @@ Pastex is a Chrome/Chromium extension for organizing and inserting text
 snippets on explicitly allowed sites. Snippets are read and saved directly
 in Google Drive; an internet connection and Drive access are required. A derived
 local cache keeps the side panel instant, including after a browser restart;
-a stale cache is silently refreshed from Drive.
+a stale cache is silently refreshed from Drive. While the machine is idle the
+extension checks Drive in the background and stores the result only when the
+library really changed.
 
 In **Config**, choose one JSON manifest containing download links for
 `pastex-sites.json`, `pastex-google-drive.json` and your service-account JSON.

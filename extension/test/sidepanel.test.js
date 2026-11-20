@@ -30,6 +30,9 @@ class Element {
 function panelHarness(fail, options = {}) {
   const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
+  // The real markup starts with the editor dialog closed.
+  elements["editor-overlay"].hidden = true;
+  elements["selection-actions"].hidden = true;
   const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
     { id: "folder1", name: "Empty Folder", mimeType: "folder", parent: "root" },
@@ -118,7 +121,8 @@ function panelHarness(fail, options = {}) {
   };
   const context = vm.createContext({ document, window, chrome: { runtime }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
-  return { elements, records, context, imports, messages, clipboardTexts, pickerCalls: () => pickerCalls };
+  return { elements, records, context, imports, messages, clipboardTexts, pickerCalls: () => pickerCalls,
+    progress: (message) => progress(message) };
 }
 function allText(el) { return [el.textContent, ...el.children.map(allText)].join(" "); }
 async function settled() { await new Promise(setImmediate); await new Promise(setImmediate); }
@@ -317,4 +321,19 @@ test("session cache count is shown in the drive bar, not the footer", async () =
   assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
   assert.doesNotMatch(elements.status.textContent, /session cache/i);
   assert.match(elements.status.textContent, /Ready\./);
+});
+
+test("a background sync notification repaints the panel from the cache", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
+  const { elements, progress } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
+  await settled();
+  elements["drive-status"].textContent = "";
+  elements.status.textContent = "";
+  progress({ changed: true });
+  await settled();
+  await settled();
+  assert.match(allText(elements.tree), /Alpha/);
+  assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 1 snippets/);
+  assert.equal(elements.status.textContent, "", "a background refresh must not spam the status line");
+  assert.equal(elements["btn-sync"].disabled, false, "a background refresh must not disable the toolbar");
 });

@@ -76,6 +76,19 @@ the extension, not websites. If the library exceeds Chrome's
 session-storage quota, Pastex falls back to the service worker's memory; the
 cache may then disappear when the worker stops.
 
+### Background synchronization
+
+Pastex never polls Drive while you work. The service worker watches the
+browser's idle state (`chrome.idle`) and a two-minute alarm (`chrome.alarms`);
+when there has been no keyboard or mouse input for a minute, or the screen is
+locked, it performs exactly one Drive check. The result is compared with the
+cached snapshot: an unchanged library only moves a small freshness stamp, and
+the snapshot itself is rewritten only when Drive really reports a difference.
+An open side panel is repainted from the fresh cache without a visible loading
+state. A panel operation in progress (a save, a reorder, a manual refresh)
+suppresses the background check, and the background check never writes to
+Drive.
+
 Cached content can be stale, including after a folder is changed or access is
 revoked elsewhere. Use **↻ Refresh** to fetch current Drive contents; explicit
 Drive permission errors clear the cached snapshot. An internet connection is
@@ -176,6 +189,8 @@ an update manifest; the package does not silently force-install extensions.
 
 Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site launcher; `storage` provides the temporary session
-cache; `clipboardWrite` is the fallback on approved sites; `offscreen` reads configuration and downloads manifest links in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites,
+cache; `alarms` and `idle` drive the background synchronization that runs only
+while the user is away; `clipboardWrite` is the fallback on approved sites;
+`offscreen` reads configuration and downloads manifest links in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites,
 the Google API endpoints and the manifest's Drive links; Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

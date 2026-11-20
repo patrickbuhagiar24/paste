@@ -8,6 +8,11 @@ const vm = require("node:vm");
 
 const ext = path.resolve(__dirname, "..");
 
+// Let timers and pending promises settle.
+function settle(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms || 30));
+}
+
 
 function harness(home, unavailable) {
   const listeners = {};
@@ -16,6 +21,17 @@ function harness(home, unavailable) {
   let registered = [];
   let injected = 0;
   const opened = [];
+  let idleState = "idle";
+  const listenersForApis = {};
+  const alarms = {
+    create() {},
+    onAlarm: { addListener(fn) { listenersForApis.alarm = fn; } },
+  };
+  const idleApi = {
+    setDetectionInterval() {},
+    queryState(seconds, respond) { respond(idleState); },
+    onStateChanged: { addListener(fn) { listenersForApis.idle = fn; } },
+  };
   const runtime = {
     id: "abc", getURL: (name) => "chrome-extension://abc/" + name,
     onInstalled: event("installed"), onStartup: event("startup"), onMessage: event("message"), onConnect: event("connect"),
@@ -29,13 +45,19 @@ function harness(home, unavailable) {
       } catch (err) { return { ok: false, error: err.message }; }
     },
   };
+  const sessionData = {};
+  const localData = {};
+  function area(store) {
+    return {
+      get: async (key) => ({ [key]: store[key] }),
+      set: async (values) => { Object.assign(store, structuredClone(values)); },
+      remove: async (key) => { delete store[key]; },
+    };
+  }
   const context = vm.createContext({
     chrome: {
       runtime, offscreen: { hasDocument: async () => true, createDocument: async () => {} },
-      storage: {
-        session: { get: async () => ({}), set: async () => {}, remove: async () => {} },
-        local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
-      },
+      storage: { session: area(sessionData), local: area(localData) },
       scripting: {
         getRegisteredContentScripts: async () => registered,
         unregisterContentScripts: async () => { registered = []; },
@@ -44,6 +66,7 @@ function harness(home, unavailable) {
       },
       tabs: { get: async (id) => ({ id, url: id === 1 ? "https://allowed.example/path" : "https://blocked.example/" }),
         sendMessage: async () => { throw new Error("no receiver"); } },
+      alarms, idle: idleApi,
       action: { onClicked: event("action") }, sidePanel: { open: (options) => { opened.push(options); return Promise.resolve(); } },
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
@@ -56,8 +79,10 @@ function harness(home, unavailable) {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ext, "background.js"), "utf8"), context);
-  return { listeners, context, get launches() { return launches; },
-    get registered() { return registered; }, get injected() { return injected; }, opened };
+  return { listeners, context, listenersForApis, opened,
+    set idle(value) { idleState = value; },
+    get launches() { return launches; },
+    get registered() { return registered; }, get injected() { return injected; } };
 }
 
 test("extension startup never creates a configuration directory", async () => {
@@ -240,4 +265,105 @@ test("bulk Drive writes run with bounded parallelism and reuse loaded properties
   assert.equal((await send({ rootId: "root", action: "collapse", ids, collapsed: true, properties })).ok, true);
   assert.equal(max, 6);
   assert.deepEqual(calls.find((c) => c[1] === "a")[3], properties.a);
+});
+
+test("the background sync runs only while the user is away", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let loads = 0;
+  browser.context.PastexLibrary.load = async () => {
+    loads++;
+    return { tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {} };
+  };
+  browser.idle = "active";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 0, "an active user must not trigger a background sync");
+  browser.idle = "idle";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 1, "an idle machine triggers exactly one background sync");
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 2, "the background check repeats on the next alarm");
+});
+
+test("the background sync keeps the cache and only notifies the panel when Drive changed", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let tree = [{ id: "item", kind: "text", name: "Item", text: "text" }];
+  browser.context.PastexLibrary.load = async () => ({
+    tree, session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+  });
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  // Seed the cache with the current library.
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-library" }, panel, resolve));
+  const posted = [];
+  browser.listeners.connect({
+    name: "pastex-library-progress",
+    sender: { id: "abc", url: "chrome-extension://abc/sidepanel.html" },
+    onDisconnect: { addListener() {} }, onMessage: { addListener() {} },
+    postMessage: (message) => { posted.push(message); },
+  });
+  browser.idle = "idle";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(posted.length, 0, "an unchanged library must not disturb the panel");
+  tree = [{ id: "item", kind: "text", name: "Item", text: "new text" }];
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(posted.length, 1, "a changed library notifies the open panel exactly once");
+  assert.equal(posted[0].changed, true);
+});
+
+test("the startup warm-up never syncs while the user is active", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let loads = 0;
+  browser.context.PastexLibrary.load = async () => {
+    loads++;
+    return { tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {} };
+  };
+  browser.idle = "active";
+  browser.listeners.startup();
+  await settle(3200);
+  assert.equal(loads, 0, "the startup warm-up must respect the idle gate");
+  // The idle transition still triggers the check afterwards.
+  browser.idle = "idle";
+  browser.listenersForApis.idle("idle");
+  await settle();
+  assert.equal(loads, 1, "an idle transition triggers exactly one background sync");
+});
+
+test("a running panel operation suppresses the background sync", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let loads = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  browser.context.PastexLibrary.load = async () => {
+    loads++;
+    await gate;
+    return { tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {} };
+  };
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const pending = new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-library" }, panel, resolve));
+  await new Promise(setImmediate);
+  browser.idle = "idle";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 1, "the background sync must not start during panel work");
+  release();
+  await pending;
 });

@@ -10,6 +10,15 @@ globalThis.test = function test(name, fn) {
   cases.push({ name, fn });
 };
 
+let finished = false;
+process.on("exit", function (code) {
+  // A hanging test must never look like a successful run.
+  if (!finished && code === 0) {
+    console.error("FAIL - the test run ended before every case finished");
+    process.exitCode = 1;
+  }
+});
+
 (async function main() {
   for (const file of ["store.test.js", "drive.test.js", "library.test.js", "library-partial.test.js", "library-integration.test.js", "cache.test.js", "config-import.test.js", "config-manifest.test.js", "config-source.test.js", "config-reader.test.js", "sidepanel.test.js", "content.test.js", "sites.test.js", "background.test.js"]) {
     require(path.join(__dirname, file));
@@ -26,5 +35,6 @@ globalThis.test = function test(name, fn) {
       process.exit(1);
     }
   }
+  finished = true;
   console.log(passed + " tests passed");
 })().catch(() => process.exit(1));

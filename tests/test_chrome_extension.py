@@ -37,6 +37,8 @@ def test_manifest_permissions_are_minimal_and_documented():
     manifest = _manifest()
     assert set(manifest["permissions"]) == {
         "sidePanel",
+        "alarms",
+        "idle",
         "scripting",
         "activeTab",
         "clipboardWrite",
@@ -85,6 +87,24 @@ def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert 'id="btn-insert"' not in panel
     assert 'id="selection-actions"' in panel
+
+
+def test_background_sync_only_runs_while_the_user_is_away():
+    manifest = _manifest()
+    assert "alarms" in manifest["permissions"]
+    assert "idle" in manifest["permissions"]
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    cache = (EXT / "cache.js").read_text(encoding="utf-8")
+    # The alarm and idle listeners are registered at the top level so a
+    # terminated MV3 worker is woken up again.
+    assert "chrome.alarms.onAlarm.addListener" in background
+    assert "chrome.idle.onStateChanged.addListener" in background
+    assert "chrome.idle.queryState" in background
+    # An active user never triggers a background fetch.
+    assert 'state === "active"' in background
+    # The cache is only rewritten when Drive really reports a difference.
+    assert "onlyIfChanged" in cache
+    assert "sameLibrary" in cache
 
 
 def test_manifest_icons_exist_and_match_sizes():

@@ -14,6 +14,14 @@ var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, 
 var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;
+var panelOperations = 0;
+var idleSyncRunning = false;
+var idleSyncTimer = 0;
+var IDLE_SECONDS = 60;
+var IDLE_PERIOD_MINUTES = 2;
+var IDLE_SYNC_ALARM = "pastex-idle-sync";
+var CONFIG_RETRY_MS = 10 * 60 * 1000;
+var nextSyncAt = 0;
 
 // Bounded parallelism for independent Drive writes. A bulk collapse or
 // reorder no longer waits for one HTTP round trip per item.
@@ -41,6 +49,79 @@ function mapLimit(items, limit, fn) {
     }
     if (!items.length) { settled = true; resolve(results); } else pump();
   });
+}
+
+// --- background (idle) synchronization ---
+//
+// The panel must open instantly, but Drive stays the source of truth. While
+// the user works, nothing is fetched in the background. When the machine goes
+// idle (no keyboard or mouse input) or the screen is locked, the worker asks
+// Drive once, compares the result with the cached snapshot and rewrites the
+// cache only when something really changed.
+
+function panelBusy() {
+  return panelOperations > 0;
+}
+
+function idleState() {
+  return new Promise(function (resolve) {
+    if (!chrome.idle || typeof chrome.idle.queryState !== "function") { resolve("unknown"); return; }
+    try { chrome.idle.queryState(IDLE_SECONDS, function (state) { resolve(state || "unknown"); }); }
+    catch (ignored) { resolve("unknown"); }
+  });
+}
+
+// Notify an open panel that the background sync found new content, so it can
+// repaint from the (already fresh) cache without another Drive round trip.
+function notifyPanelsChanged() {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ changed: true }); } catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
+// The single entry point for every background Drive check. The idle gate is
+// never bypassed: a check only runs while the machine is idle or locked, so
+// the user is never charged for a request while working.
+async function runIdleSync(assumeIdle) {
+  if (idleSyncRunning) return;
+  if (panelBusy()) return;
+  // A broken configuration is not worth retrying every minute.
+  if (Date.now() < nextSyncAt) return;
+  var state = await idleState();
+  // "active" means the keyboard was just used: the user is back, so nothing
+  // is fetched. An unknown state means the idle API cannot vouch for the
+  // user being away; only an idle transition justifies trusting it.
+  if (state === "active") return;
+  if (!assumeIdle && state !== "idle" && state !== "locked") return;
+  if (panelBusy()) return;
+  idleSyncRunning = true;
+  try {
+    var result = await libraryCache.sync();
+    nextSyncAt = 0;
+    if (result && result.changed) notifyPanelsChanged();
+  } catch (err) {
+    var message = err && err.message ? err.message : String(err);
+    // A missing or broken configuration is not worth retrying every minute.
+    if (/configure a|choose a configuration manifest/i.test(message)) nextSyncAt = Date.now() + CONFIG_RETRY_MS;
+    else console.warn("Pastex background sync skipped:", message);
+  } finally { idleSyncRunning = false; }
+}
+
+function scheduleIdleSync(delay, assumeIdle) {
+  if (idleSyncTimer) clearTimeout(idleSyncTimer);
+  idleSyncTimer = setTimeout(function () { idleSyncTimer = 0; runIdleSync(assumeIdle); }, delay || 0);
+}
+
+function ensureIdleAlarm() {
+  if (!chrome.alarms || typeof chrome.alarms.create !== "function") return;
+  function create() { chrome.alarms.create(IDLE_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: IDLE_PERIOD_MINUTES }); }
+  if (typeof chrome.alarms.get !== "function") { create(); return; }
+  chrome.alarms.get(IDLE_SYNC_ALARM, function (alarm) { if (!alarm) create(); });
+}
+
+function trackPanelOperation(promise) {
+  panelOperations++;
+  return Promise.resolve(promise).finally(function () { panelOperations--; });
 }
 
 function trustedPanel(sender) {
@@ -218,10 +299,33 @@ function initializeUserConfig() {
   configureSites().catch(function (err) {
     console.warn("Pastex site registration failed:", err.message);
   });
+  ensureIdleAlarm();
+  // Warm the cache shortly after the browser starts, so the first panel open
+  // is instant. This still honours the idle gate: an active user is not
+  // charged for a request, and the idle transition triggers the check.
+  scheduleIdleSync(3000);
 }
 
 chrome.runtime.onInstalled.addListener(initializeUserConfig);
 chrome.runtime.onStartup.addListener(initializeUserConfig);
+
+// MV3 service workers are terminated aggressively, so the alarm and the idle
+// listeners must be registered at the top level to wake the worker again.
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener(function (alarm) {
+    if (alarm && alarm.name === IDLE_SYNC_ALARM) scheduleIdleSync(0);
+  });
+}
+if (chrome.idle) {
+  if (chrome.idle.setDetectionInterval) chrome.idle.setDetectionInterval(IDLE_SECONDS);
+  if (chrome.idle.onStateChanged) chrome.idle.onStateChanged.addListener(function (state) {
+    // The transition itself proves the user stepped away.
+    if (state === "idle" || state === "locked") scheduleIdleSync(0, true);
+    // The user came back before the check ran: cancel it.
+    else if (state === "active" && idleSyncTimer) { clearTimeout(idleSyncTimer); idleSyncTimer = 0; }
+  });
+}
+ensureIdleAlarm();
 
 chrome.action.onClicked.addListener(async function (tab) {
   if (tab && tab.windowId !== undefined) {
@@ -273,8 +377,8 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && (message.type === "pastex-panel-library" || message.type === "pastex-panel-mutate")) {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     clearProgress();
-    var operation = message.type === "pastex-panel-library" ?
-      libraryCache.get(!!message.force, broadcastProgress) : mutateDrive(message.command || {});
+    var operation = trackPanelOperation(message.type === "pastex-panel-library" ?
+      libraryCache.get(!!message.force, broadcastProgress) : mutateDrive(message.command || {}));
     operation.then(function (result) { clearProgress(); sendResponse({ ok: true, result: result }); })
       .catch(function (err) { clearProgress(); sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
@@ -283,7 +387,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return false;
   }
   if (!trustedPanel(sender)) { sendResponse({ ok: false, reason: "unauthorized" }); return false; }
-  insertIntoActiveTab(message.id, typeof message.text === "string" ? message.text : "").then(function (response) {
+  trackPanelOperation(insertIntoActiveTab(message.id, typeof message.text === "string" ? message.text : "")).then(function (response) {
     sendResponse(response || { ok: false });
   });
   return true;
