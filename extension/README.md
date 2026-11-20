@@ -79,7 +79,7 @@ cache may then disappear when the worker stops.
 ### Background synchronization
 
 Pastex never polls Drive while you work. The service worker watches the
-browser's idle state (`chrome.idle`) and a two-minute alarm (`chrome.alarms`);
+browser's idle state (`chrome.idle`) and an alarm (`chrome.alarms`);
 when there has been no keyboard or mouse input for a minute, or the screen is
 locked, it performs exactly one Drive check. The result is compared with the
 cached snapshot: an unchanged library only moves a small freshness stamp, and
@@ -88,6 +88,24 @@ An open side panel is repainted from the fresh cache without a visible loading
 state. A panel operation in progress (a save, a reorder, a manual refresh)
 suppresses the background check, and the background check never writes to
 Drive.
+
+The interval between two checks adapts: it starts at two minutes, doubles
+after every pair of checks that finds no change, and stops at thirty minutes.
+A change returns it to the fast interval at once. The learned interval is
+stored in `chrome.storage.local`, so a restarted worker keeps it.
+
+A check asks Drive only for the metadata the library needs, and a listing
+walks the pages with Drive's own cursor, so a page that fails is retried from
+the same place instead of starting the folder over. Every node keeps a
+signature of the metadata Drive reported for it (name, type, timestamp, Drive's
+content checksum and labels). A node with the same signature is reused as it
+is, so only the branch that really changed is listed and downloaded again.
+Snippet bodies are stored under the SHA-256 of their content, which keeps
+them across a rebuild of the tree and recognizes an unchanged body even when
+its timestamp moved.
+
+The panel shows when the library was last confirmed with Google Drive, next to
+the drive status. Use **↻ Refresh** to check Drive right away.
 
 Cached content can be stale, including after a folder is changed or access is
 revoked elsewhere. Use **↻ Refresh** to fetch current Drive contents; explicit
@@ -99,13 +117,16 @@ invalidate the snapshot. No snippet changes are queued for offline sync.
 to move selected items within their own folders, and **Delete** to move them to
 Drive trash after confirmation. Click the folder arrow to expand or collapse it
 while selecting. Moving is disabled during search; clear the search first.
-Manual order is saved in each item's Google Drive `pastex_order` property, and
-a folder's collapsed state in its `pastex_collapsed` property. Both are Drive
-metadata, so the whole structure survives a panel reload, a browser restart and
-a move to another computer using the same Drive folder. **Collapse all** writes
-`pastex_collapsed` to every folder. Unranked new files follow ranked items in
-Drive's normal order. Concurrent reordering on different devices can overwrite
-the same metadata; refresh before editing shared lists.
+Manual order and the collapsed state of the folders are stored together in one
+Google Drive label, `pastex_index`, on the root folder of the library. One
+reorder or one **Collapse all** is therefore a single Drive write instead of
+one write per item, and the structure survives a panel reload, a browser
+restart and a move to another computer using the same Drive folder. Libraries
+that were ordered with earlier versions keep their per-item `pastex_order` and
+`pastex_collapsed` labels: they are still read, and the central label wins
+as soon as Pastex writes it. Unranked new files follow ranked items in Drive's
+normal order. Concurrent reordering on different devices can overwrite the
+same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
@@ -122,9 +143,12 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. **Collapse all** folds every folder and clears the search first. The
-Drive bar shows `Google Drive • session cache · N snippets` when the list came
-from the session or local cache; the label is kept for compatibility.
+snippets. The toolbar reads **↻ Refresh**, **▸ Collapse all**, **＋ Text**,
+**Config**, **＋ Folder** and **Select**. **Collapse all** folds every folder
+and clears the search first. The drive bar shows
+`Google Drive • session cache · N snippets` when the list came from the
+session or local cache; the label is kept for compatibility, and the moment of
+the last check with Drive is shown next to it.
 
 On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. There is

@@ -107,8 +107,101 @@ test("cached text is reused by modifiedTime and stale bodies are refreshed", asy
   assert.deepEqual(downloads, ["top"]);
   assert.equal(result.tree[0].children[0].text, "cached nested");
   assert.equal(result.tree[1].text, "fresh top");
-  assert.equal(result.bodies.nested.text, "cached nested");
-  assert.equal(result.bodies.top.text, "fresh top");
+  // A body is addressed by the SHA-256 of its content.
+  const nested = result.bodies.nested;
+  assert.equal(nested.hash, require("node:crypto").createHash("sha256").update("cached nested", "utf8").digest("hex"));
+  assert.equal(result.texts[nested.hash], "cached nested");
+  assert.equal(result.texts[result.bodies.top.hash], "fresh top");
+});
+
+test("a body with the same Drive checksum is reused even when the timestamp moved", async () => {
+  const drive = fakeDrive();
+  const downloads = [];
+  const checksum = "a".repeat(64);
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "top", name: "Top.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2", sha256Checksum: checksum },
+  ] : [];
+  drive.downloadText = async (token, id) => { downloads.push(id); return "same content"; };
+  const hash = require("node:crypto").createHash("sha256").update("same content", "utf8").digest("hex");
+  const result = await Library.load(native, drive, undefined, {
+    bodies: { top: { modifiedTime: "v1", hash, driveHash: checksum } },
+    texts: { [hash]: "same content" },
+  });
+  assert.deepEqual(downloads, [], "an unchanged content checksum needs no download");
+  assert.equal(result.tree[0].text, "same content");
+  assert.equal(result.bodies.top.hash, hash);
+});
+
+test("only the branch that changed is listed and downloaded again", async () => {
+  const drive = fakeDrive();
+  const listed = [];
+  const downloads = [];
+  const state = {
+    root: [
+      { id: "left", name: "Left", mimeType: drive.FOLDER_MIME, modifiedTime: "l1" },
+      { id: "right", name: "Right", mimeType: drive.FOLDER_MIME, modifiedTime: "x1" },
+    ],
+    left: [{ id: "la", name: "LA.txt", mimeType: drive.TEXT_MIME, modifiedTime: "la1" }],
+    right: [{ id: "rb", name: "RB.txt", mimeType: drive.TEXT_MIME, modifiedTime: "rb1" }],
+  };
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1" });
+  drive.listChildren = async (token, parent) => {
+    listed.push(parent);
+    return state[parent] || [];
+  };
+  drive.downloadText = async (token, id) => { downloads.push(id); return "body " + id; };
+  const first = await Library.load(native, drive);
+  assert.deepEqual(listed.sort(), ["left", "right", "root"]);
+  assert.deepEqual(downloads.sort(), ["la", "rb"]);
+  listed.length = 0; downloads.length = 0;
+
+  // Only one file inside "right" changes: "left" is reused as it is.
+  state.right[0].modifiedTime = "rb2";
+  state.root[1].modifiedTime = "x2";
+  const second = await Library.load(native, drive, undefined, {
+    tree: first.tree, bodies: first.bodies, texts: first.texts,
+    metadata: first.metadata, signatures: first.signatures,
+  });
+  assert.deepEqual(listed.sort(), ["right", "root"], "the unchanged folder is not listed again");
+  assert.deepEqual(downloads, ["rb"], "only the changed body is downloaded again");
+  assert.equal(second.tree[0].children[0].text, "body la");
+  assert.equal(second.tree[1].children[0].text, "body rb");
+});
+
+test("the centralized index on the root folder orders and folds the library", async () => {
+  const drive = fakeDrive();
+  drive.getFolder = async () => ({
+    id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1",
+    properties: {
+      pastex_index: JSON.stringify({
+        order: { root: ["second", "first"] },
+        collapsed: { folder: "1" },
+      }),
+    },
+  });
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
+    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME },
+    { id: "folder", name: "Folder", mimeType: drive.FOLDER_MIME },
+  ] : [];
+  drive.downloadText = async (token, id) => "body " + id;
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => node.id), ["second", "first", "folder"]);
+  assert.equal(result.tree[2].collapsed, true);
+  assert.deepEqual(result.index.order.root, ["second", "first"]);
+});
+
+test("the legacy per-item labels still order a library without a central index", async () => {
+  const drive = fakeDrive();
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
+    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
+    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
+  ] : [];
+  drive.downloadText = async (token, id) => id;
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
+  assert.deepEqual(result.index, { order: {}, collapsed: {} });
 });
 
 test("text inside a collapsed folder is deferred until the folder is opened", async () => {
@@ -133,20 +226,62 @@ test("text inside a collapsed folder is deferred until the folder is opened", as
 test("unchanged nested folders are reused instead of being listed again", async () => {
   const drive = fakeDrive();
   let lists = 0;
+  let downloads = 0;
   drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "root-v1" });
   drive.listChildren = async (token, parent) => {
     lists++;
     if (parent === "root") return [{ id: "f", name: "Folder", mimeType: drive.FOLDER_MIME, modifiedTime: "f-v1", properties: { pastex_collapsed: "0" } }];
     return [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "t-v1" }];
   };
+  drive.downloadText = async (token, id) => { downloads++; return "inside body"; };
   const first = await Library.load(native, drive);
   assert.equal(lists, 2);
   const second = await Library.load(native, drive, undefined, {
     tree: first.tree,
     bodies: first.bodies,
+    texts: first.texts,
     metadata: first.metadata,
+    signatures: first.signatures,
   });
   assert.equal(lists, 3, "only the root should be listed; the unchanged folder is reused");
+  assert.equal(downloads, 1, "the reused folder does not download its body again");
   assert.equal(second.tree[0].children[0].text, first.tree[0].children[0].text);
   assert.equal(second.metadata.f, "f-v1");
+});
+
+test("a snapshot without node signatures is listed again but keeps its bodies", async () => {
+  const drive = fakeDrive();
+  let lists = 0;
+  let downloads = 0;
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "root-v1" });
+  drive.listChildren = async (token, parent) => {
+    lists++;
+    if (parent === "root") return [{ id: "f", name: "Folder", mimeType: drive.FOLDER_MIME, modifiedTime: "f-v1" }];
+    return [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "t-v1" }];
+  };
+  drive.downloadText = async (token, id) => { downloads++; return "inside body"; };
+  const first = await Library.load(native, drive);
+  const second = await Library.load(native, drive, undefined, {
+    tree: first.tree, bodies: first.bodies, texts: first.texts, metadata: first.metadata,
+  });
+  assert.equal(lists, 4, "without signatures the folder is listed once more");
+  assert.equal(downloads, 1, "the body is still reused through its content hash");
+  assert.equal(second.tree[0].children[0].text, "inside body");
+});
+
+test("a body whose text is missing is downloaded again instead of turning into nothing", async () => {
+  const drive = fakeDrive();
+  let downloads = 0;
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "root-v1" });
+  drive.listChildren = async (token, parent) => parent === "root" ? [
+    { id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "t-v1" },
+  ] : [];
+  drive.downloadText = async (token, id) => { downloads++; return "inside body"; };
+  const first = await Library.load(native, drive);
+  const second = await Library.load(native, drive, undefined, {
+    tree: first.tree, bodies: first.bodies, metadata: first.metadata,
+    signatures: first.signatures,
+  });
+  assert.equal(downloads, 2, "a body without its text is fetched again");
+  assert.equal(second.tree[0].text, "inside body");
 });

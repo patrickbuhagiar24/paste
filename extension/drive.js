@@ -233,14 +233,39 @@
     }, options.timeoutMs);
   }
 
-  async function listChildren(token, folderId, fetchImpl) {
+  // A page that fails for a transient reason is retried from the very same
+  // cursor, so the pages before it are never fetched again.
+  function transientFailure(err) {
+    var message = String((err && err.message) || err || "");
+    return /HTTP (429|5\d\d)\b/.test(message) ||
+      /network|fetch failed|timed out|timeout|ECONN/i.test(message);
+  }
+
+  async function listChildrenPage(token, query, fetchImpl, attempts) {
+    var tries = attempts === undefined ? 1 : attempts;
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await driveFetch(token, "/files", { query: query, fetchImpl: fetchImpl });
+      } catch (err) {
+        if (attempt >= tries || !transientFailure(err)) throw err;
+      }
+    }
+  }
+
+  // Only the metadata the library really uses is requested: the name, the
+  // type, the timestamps, Drive's own content checksum and the labels. The
+  // page token is Drive's cursor: it walks the pages of a folder and the
+  // last cursor is reported back to the caller.
+  async function listChildren(token, folderId, fetchImpl, options) {
+    options = options || {};
     var files = [];
-    var pageToken = "";
+    var pageToken = options.startPageToken || "";
     var seenTokens = new Set();
+    var cursor = "";
     do {
       var query = {
         q: "'" + folderId + "' in parents and trashed = false",
-        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,properties)",
+        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,sha256Checksum,size,properties)",
         pageSize: "1000",
         includeItemsFromAllDrives: "true",
         orderBy: "folder,name",
@@ -248,7 +273,10 @@
       if (pageToken) {
         query.pageToken = pageToken;
       }
-      var data = await driveFetch(token, "/files", { query: query, fetchImpl: fetchImpl });
+      // The cursor of this page is remembered, so a failed page is retried
+      // from the same place and the pages before it are not fetched again.
+      cursor = pageToken;
+      var data = await listChildrenPage(token, query, fetchImpl, options.retries);
       (data.files || []).forEach(function (file) {
         files.push(file);
       });
@@ -256,12 +284,15 @@
       if (pageToken && seenTokens.has(pageToken)) throw new Error("Drive returned a repeated page token.");
       if (pageToken) seenTokens.add(pageToken);
     } while (pageToken);
+    if (typeof options.onCursor === "function") options.onCursor(cursor || "");
     return files;
   }
 
+  // The root folder carries the labels of the library: its properties hold
+  // the centralized order and collapse index.
   async function getFolder(token, folderId, fetchImpl) {
     return driveFetch(token, "/files/" + encodeURIComponent(folderId), {
-      query: { fields: "id,name,mimeType" }, fetchImpl: fetchImpl,
+      query: { fields: "id,name,mimeType,modifiedTime,properties" }, fetchImpl: fetchImpl,
     });
   }
 
@@ -308,6 +339,13 @@
 
   async function setCollapsed(token, fileId, collapsed, fetchImpl, known) {
     return patchProperties(token, fileId, { pastex_collapsed: collapsed ? "1" : "0" }, fetchImpl, known);
+  }
+
+  // The order and the collapse state of the whole library live in a single
+  // label on the root folder, so a reorder or a collapse costs one Drive
+  // write instead of one write per item.
+  async function setIndex(token, rootId, index, fetchImpl, known) {
+    return patchProperties(token, rootId, { pastex_index: JSON.stringify(index) }, fetchImpl, known);
   }
 
   async function trashFile(token, fileId, fetchImpl) {
@@ -386,6 +424,7 @@
     renameFile: renameFile,
     setOrder: setOrder,
     setCollapsed: setCollapsed,
+    setIndex: setIndex,
     trashFile: trashFile,
     createFolder: createFolder,
     uploadNew: uploadNew,

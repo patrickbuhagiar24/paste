@@ -14,7 +14,7 @@ function settle(ms) {
 }
 
 
-function harness(home, unavailable) {
+function harness(home, unavailable, shared) {
   const listeners = {};
   const event = (name) => ({ addListener(fn) { listeners[name] = fn; } });
   let launches = 0;
@@ -23,8 +23,9 @@ function harness(home, unavailable) {
   const opened = [];
   let idleState = "idle";
   const listenersForApis = {};
+  const alarmCalls = [];
   const alarms = {
-    create() {},
+    create(name, options) { alarmCalls.push({ name, options }); },
     onAlarm: { addListener(fn) { listenersForApis.alarm = fn; } },
   };
   const idleApi = {
@@ -46,7 +47,8 @@ function harness(home, unavailable) {
     },
   };
   const sessionData = {};
-  const localData = {};
+  const localData = shared && shared.local ? shared.local : {};
+  if (shared) shared.local = localData;
   function area(store) {
     return {
       get: async (key) => ({ [key]: store[key] }),
@@ -79,7 +81,7 @@ function harness(home, unavailable) {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ext, "background.js"), "utf8"), context);
-  return { listeners, context, listenersForApis, opened,
+  return { listeners, context, listenersForApis, opened, alarmCalls,
     set idle(value) { idleState = value; },
     get launches() { return launches; },
     get registered() { return registered; }, get injected() { return injected; } };
@@ -199,7 +201,10 @@ test("panel loads are cached; writes require panel and invalidate cache", async 
 test("worker handles create, rename, order and bulk trash with Drive, denying changed roots", async () => {
   const browser = harness(os.tmpdir(), true);
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
-  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
+  let stored = { order: {}, collapsed: {} };
+  browser.context.PastexLibrary.connect = async () => ({
+    token: "token", rootId: "root", properties: { keep: "1" }, index: stored,
+  });
   const drive = browser.context.PastexDrive;
   const writes = [];
   drive.listChildren = async () => [];
@@ -207,22 +212,47 @@ test("worker handles create, rename, order and bulk trash with Drive, denying ch
   drive.uploadNew = async (t, parent, name, text) => { writes.push(["new", parent, name, text]); return { id: "n" }; };
   drive.renameFile = async (t, id, name) => { writes.push(["rename", id, name]); };
   drive.trashFile = async (t, id) => { writes.push(["trash", id]); };
-  drive.setOrder = async (t, id, order) => { writes.push(["order", id, order]); };
-  drive.setCollapsed = async (t, id, collapsed) => { writes.push(["collapse", id, collapsed]); };
+  drive.setIndex = async (t, root, index, impl, known) => { writes.push(["index", root, index, known]); stored = index; };
   const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
   assert.equal((await send({ rootId: "root", action: "save", mode: "new-folder", name: "Folder", parentId: "root" })).result.id, "f");
   assert.equal((await send({ rootId: "root", action: "save", mode: "new-text", name: "Note", text: "text", parentId: "root" })).result.id, "n");
   assert.equal((await send({ rootId: "root", action: "save", mode: "rename-text", name: "Renamed", parentId: "root", node: { id: "n", kind: "text", name: "Note", driveName: "Note.txt" } })).ok, true);
-  assert.equal((await send({ rootId: "root", action: "reorder", groups: [["n", "f"]] })).ok, true);
+  assert.equal((await send({ rootId: "root", action: "reorder", groups: [["n", "f"]], parents: ["root"] })).ok, true);
   assert.equal((await send({ rootId: "root", action: "collapse", ids: ["f"], collapsed: true })).ok, true);
   assert.equal((await send({ rootId: "root", action: "delete", ids: ["n", "f"] })).ok, true);
   assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
-  // Bulk writes run with bounded parallelism, so only their grouping is deterministic.
   const tupleSort = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b));
   assert.deepEqual(writes.slice(0, 3), [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"]]);
-  assert.deepEqual(writes.slice(3, 5).sort(tupleSort), [["order", "n", 0], ["order", "f", 1]].sort(tupleSort));
-  assert.deepEqual(writes.slice(5, 6), [["collapse", "f", true]]);
-  assert.deepEqual(writes.slice(6, 8).sort(tupleSort), [["trash", "n"], ["trash", "f"]].sort(tupleSort));
+  // The order and the collapse state are written once, into the label of the
+  // root folder, and the other labels of the folder are preserved.
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[3])),
+    ["index", "root", { order: { root: ["n", "f"] }, collapsed: {} }, { keep: "1" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[4])),
+    ["index", "root", { order: { root: ["n", "f"] }, collapsed: { f: "1" } }, { keep: "1" }]);
+  assert.deepEqual(writes.slice(5, 7).sort(tupleSort), [["trash", "n"], ["trash", "f"]].sort(tupleSort));
+});
+
+test("the order and the collapse state are written once, in the central index", async () => {
+  const browser = harness(os.tmpdir(), true);
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  let stored = { order: { root: ["a", "b"] }, collapsed: { folder: "1" } };
+  browser.context.PastexLibrary.connect = async () => ({
+    token: "token", rootId: "root", properties: {}, index: stored,
+  });
+  const drive = browser.context.PastexDrive;
+  const calls = [];
+  drive.setIndex = async (t, root, index) => { calls.push([root, index]); stored = index; };
+  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
+  const ids = ["a", "b", "c", "d", "e", "f", "g"];
+  assert.equal((await send({ rootId: "root", action: "reorder", groups: [ids], parents: ["root"] })).ok, true);
+  assert.equal(calls.length, 1, "a reorder is a single Drive write");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].order.root)), ids);
+  calls.length = 0;
+  assert.equal((await send({ rootId: "root", action: "collapse", ids, collapsed: true })).ok, true);
+  assert.equal(calls.length, 1, "a collapse is a single Drive write");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].collapsed)),
+    { folder: "1", a: "1", b: "1", c: "1", d: "1", e: "1", f: "1", g: "1" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].order.root)), ids, "the stored order survives a collapse");
 });
 
 test("repeated paste requests reuse the cached site allowlist", async () => {
@@ -240,31 +270,24 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("bulk Drive writes run with bounded parallelism and reuse loaded properties", async () => {
+test("bulk Drive deletes run with bounded parallelism", async () => {
   const browser = harness(os.tmpdir(), true);
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
   const drive = browser.context.PastexDrive;
   let active = 0, max = 0;
   const calls = [];
-  async function track(kind, id, extra, known) {
+  drive.trashFile = async (t, id) => {
     active++; max = Math.max(max, active);
     await new Promise(setImmediate);
     active--;
-    calls.push([kind, id, extra, known]);
-  }
-  drive.setOrder = (t, id, order, impl, known) => track("order", id, order, known);
-  drive.setCollapsed = (t, id, collapsed, impl, known) => track("collapse", id, collapsed, known);
+    calls.push(id);
+  };
   const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
   const ids = ["a", "b", "c", "d", "e", "f", "g"];
-  const properties = { a: { pastex_order: "9", pastex_collapsed: "1" } };
-  assert.equal((await send({ rootId: "root", action: "reorder", groups: [ids], properties })).ok, true);
-  assert.equal(max, 6);
-  assert.deepEqual(calls.find((c) => c[1] === "a")[3], properties.a);
-  calls.length = 0; active = 0; max = 0;
-  assert.equal((await send({ rootId: "root", action: "collapse", ids, collapsed: true, properties })).ok, true);
-  assert.equal(max, 6);
-  assert.deepEqual(calls.find((c) => c[1] === "a")[3], properties.a);
+  assert.equal((await send({ rootId: "root", action: "delete", ids })).ok, true);
+  assert.equal(max, 6, "the writes of one bulk delete are bounded");
+  assert.deepEqual(calls.sort(), ids.slice().sort());
 });
 
 test("the background sync runs only while the user is away", async () => {
@@ -343,8 +366,7 @@ test("the startup warm-up never syncs while the user is active", async () => {
   assert.equal(loads, 1, "an idle transition triggers exactly one background sync");
 });
 
-test("a running panel operation suppresses the background sync", async () => {
-  const browser = harness(os.tmpdir(), true);
+test("a running panel operation suppresses the background sync", async () => {  const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
     drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
   });
@@ -366,4 +388,70 @@ test("a running panel operation suppresses the background sync", async () => {
   assert.equal(loads, 1, "the background sync must not start during panel work");
   release();
   await pending;
+});
+
+test("the background check slows down while Drive keeps reporting the same library", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let text = "text";
+  browser.context.PastexLibrary.load = async () => ({
+    tree: [{ id: "item", kind: "text", name: "Item", text }],
+    session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+  });
+  const periods = () => browser.alarmCalls
+    .filter((call) => call.name === "pastex-idle-sync")
+    .map((call) => call.options.periodInMinutes);
+  browser.idle = "idle";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(periods().pop(), 2, "the first check uses the fast interval");
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(periods().pop(), 2, "one check without a change keeps the interval");
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(periods().pop(), 4, "the interval grows after several checks without a change");
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(periods().pop(), 8, "the interval keeps growing while nothing changes");
+  // A change brings the fast interval back.
+  text = "changed";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(periods().pop(), 2, "a change returns to the fast interval");
+  const last = browser.alarmCalls[browser.alarmCalls.length - 1];
+  assert.equal(last.options.delayInMinutes, 2, "the next check waits for the new interval");
+});
+
+test("the growing interval is kept when the worker restarts", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-backoff-"));
+  const shared = {};
+  try {
+    const browser = harness(home, false, shared);
+    browser.context.PastexConfig.readConfig = async () => ({
+      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    });
+    browser.context.PastexLibrary.load = async () => ({
+      tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+    });
+    browser.idle = "idle";
+    for (let i = 0; i < 3; i++) {
+      browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+      await settle();
+    }
+    const periods = browser.alarmCalls
+      .filter((call) => call.name === "pastex-idle-sync")
+      .map((call) => call.options.periodInMinutes);
+    assert.equal(periods.pop(), 4, "the interval grew");
+    // A new worker keeps the interval it learned.
+    const restarted = harness(home, false, shared);
+    await settle(50);
+    const kept = restarted.alarmCalls
+      .filter((call) => call.name === "pastex-idle-sync")
+      .map((call) => call.options.periodInMinutes);
+    assert.ok(kept.includes(4), "the stored interval is used again");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

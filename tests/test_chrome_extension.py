@@ -83,10 +83,57 @@ def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     assert "storage.sync" not in background + cache
     assert "libraryCache.mutate" in background
     assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background
-    assert "PastexDrive.trashFile" in background and "PastexDrive.setOrder" in background
+    assert "PastexDrive.trashFile" in background and "PastexDrive.setIndex" in background
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert 'id="btn-insert"' not in panel
     assert 'id="selection-actions"' in panel
+
+
+def test_bodies_are_cached_by_their_content_hash():
+    # The body cache is addressed by the SHA-256 of the body, so an
+    # unchanged snippet is never downloaded again.
+    assert (EXT / "hash.js").is_file()
+    hashing = (EXT / "hash.js").read_text(encoding="utf-8")
+    assert "sha256Hex" in hashing
+    library = (EXT / "library.js").read_text(encoding="utf-8")
+    cache = (EXT / "cache.js").read_text(encoding="utf-8")
+    assert "PastexHash" in library or "require(\"./hash.js\")" in library
+    assert "sha256Checksum" in library, "Drive reports the checksum of a body"
+    assert "hash" in cache and "texts" in cache
+    # Every node keeps the signature of the metadata Drive reported for it.
+    assert "signatures" in library and "signatures" in cache
+
+
+def test_the_order_and_the_collapse_state_live_in_one_label():
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    library = (EXT / "library.js").read_text(encoding="utf-8")
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "pastex_index" in drive, "the root folder carries the central index"
+    assert "pastex_index" in library and "parseIndex" in library
+    assert "PastexDrive.setIndex" in background
+    assert "PastexDrive.setOrder" not in background, "the order is not written per item"
+
+
+def test_the_background_interval_grows_while_nothing_changes():
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "IDLE_MAX_PERIOD_MINUTES" in background
+    assert "adaptBackoff" in background
+    assert "syncPeriodMinutes" in background
+    # The idle gate and the alarm stay the only background triggers.
+    assert "chrome.idle.queryState" in background
+    assert "chrome.alarms.onAlarm.addListener" in background
+
+
+def test_the_panel_shows_the_last_check_and_keeps_the_manual_refresh():
+    panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+    assert 'id="last-checked"' in panel
+    assert "lastCheckedAt" in script
+    assert 'id="btn-sync"' in panel, "the manual refresh stays the fallback"
+    # The create buttons moved to the end of the toolbar.
+    toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
+    order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
+    assert order == ["btn-sync", "btn-collapse-all", "btn-text", "btn-config", "btn-folder", "btn-select"]
 
 
 def test_background_sync_only_runs_while_the_user_is_away():

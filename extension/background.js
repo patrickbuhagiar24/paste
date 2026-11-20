@@ -6,7 +6,7 @@
  *    open when the extension was installed or updated.
  */
 
-importScripts("sites.js", "config-client.js", "drive.js", "library.js", "cache.js");
+importScripts("sites.js", "config-client.js", "drive.js", "hash.js", "library.js", "cache.js");
 
 var PastexConfig = PastexConfigClient;
 
@@ -19,9 +19,17 @@ var idleSyncRunning = false;
 var idleSyncTimer = 0;
 var IDLE_SECONDS = 60;
 var IDLE_PERIOD_MINUTES = 2;
+var IDLE_MAX_PERIOD_MINUTES = 30;
+var IDLE_NO_CHANGE_STEPS = 2;
 var IDLE_SYNC_ALARM = "pastex-idle-sync";
+var BACKOFF_KEY = "pastex.sync.backoff.v1";
 var CONFIG_RETRY_MS = 10 * 60 * 1000;
 var nextSyncAt = 0;
+// The interval between two background checks grows while Drive keeps
+// reporting the same library, and returns to the fast interval as soon as
+// a change is seen.
+var syncPeriodMinutes = IDLE_PERIOD_MINUTES;
+var unchangedChecks = 0;
 
 // Bounded parallelism for independent Drive writes. A bulk collapse or
 // reorder no longer waits for one HTTP round trip per item.
@@ -73,10 +81,55 @@ function idleState() {
 
 // Notify an open panel that the background sync found new content, so it can
 // repaint from the (already fresh) cache without another Drive round trip.
-function notifyPanelsChanged() {
+function notifyPanelsChanged(lastCheckedAt) {
   progressPorts.forEach(function (port) {
-    try { port.postMessage({ changed: true }); } catch (ignored) { progressPorts.delete(port); }
+    try { port.postMessage({ changed: true, lastCheckedAt: lastCheckedAt || Date.now() }); }
+    catch (ignored) { progressPorts.delete(port); }
   });
+}
+
+// --- the adaptive interval between two background checks ---
+//
+// A library that does not change is checked less and less often, so an idle
+// machine does not keep asking Drive the same question. A change resets the
+// interval to its fast value.
+
+function backoffStore() {
+  try { return chrome.storage && chrome.storage.local; } catch (ignored) { return null; }
+}
+
+async function readBackoff() {
+  var store = backoffStore();
+  if (!store) return;
+  try {
+    var data = (await store.get(BACKOFF_KEY))[BACKOFF_KEY];
+    if (!data) return;
+    if (typeof data.period === "number" && data.period >= IDLE_PERIOD_MINUTES && data.period <= IDLE_MAX_PERIOD_MINUTES)
+      syncPeriodMinutes = data.period;
+    if (typeof data.unchanged === "number" && data.unchanged >= 0) unchangedChecks = data.unchanged;
+  } catch (ignored) { /* the backoff is only an optimization */ }
+}
+
+async function saveBackoff() {
+  var store = backoffStore();
+  if (!store) return;
+  try {
+    await store.set({ [BACKOFF_KEY]: { period: syncPeriodMinutes, unchanged: unchangedChecks } });
+  } catch (ignored) { /* the backoff is only an optimization */ }
+}
+
+function adaptBackoff(changed) {
+  if (changed) {
+    unchangedChecks = 0;
+    syncPeriodMinutes = IDLE_PERIOD_MINUTES;
+  } else {
+    unchangedChecks++;
+    if (unchangedChecks >= IDLE_NO_CHANGE_STEPS && syncPeriodMinutes < IDLE_MAX_PERIOD_MINUTES)
+      syncPeriodMinutes = Math.min(syncPeriodMinutes * 2, IDLE_MAX_PERIOD_MINUTES);
+  }
+  saveBackoff();
+  // The alarm is replaced, so the next check follows the new interval.
+  ensureIdleAlarm(true, syncPeriodMinutes);
 }
 
 // The single entry point for every background Drive check. The idle gate is
@@ -98,7 +151,11 @@ async function runIdleSync(assumeIdle) {
   try {
     var result = await libraryCache.sync();
     nextSyncAt = 0;
-    if (result && result.changed) notifyPanelsChanged();
+    // A skipped check never touched Drive, so it does not move the interval.
+    if (result && !result.skipped) {
+      adaptBackoff(!!result.changed);
+      if (result.changed) notifyPanelsChanged(result.lastCheckedAt);
+    }
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
@@ -112,9 +169,14 @@ function scheduleIdleSync(delay, assumeIdle) {
   idleSyncTimer = setTimeout(function () { idleSyncTimer = 0; runIdleSync(assumeIdle); }, delay || 0);
 }
 
-function ensureIdleAlarm() {
+// The alarm carries the interval between two checks. Replacing it starts the
+// next check after the given delay, so a longer interval really means a
+// longer wait, while a fresh start still checks soon.
+function ensureIdleAlarm(replace, delay) {
   if (!chrome.alarms || typeof chrome.alarms.create !== "function") return;
-  function create() { chrome.alarms.create(IDLE_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: IDLE_PERIOD_MINUTES }); }
+  var wait = delay === undefined ? 1 : delay;
+  function create() { chrome.alarms.create(IDLE_SYNC_ALARM, { delayInMinutes: wait, periodInMinutes: syncPeriodMinutes }); }
+  if (replace) { create(); return; }
   if (typeof chrome.alarms.get !== "function") { create(); return; }
   chrome.alarms.get(IDLE_SYNC_ALARM, function (alarm) { if (!alarm) create(); });
 }
@@ -265,7 +327,6 @@ async function mutateDrive(command) {
       if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
       return { id: node.id };
     }
-    var known = command.properties || {};
     if (command.action === "delete") {
       var results = await mapLimit(command.ids || [], 6, function (id) {
         return PastexDrive.trashFile(token, id).then(function () { return ""; },
@@ -275,18 +336,25 @@ async function mutateDrive(command) {
       if (failures.length) throw new Error(failures.length + " item(s) could not be deleted: " + failures[0]);
       return {};
     }
+    // The order and the collapse state of the library live in one label on
+    // the root folder, so a reorder or a collapse is a single Drive write.
     if (command.action === "reorder") {
-      for (var j = 0; j < command.groups.length; j++) {
-        await mapLimit(command.groups[j], 6, function (id, index) {
-          return PastexDrive.setOrder(token, id, index, undefined, known[id]);
-        });
+      var order = PastexLibrary.cloneIndex(session.index);
+      var groups = command.groups || [];
+      var parents = command.parents || [];
+      for (var j = 0; j < groups.length; j++) {
+        var parent = parents[j] || session.rootId;
+        order.order[parent] = (groups[j] || []).slice();
       }
+      await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
       return {};
     }
     if (command.action === "collapse") {
-      await mapLimit((command.ids || []).filter(Boolean), 6, function (id) {
-        return PastexDrive.setCollapsed(token, id, !!command.collapsed, undefined, known[id]);
+      var folded = PastexLibrary.cloneIndex(session.index);
+      (command.ids || []).filter(Boolean).forEach(function (id) {
+        folded.collapsed[id] = command.collapsed ? "1" : "0";
       });
+      await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
       return {};
     }
     throw new Error("Unknown Drive operation.");
@@ -299,6 +367,8 @@ function initializeUserConfig() {
   configureSites().catch(function (err) {
     console.warn("Pastex site registration failed:", err.message);
   });
+  // The learned interval is applied, but the first check still happens soon.
+  readBackoff().then(function () { ensureIdleAlarm(true, 1); });
   ensureIdleAlarm();
   // Warm the cache shortly after the browser starts, so the first panel open
   // is instant. This still honours the idle gate: an active user is not
@@ -325,6 +395,7 @@ if (chrome.idle) {
     else if (state === "active" && idleSyncTimer) { clearTimeout(idleSyncTimer); idleSyncTimer = 0; }
   });
 }
+readBackoff().then(function () { ensureIdleAlarm(true, 1); });
 ensureIdleAlarm();
 
 chrome.action.onClicked.addListener(async function (tab) {

@@ -294,7 +294,10 @@ test("an idle sync never runs while a mutation is in flight", async () => {
   const mutation = cache.mutate(async () => { await gate; });
   await new Promise(setImmediate); // let the mutation start
   const skipped = await cache.sync();
-  assert.deepEqual(skipped, { changed: false, skipped: true, tree: null, rootId: "" });
+  assert.equal(skipped.changed, false);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.tree, null);
+  assert.equal(skipped.rootId, "");
   release();
   await mutation;
 });
@@ -308,4 +311,58 @@ test("a mutation only invalidates the identity that was written", async () => {
   assert.equal(x.localData[Cache.LKEY][id], undefined, "the written identity is invalidated");
   assert.equal(x.data[Cache.KEY], undefined);
   assert.deepEqual(x.localData[Cache.FKEY], {}, "the freshness stamp is invalidated too");
+});
+
+test("the snapshot stores bodies by content hash with their signatures and index", async () => {
+  const x = setup();
+  x.library.load = async () => ({
+    tree: [{ id: "item", kind: "text", name: "Item", text: "contents", hash: "abc" }],
+    session: { rootId: "root" }, warnings: [],
+    bodies: { item: { modifiedTime: "v1", hash: "abc", driveHash: "def" } },
+    texts: { abc: "contents" },
+    metadata: { root: "m1" },
+    signatures: { item: "sig" },
+    index: { order: { root: ["item"] }, collapsed: {} },
+    cursors: { root: "cursor" },
+  });
+  const cache = x.make();
+  await cache.get(false);
+  const snapshot = x.data[Cache.KEY];
+  assert.equal(snapshot.bodies.item.hash, "abc", "a body is addressed by its content hash");
+  assert.equal(snapshot.texts.abc, "contents");
+  assert.equal(snapshot.signatures.item, "sig");
+  assert.deepEqual(snapshot.index, { order: { root: ["item"] }, collapsed: {} });
+  assert.equal(snapshot.cursors.root, "cursor");
+});
+
+test("the cache reports when the library was last checked", async () => {
+  const x = setup();
+  const cache = x.make();
+  const first = await cache.get(false);
+  assert.ok(first.lastCheckedAt > 0, "a load reports the moment of the check");
+  const second = await cache.get(false);
+  assert.equal(second.lastCheckedAt, first.lastCheckedAt, "a cached read keeps the confirmation time");
+  const third = await cache.get(true);
+  assert.ok(third.lastCheckedAt >= first.lastCheckedAt, "a fresh load moves the confirmation time");
+});
+
+test("a changed node signature refreshes the snapshot without disturbing the panel", async () => {
+  const x = setup();
+  let signature = "one";
+  x.library.load = async () => ({
+    tree: [{ id: "item", kind: "text", name: "Item", text: "contents", hash: "abc" }],
+    session: { rootId: "root" }, warnings: [],
+    bodies: { item: { modifiedTime: "v1", hash: "abc", driveHash: "def" } },
+    texts: { abc: "contents" },
+    metadata: { root: "m1" },
+    signatures: { item: signature },
+    index: { order: {}, collapsed: {} },
+  });
+  const cache = x.make();
+  await cache.get(false);
+  assert.equal((await cache.sync()).changed, false);
+  signature = "two";
+  const result = await cache.sync();
+  assert.equal(result.changed, false, "the visible tree did not change");
+  assert.equal(x.data[Cache.KEY].signatures.item, "two", "the new signature is stored");
 });

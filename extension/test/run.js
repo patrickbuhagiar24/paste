@@ -20,7 +20,7 @@ process.on("exit", function (code) {
 });
 
 (async function main() {
-  for (const file of ["store.test.js", "drive.test.js", "library.test.js", "library-partial.test.js", "library-integration.test.js", "cache.test.js", "config-import.test.js", "config-manifest.test.js", "config-source.test.js", "config-reader.test.js", "sidepanel.test.js", "content.test.js", "sites.test.js", "background.test.js"]) {
+  for (const file of ["store.test.js", "hash.test.js", "drive.test.js", "library.test.js", "library-partial.test.js", "library-integration.test.js", "cache.test.js", "config-import.test.js", "config-manifest.test.js", "config-source.test.js", "config-reader.test.js", "sidepanel.test.js", "content.test.js", "sites.test.js", "background.test.js"]) {
     require(path.join(__dirname, file));
   }
   let passed = 0;

@@ -77,6 +77,12 @@ header {
   white-space: nowrap;
 }
 
+#last-checked {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 #status {
   flex: 0 1 auto;
   min-width: 0;

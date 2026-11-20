@@ -1,3 +1,19 @@
+pastex (2.10.0-1) unstable; urgency=medium
+
+  * Cache snippet bodies by the SHA-256 of their content and keep a signature
+    per node, so a refresh only lists and downloads the branch that changed.
+  * Store the order and the collapse state of the library in one label on the
+    root folder instead of one write per item.
+  * Ask Drive only for the metadata the library uses, and retry a failed page
+    from the same listing cursor.
+  * Let the background check slow down while Drive keeps reporting the same
+    library, and speed up again as soon as a change is seen.
+  * Show when the library was last checked with Google Drive, and keep the
+    manual refresh button as the fallback.
+  * Move the new folder and new snippet buttons to the end of the toolbar.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:40:00 +0000
+
 pastex (2.9.0-1) unstable; urgency=medium
 
   * Synchronize with Google Drive in the background only while the user is

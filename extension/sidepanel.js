@@ -33,6 +33,7 @@
   var loadConfigVersion = 0;
   var selecting = false;
   var selectedItems = new Set();
+  var lastCheckedAt = 0;
 
   function $(id) {
     return document.getElementById(id);
@@ -52,6 +53,34 @@
 
   function setStatus(text) {
     $("status").textContent = text;
+  }
+
+  // The panel shows when the library was last confirmed with Drive, so the
+  // age of the list is visible even when nothing changed.
+  function relativeTime(timestamp) {
+    if (!timestamp) return "never";
+    var seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 45) return "just now";
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 60) return minutes + " min ago";
+    var hours = Math.round(minutes / 60);
+    if (hours < 24) return hours + " h ago";
+    return Math.round(hours / 24) + " d ago";
+  }
+
+  function renderLastChecked() {
+    var node = $("last-checked");
+    if (!node) return;
+    node.textContent = "Checked: " + relativeTime(lastCheckedAt);
+    node.title = lastCheckedAt
+      ? "Google Drive was last checked at " + new Date(lastCheckedAt).toLocaleTimeString()
+      : "The library has not been checked yet.";
+  }
+
+  function noteChecked(timestamp) {
+    if (!timestamp) return;
+    lastCheckedAt = timestamp;
+    renderLastChecked();
   }
 
   function esc(text) {
@@ -80,21 +109,11 @@
       .map(function (node) { return node.id; });
   }
 
-  function propertiesFor(ids) {
-    var known = {};
-    ids.forEach(function (id) {
-      var node = index.byId.get(id);
-      if (node && node.properties) known[id] = node.properties;
-    });
-    return known;
-  }
-
   async function persistCollapsed(ids, collapsed) {
     var before = settings.collapsed.slice();
     ids.forEach(function (id) { setCollapsed(id, collapsed); });
     render();
-    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed,
-      properties: propertiesFor(ids) });
+    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed });
     if (!result) { settings.collapsed = before; render(); }
   }
 
@@ -307,7 +326,7 @@
     progressPort.onMessage.addListener(function (message) {
       if (!message) return;
       // The background worker refreshed the cache while the user was away.
-      if (message.changed) { applyBackgroundChange(); return; }
+      if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
       onProgress(message.tree, message.rootId);
     });
   } catch (ignored) { /* Loading still works without live progress. */ }
@@ -333,6 +352,7 @@
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
       renderDriveBar();
+      noteChecked(result.lastCheckedAt);
     } catch (ignored) {
       // A failed background update keeps the current list; the next manual
       // refresh reloads it from Drive.
@@ -362,6 +382,7 @@
       if (selectedId && !index.byId.has(selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
+      noteChecked(result.lastCheckedAt);
       var warnings = result.warnings || [];
       if (!quiet) {
         setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
@@ -546,8 +567,12 @@
     if (busy || query) return;
     var groups = Store.reorderGroups(tree, selectedItems, direction);
     if (!groups.length) return;
-    await runMutation({ action: "reorder", groups: groups,
-      properties: propertiesFor(groups.reduce(function (all, group) { return all.concat(group); }, [])) });
+    // The worker stores the new order in the centralized index of the root
+    // folder, so every group is sent with the folder it belongs to.
+    var parents = groups.map(function (group) {
+      return parentOf(tree, group[0], rootId) || rootId;
+    });
+    await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
   // --- configuration: one JSON manifest with links ---
@@ -651,5 +676,8 @@
   });
   // Use the shared session cache on open; explicit refresh reloads Drive.
   renderDriveBar();
+  renderLastChecked();
+  // The age of the list is refreshed while the panel stays open.
+  if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
   refresh(false);
 })();

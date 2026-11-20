@@ -28,7 +28,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -222,6 +222,7 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   await settled();
   assert.deepEqual(elements.tree.children.map((row) => row.children.find((c) => c.className === "label").textContent.replace(/^[☑☐] /, "")), ["B", "C", "A", "D"]);
   assert.deepEqual(messages.find((m) => m.type === "pastex-panel-mutate" && m.command.action === "reorder").command.groups[0].join(","), "B,C,A,D");
+  assert.equal(messages.find((m) => m.type === "pastex-panel-mutate" && m.command.action === "reorder").command.parents[0], "root");
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
   elements["btn-delete-selected"].listeners.click();
   await settled(); await settled();
@@ -336,4 +337,48 @@ test("a background sync notification repaints the panel from the cache", async (
   assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 1 snippets/);
   assert.equal(elements.status.textContent, "", "a background refresh must not spam the status line");
   assert.equal(elements["btn-sync"].disabled, false, "a background refresh must not disable the toolbar");
+});
+
+test("the toolbar moves the create buttons to the end", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
+  const toolbar = html.split('<div class="toolbar"')[1].split("</div>")[0];
+  const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(order, ["btn-sync", "btn-collapse-all", "btn-text", "btn-config", "btn-folder", "btn-select"]);
+});
+
+test("the panel shows when the library was last checked", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
+  const checked = Date.now() - 120000;
+  const { elements } = panelHarness(false, {
+    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], lastCheckedAt: checked } },
+  });
+  await settled();
+  assert.match(elements["last-checked"].textContent, /Checked: 2 min ago/);
+  assert.match(elements["last-checked"].title, /last checked at/);
+});
+
+test("the panel says when the library was never checked", async () => {
+  const { elements } = panelHarness(false);
+  await settled();
+  assert.match(elements["last-checked"].textContent, /Checked: never/);
+});
+
+test("a background update reports the moment of the check", async () => {
+  const { elements, progress } = panelHarness(false, { libraryResult: { ok: false, error: "offline" } });
+  await settled();
+  elements["last-checked"].textContent = "";
+  progress({ changed: true, lastCheckedAt: Date.now() - 300000 });
+  await settled();
+  assert.match(elements["last-checked"].textContent, /Checked: 5 min ago/);
+});
+
+test("the manual refresh button is still the fallback for a stale library", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
+  const { elements, messages } = panelHarness(false, {
+    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], lastCheckedAt: Date.now() } },
+  });
+  await settled();
+  elements["btn-sync"].listeners.click();
+  await settled();
+  assert.ok(messages.some((message) => message.type === "pastex-panel-library" && message.force === true));
 });

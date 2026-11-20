@@ -6,8 +6,10 @@
  * keyed by a SHA-256 identity and silently refreshed when it is stale, while
  * mutations invalidate both copies before and after the write.
  *
- * Verified text bodies are keyed by Drive's modifiedTime and survive tree
- * invalidations, so an explicit refresh does not re-download unchanged files.
+ * Verified text bodies are addressed by the SHA-256 of their content and
+ * survive tree invalidations, so an explicit refresh does not re-download
+ * unchanged files. Every node also keeps the signature of the metadata Drive
+ * reported for it, so a refresh only rebuilds the branch that changed.
  *
  * The background (idle) sync loads Drive once and compares the result with the
  * stored snapshot. The snapshot is only rewritten when Drive really reports a
@@ -27,6 +29,10 @@
   function create(native, drive, library, storage, cryptoApi, persistent) {
     var memory = null;
     var bodies = {};
+    var texts = {};
+    var signatures = {};
+    var index = null;
+    var cursors = {};
     var identityCache = { config: null, value: "" };
     var revision = 0;
     var inflight = null;
@@ -102,14 +108,16 @@
 
     async function markFresh(key) {
       var store = localStore();
-      if (!store) return;
+      var stamp = Date.now();
+      if (!store) return stamp;
       try {
         var all = await freshAll();
-        all[key] = { savedAt: Date.now() };
+        all[key] = { savedAt: stamp };
         var keys = Object.keys(all).sort(function (a, b) { return (all[b].savedAt || 0) - (all[a].savedAt || 0); });
         keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
         await store.set({ [FKEY]: all });
       } catch (ignored) { /* the stamp is optional */ }
+      return stamp;
     }
 
     async function discardAll() {
@@ -117,6 +125,10 @@
       await clearLocal();
       await clearFresh();
       bodies = {};
+      texts = {};
+      signatures = {};
+      index = null;
+      cursors = {};
       identityCache = { config: null, value: "" };
     }
 
@@ -137,11 +149,16 @@
         try { memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
       }
       if (memory && memory.bodies) bodies = memory.bodies;
+      if (memory && memory.texts) texts = memory.texts;
+      if (memory && memory.signatures) signatures = memory.signatures;
+      if (memory && memory.index) index = memory.index;
+      if (memory && memory.cursors) cursors = memory.cursors;
       return memory;
     }
 
     function snapshot(key, rootId, tree, metadata) {
       return { identity: key, rootId: rootId, tree: tree, bodies: bodies,
+        texts: texts, signatures: signatures, index: index, cursors: cursors,
         metadata: metadata, savedAt: Date.now() };
     }
 
@@ -177,13 +194,21 @@
       }
     }
 
-    function mergeBodies(next) {
-      Object.keys(next || {}).forEach(function (id) { bodies[id] = next[id]; });
+    // The bodies, the node signatures and the centralized index of a load
+    // replace the stored ones. A body is addressed by the SHA-256 of its
+    // content, so the same text is stored once.
+    function mergeResult(result) {
+      Object.keys((result && result.bodies) || {}).forEach(function (id) { bodies[id] = result.bodies[id]; });
+      Object.keys((result && result.texts) || {}).forEach(function (hash) { texts[hash] = result.texts[hash]; });
+      if (result && result.signatures) signatures = Object.assign({}, signatures, result.signatures);
+      if (result && result.index) index = result.index;
+      if (result && result.cursors) cursors = result.cursors;
     }
 
     // A signature of the fields the user actually sees. Drive returns a few
     // volatile system properties, so comparing raw metadata would report a
-    // change on every single check.
+    // change on every single check. A body is addressed by its content
+    // hash, so a long snippet does not have to be read again to compare it.
     function nodeSignature(node) {
       if (!node || typeof node !== "object") return String(node);
       var props = node.properties || {};
@@ -193,7 +218,7 @@
           (node.children || []).map(nodeSignature)]);
       }
       return JSON.stringify([node.id, node.kind, node.name || "", node.driveName || "",
-        node.modifiedTime || "", node.text || "", !!node.deferred, props.pastex_order || ""]);
+        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred, props.pastex_order || ""]);
     }
 
     function treeSignature(tree) {
@@ -205,13 +230,35 @@
       return JSON.stringify(keys.map(function (key) { return key + ":" + metadata[key]; }));
     }
 
-    // Two snapshots describe the same library when their tree and their
-    // folder metadata are identical. Bodies are re-verified by modifiedTime
-    // during the load, so they are not part of the comparison.
-    function sameLibrary(previous, tree, metadata) {
+    // The signature map of the nodes: one line per item, so a large library
+    // is compared without touching the bodies again.
+    function signaturesSignature(signatures) {
+      var keys = Object.keys(signatures || {}).sort();
+      return JSON.stringify(keys.map(function (key) { return key + ":" + signatures[key]; }));
+    }
+
+    function indexSignature(index) {
+      if (!index) return "";
+      var order = index.order || {}, collapsed = index.collapsed || {};
+      var parents = Object.keys(order).sort();
+      var folders = Object.keys(collapsed).sort();
+      return JSON.stringify({
+        order: parents.map(function (parent) { return parent + ":" + (order[parent] || []).join(","); }),
+        collapsed: folders.map(function (folder) { return folder + ":" + collapsed[folder]; }),
+      });
+    }
+
+    // Two snapshots describe the same library when their tree, their folder
+    // metadata, their node signatures and their centralized index are
+    // identical. Bodies are re-verified by content hash during the load, so
+    // they are not part of the comparison.
+    function sameLibrary(previous, tree, metadata, signatures, index) {
       if (!previous) return false;
-      return treeSignature(previous.tree) === treeSignature(tree) &&
-        metadataSignature(previous.metadata) === metadataSignature(metadata);
+      if (treeSignature(previous.tree) !== treeSignature(tree)) return false;
+      if (metadataSignature(previous.metadata) !== metadataSignature(metadata)) return false;
+      if (signatures !== undefined && signaturesSignature(previous.signatures) !== signaturesSignature(signatures)) return false;
+      if (index !== undefined && indexSignature(previous.index) !== indexSignature(index)) return false;
+      return true;
     }
 
     function sameTree(previous, tree) {
@@ -248,18 +295,22 @@
       var stamp = await freshStamp(key, saved);
       if (!force && saved) {
         scheduleStaleRefresh(stamp, onUpdate);
-        return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true };
+        return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true, lastCheckedAt: stamp };
       }
       var local = (await localAll())[key];
       if (local && local.identity !== key) { await clearLocal(key); local = null; }
       if (local && (!memory || !memory.tree)) {
         memory = local;
         bodies = local.bodies || {};
+        texts = local.texts || {};
+        signatures = local.signatures || {};
+        index = local.index || null;
       }
       if (!force && local) {
         try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) {}
-        scheduleStaleRefresh(await freshStamp(key, local), onUpdate);
-        return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true };
+        var localStamp = await freshStamp(key, local);
+        scheduleStaleRefresh(localStamp, onUpdate);
+        return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true, lastCheckedAt: localStamp };
       }
       if (inflight) {
         if (!force && inflight.identity === key) return inflight.promise;
@@ -269,33 +320,36 @@
       var started = revision;
       var flight = { identity: key };
       flight.promise = (async function () {
+        var previous = memory && memory.identity === key ? memory : null;
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
-        }, { bodies: bodies, deferCollapsed: true,
+        }, { bodies: bodies, texts: texts, deferCollapsed: true, index: index,
+          signatures: signatures,
           metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
-        mergeBodies(result.bodies);
+        mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [], cached: false };
         // Never replace a complete snapshot with a partial/error listing.
         // Explicit revocation of an item also invalidates the older snapshot.
         if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
         if (!response.warnings.length) {
-          var previous = memory && memory.identity === key ? memory : null;
           var treeSame = sameTree(previous, response.tree);
-          if (options.onlyIfChanged && sameLibrary(previous, response.tree, result.metadata)) {
+          if (options.onlyIfChanged && sameLibrary(previous, response.tree, result.metadata, result.signatures, result.index)) {
             // Nothing changed on Drive: keep the stored snapshot and only move
             // the freshness stamp.
-            await markFresh(key);
+            response.lastCheckedAt = await markFresh(key);
             response.unchanged = true;
           } else {
             // The tree may be identical while a folder timestamp moved; the
             // snapshot is still refreshed, but the user is not interrupted.
             await writeSnapshot(key, response.rootId, response.tree, result.metadata);
-            await markFresh(key);
+            response.lastCheckedAt = await markFresh(key);
             response.unchanged = treeSame;
           }
           if (started !== revision) { await clearSnapshot(); throw new Error("Drive library changed while loading; refresh again."); }
         }
+        // The panel shows when the library was last confirmed with Drive.
+        response.lastCheckedAt = response.lastCheckedAt || Date.now();
         return response;
       })();
       inflight = flight;
@@ -311,11 +365,12 @@
     // Called by the background idle alarm. It never reports progress to the
     // panel and it only rewrites the cache when Drive reports a difference.
     async function sync() {
-      if (inflight || silentTimer || mutating > 0) return { changed: false, skipped: true, tree: null, rootId: "" };
+      if (inflight || silentTimer || mutating > 0) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
       var response = await get(true, null, { onlyIfChanged: true });
-      if ((response.warnings || []).length) return { changed: false, skipped: true, tree: null, rootId: "" };
+      if ((response.warnings || []).length) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
       return { changed: response.unchanged === false, skipped: false,
-        tree: response.tree, rootId: response.rootId };
+        tree: response.tree, rootId: response.rootId,
+        lastCheckedAt: response.lastCheckedAt || Date.now() };
     }
 
     function mutate(fn) {
