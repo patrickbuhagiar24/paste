@@ -102,12 +102,21 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. On an allowed site, focus an editable field and click the floating
+snippets. **Collapse all** folds every folder and clears the search first. The
+Drive bar shows `Google Drive • session cache · N snippets` when the list came
+from the session cache.
+
+On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it; its row has **Rename**, **Edit**, and **Delete** actions. If no editable field is focused on an allowed page, it is copied
-to the clipboard. Restricted browser pages cannot receive scripts. Sites not
-listed in `pastex-sites.json` are not injected or targeted.
+to insert it; its row has **Rename**, **Edit**, and **Delete** actions. The
+complete snippet text is inserted verbatim, including newlines and trailing
+spaces, into textareas and editable fields; a single-line input cannot display
+line breaks. The allowlist is cached for 30 seconds so a click does not have to
+re-download the linked configuration; reselecting the manifest refreshes it
+immediately. If no editable field is focused on an allowed page, the text is
+copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
+not listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 

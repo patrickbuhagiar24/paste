@@ -188,3 +188,18 @@ test("worker handles create, rename, order and bulk trash with Drive, denying ch
   assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
   assert.deepEqual(writes, [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"], ["order", "n", 0], ["order", "f", 1], ["trash", "n"], ["trash", "f"]]);
 });
+
+test("repeated paste requests reuse the cached site allowlist", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-fast-paste-"));
+  try {
+    const browser = harness(home, false);
+    fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
+    fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    browser.listeners.startup();
+    await new Promise(setImmediate);
+    const readsAfterStartup = browser.launches;
+    await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
+    await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
+    assert.equal(browser.launches, readsAfterStartup, "paste must not re-read linked configuration");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

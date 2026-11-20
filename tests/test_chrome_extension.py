@@ -390,3 +390,16 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
     assert "indexedDB" in (EXT / "handle-store.js").read_text()
     assert "nativeMessaging" not in _manifest()["permissions"]
+
+
+def test_sidepanel_has_collapse_all_and_verbatim_insert():
+    html = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+    content = (EXT / "content.js").read_text(encoding="utf-8")
+    assert 'id="btn-collapse-all"' in html
+    assert "btn-collapse-all" in script
+    assert "Google Drive • session cache · " in script
+    assert "Session cache: " not in script
+    # Textarea/input insertion must use setRangeText, which keeps newlines.
+    assert "target.setRangeText(text, start, end, \"end\")" in content
+    assert 'typeof node.text === "string" ? node.text : ""' in script

@@ -51,15 +51,9 @@
       return false;
     }
     target.focus({ preventScroll: true });
-    // execCommand first: it preserves undo and notifies frameworks (React).
-    try {
-      if (document.execCommand("insertText", false, text)) {
-        return true;
-      }
-    } catch (ignored) {
-      /* fall through to the manual path */
-    }
     var tag = (target.tagName || "").toLowerCase();
+    // Inputs and textareas must keep the snippet byte-for-byte, including
+    // newlines and trailing spaces. execCommand can normalise or drop them.
     if (tag === "input" || tag === "textarea") {
       try {
         var start = target.selectionStart === null ? target.value.length : target.selectionStart;
@@ -70,6 +64,14 @@
       } catch (ignored) {
         return false;
       }
+    }
+    // Contenteditable: execCommand preserves undo and notifies frameworks.
+    try {
+      if (document.execCommand("insertText", false, text)) {
+        return true;
+      }
+    } catch (ignored) {
+      /* fall through to the manual path */
     }
     if (target.isContentEditable) {
       try {

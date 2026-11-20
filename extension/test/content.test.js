@@ -16,10 +16,17 @@ function setupContent(options = {}) {
       this.tagName = tag.toUpperCase(); this.children = []; this.listeners = {};
       this.style = {}; this.classList = { add() {} }; this.value = ""; this.type = "";
       this.parent = null; this.isContentEditable = false;
+      this.selectionStart = 0; this.selectionEnd = 0;
     }
     appendChild(el) { if (el.parent) el.remove(); el.parent = this; this.children.push(el); return el; }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter((x) => x !== this); this.parent = null; }
     setAttribute(name, value) { this[name] = value; }
+    dispatchEvent() { return true; }
+    setRangeText(text, start, end) {
+      inserted = text;
+      this.value = this.value.slice(0, start) + text + this.value.slice(end);
+      this.selectionStart = this.selectionEnd = start + text.length;
+    }
     getAttribute(name) { return this[name]; }
     addEventListener(name, fn) { this.listeners[name] = fn; }
     attachShadow() { const root = new Element("shadow"); root.host = this; root.parent = this; return root; }
@@ -57,7 +64,7 @@ function setupContent(options = {}) {
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
-  const context = vm.createContext({ window, document, chrome: { runtime }, console });
+  const context = vm.createContext({ window, document, chrome: { runtime }, console, Event: class Event { constructor(type) { this.type = type; } } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../content.js"), "utf8"), context);
   const target = root.appendChild(new Element("textarea"));
   function runTimers(ms) {
@@ -107,4 +114,15 @@ test("another extension cannot ask a page to insert text", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, "unauthorized");
   assert.equal(page.inserted, "");
+});
+
+test("multiline snippets are inserted into a textarea verbatim", async () => {
+  const page = setupContent();
+  page.target.focus(); await tick();
+  const text = "baris pertama\n\nbaris kedua  \r\nbaris ketiga";
+  let result;
+  page.events.message({ type: "pastex-insert", text }, { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  assert.equal(page.inserted, text);
+  assert.equal(page.target.value, text);
 });

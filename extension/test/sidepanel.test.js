@@ -20,7 +20,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "choose-manifest", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-status", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "config-overlay", "config-status", "config-close", "choose-manifest", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
@@ -66,6 +66,7 @@ function panelHarness(fail, options = {}) {
     sendMessage: async (message) => {
       messages.push(message);
       if (message.type === "pastex-panel-library") {
+        if (options.libraryResult) return options.libraryResult;
         if (!message.force && cache) return { ok: true, result: { ...cache, cached: true } };
         try {
           const result = await Library.load(native, drive, (tree, session) => progress({ tree, rootId: session.rootId }));
@@ -270,4 +271,27 @@ test("canceling the manifest picker leaves configuration unchanged", async () =>
   await settled();
   assert.equal(imports.length, 0);
   assert.match(elements["config-status"].textContent, /unchanged/);
+});
+
+test("collapse all folds every folder and clears an active search", async () => {
+  const { elements } = panelHarness(false);
+  await settled();
+  assert.equal(elements["btn-collapse-all"].disabled, false);
+  elements.search.value = "Synced";
+  elements.search.listeners.input({ target: elements.search });
+  await new Promise((resolve) => setTimeout(resolve, 170));
+  elements["btn-collapse-all"].listeners.click();
+  assert.equal(elements.search.value, "");
+  assert.match(elements.status.textContent, /All folders collapsed/);
+  const folderRow = elements.tree.children.find((row) => allText(row).includes("Empty Folder"));
+  assert.equal(folderRow.children[0].textContent, "▸");
+});
+
+test("session cache count is shown in the drive bar, not the footer", async () => {
+  const tree = [{ id: "a", kind: "text", name: "A", text: "A" }, { id: "b", kind: "text", name: "B", text: "B" }];
+  const { elements } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
+  await settled();
+  assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
+  assert.doesNotMatch(elements.status.textContent, /Session cache:/);
+  assert.match(elements.status.textContent, /loaded from session cache/);
 });

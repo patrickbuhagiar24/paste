@@ -51,22 +51,34 @@ var CONTENT_SCRIPT_ID = "pastex-allowed-sites";
 // the live allowlist; a stale capability can never authorize insertion.
 var panelGrants = new Map();
 var siteRevision = 0;
+var cachedPatterns = null;
+var cachedPatternsAt = 0;
+var PATTERN_TTL_MS = 30000;
 function grantKey(sender) { return sender.tab.id + ":" + (sender.frameId || 0); }
 function invalidateGrants() { panelGrants.clear(); siteRevision++; }
+function invalidatePatterns() { cachedPatterns = null; cachedPatternsAt = 0; }
 
-async function allowedSitePatterns() {
+// Paste and launcher authorization reuse a short-lived in-memory copy of the
+// allowlist. Re-reading the linked JSON on every click was the main insert
+// delay; configureSites() and config reloads force a refresh immediately.
+async function allowedSitePatterns(force) {
+  if (!force && cachedPatterns && Date.now() - cachedPatternsAt < PATTERN_TTL_MS) return cachedPatterns;
   var data = await PastexConfig.readSites();
-  return PastexSites.parse(data.allowedSites);
+  var patterns = PastexSites.parse(data.allowedSites);
+  cachedPatterns = patterns;
+  cachedPatternsAt = Date.now();
+  return patterns;
 }
 
 // Register only user-approved origins. Empty or invalid configuration and
 // folder-access errors are fail-closed: no scripts are registered.
 async function configureSites() {
   invalidateGrants();
+  invalidatePatterns();
   var patterns = [];
   var configError = null;
   try {
-    patterns = await allowedSitePatterns();
+    patterns = await allowedSitePatterns(true);
   } catch (err) {
     console.warn("Pastex site configuration unavailable:", err.message);
     configError = err;
@@ -90,19 +102,19 @@ function activeTab() {
 
 // Send a message to the tab's content script, injecting it first when the
 // tab predates the installation (chrome:// pages cannot be injected).
-async function messageTab(tabId, message) {
-  var tab = await chrome.tabs.get(tabId);
+async function messageTab(tabOrId, message) {
+  var tab = typeof tabOrId === "object" && tabOrId !== null ? tabOrId : await chrome.tabs.get(tabOrId);
   var patterns;
   try { patterns = await allowedSitePatterns(); } catch (err) { patterns = []; }
   if (!tab || !PastexSites.allows(patterns, tab.url)) {
     throw new Error("site-not-allowed");
   }
   try {
-    return await chrome.tabs.sendMessage(tabId, message);
+    return await chrome.tabs.sendMessage(tab.id, message);
   } catch (firstErr) {
-    await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ["content.js"] });
-    await chrome.scripting.insertCSS({ target: { tabId: tabId }, files: ["content.css"] });
-    return chrome.tabs.sendMessage(tabId, message);
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
+    return chrome.tabs.sendMessage(tab.id, message);
   }
 }
 
@@ -112,7 +124,7 @@ async function insertIntoActiveTab(id, text) {
     return { ok: false };
   }
   try {
-    var response = await messageTab(tab.id, { type: "pastex-insert", id: id, text: text });
+    var response = await messageTab(tab, { type: "pastex-insert", id: id, text: text });
     return response || { ok: false };
   } catch (err) {
     return { ok: false, reason: String((err && err.message) || err) };
@@ -234,7 +246,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return false;
   }
   if (!trustedPanel(sender)) { sendResponse({ ok: false, reason: "unauthorized" }); return false; }
-  insertIntoActiveTab(message.id, message.text || "").then(function (response) {
+  insertIntoActiveTab(message.id, typeof message.text === "string" ? message.text : "").then(function (response) {
     sendResponse(response || { ok: false });
   });
   return true;

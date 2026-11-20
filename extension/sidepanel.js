@@ -238,8 +238,13 @@
   }
 
   function renderDriveBar() {
-    $("drive-status").textContent = busy ? "Drive: loading…" : (ready ? (fromCache ? "Google Drive • session cache" : "Google Drive connected") : "Google Drive unavailable");
+    var folders = 0;
+    Store.walk(tree, function (node) { if (node.kind === "folder") folders++; });
+    var label = busy ? "Drive: loading…" :
+      (ready ? (fromCache ? "Google Drive • session cache · " + Store.flatten(tree).length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
+    $("drive-status").textContent = label;
     $("btn-sync").disabled = busy;
+    $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
     $("btn-empty-text").disabled = busy || !ready;
@@ -285,7 +290,7 @@
       render();
       var warnings = result.warnings || [];
       setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        (fromCache ? "Session cache: " : "Google Drive loaded: ") + Store.flatten(tree).length + " snippets.");
+        (fromCache ? "Snippets loaded from session cache." : "Google Drive loaded: " + Store.flatten(tree).length + " snippets."));
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
@@ -317,7 +322,7 @@
       response = await chrome.runtime.sendMessage({
         type: "pastex-sidepanel-insert",
         id: node.id,
-        text: node.text || "",
+        text: typeof node.text === "string" ? node.text : "",
       });
     } catch (err) {
       response = { ok: false };
@@ -542,6 +547,16 @@
   });
 
   $("btn-sync").addEventListener("click", function () { refresh(true); });
+  $("btn-collapse-all").addEventListener("click", function () {
+    if (busy || !ready) return;
+    settings.collapsed = [];
+    Store.walk(tree, function (node) {
+      if (node.kind === "folder" && settings.collapsed.indexOf(node.id) === -1) settings.collapsed.push(node.id);
+    });
+    if (query) { query = ""; $("search").value = ""; }
+    render();
+    setStatus("All folders collapsed.");
+  });
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;
     selectedItems.clear();
