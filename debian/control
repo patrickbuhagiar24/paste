@@ -9,7 +9,7 @@ Rules-Requires-Root: no
 
 Package: pastex
 Architecture: all
-Depends: ${misc:Depends}, python3
+Depends: ${misc:Depends}
 Conflicts: paste-teks
 Replaces: paste-teks
 Recommends: google-chrome-stable | chromium

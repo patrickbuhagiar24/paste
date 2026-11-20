@@ -3,6 +3,7 @@ name: Build .deb & APT repo
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -21,10 +22,33 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Tag builds create a GitHub Release; permissions are pinned per job.
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Check version alignment
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
+          changelog=$(awk '/^pastex \(/ { print $2; exit }' debian/changelog)
+          [[ "$changelog" == "$version-1" ]] || {
+            echo "::error::manifest version $version does not match changelog $changelog"
+            exit 1
+          }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/v}"
+            [[ "$tag" == "$version" ]] || {
+              echo "::error::tag $tag does not match manifest version $version"
+              exit 1
+            }
+          fi
+          echo "Pastex version: $version"
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg gpgv python3-pytest
@@ -45,7 +69,7 @@ jobs:
 
       - name: Upload the pytest log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pytest-log
           path: pytest.log
@@ -60,8 +84,8 @@ jobs:
             printf '%s' "$CRX_SIGNING_SECRET" > "$RUNNER_TEMP/pastex-crx-key.pem"
             chmod 600 "$RUNNER_TEMP/pastex-crx-key.pem"
             export PASTEX_CRX_KEY="$RUNNER_TEMP/pastex-crx-key.pem"
-          elif [ "$GITHUB_REF" = refs/heads/main ]; then
-            echo "::error::PASTEX_CRX_PRIVATE_KEY is required for deployment; refusing an ephemeral extension ID."
+          elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::PASTEX_CRX_PRIVATE_KEY is required for a release; refusing an ephemeral extension ID."
             exit 1
           else
             echo "::warning::PASTEX_CRX_PRIVATE_KEY is not configured; using an ephemeral id for this test build."
@@ -70,7 +94,9 @@ jobs:
 
       - name: Build the APT archive (pool + dists + Release)
         env:
-          PASSTEX_SIGNED: ${{ secrets.GPG_PRIVATE_KEY != '' && '1' || '0' }}
+          # The public Pages archive is always signed; unsigned builds exist
+          # only for local testing via scripts/setup-apt-repo.sh.
+          PASSTEX_SIGNED: '1'
         run: ./scripts/build-apt-repository.sh dist site "$APT_SUITE"
 
       - name: Sign and verify the archive
@@ -81,10 +107,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
-            echo "::warning::GPG_PRIVATE_KEY is not configured; publishing an unsigned APT archive."
-            echo "Users must install pastex-unsigned.sources (Trusted: yes) until the secret is added."
-            rm -f site/pastex.sources
-            exit 0
+            echo "::error::GPG_PRIVATE_KEY is required; refusing to publish an unsigned APT archive."
+            exit 1
           fi
           install -d -m 0700 "$GNUPGHOME"
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
@@ -109,6 +133,16 @@ jobs:
           fi
           cat "$signing_log"
 
+      - name: Publish verification artifacts
+        run: |
+          set -euo pipefail
+          cp dist/pastex-id.txt site/extension-id.txt
+          {
+            (cd dist && sha256sum ./*.deb)
+            (cd build/deb/usr/share/pastex && sha256sum pastex.crx)
+          } >site/checksums.txt
+          chmod 0644 site/extension-id.txt site/checksums.txt
+
       - name: Remove the temporary GPG keyring
         if: always()
         env:
@@ -120,24 +154,53 @@ jobs:
           fi
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
           include-hidden-files: true
 
       - name: Upload the Debian package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pastex-deb
-          path: dist/*.deb
+          path: |
+            dist/*.deb
+            dist/pastex-id.txt
+            build/deb/usr/share/pastex/pastex.crx
+          if-no-files-found: error
+
+      - name: Create a GitHub Release with verification data
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/tags/v}"
+          fingerprint=$(cat site/archive-keyring.fingerprint.txt)
+          extension_id=$(cat site/extension-id.txt)
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            printf 'Pastex %s\n\n' "$version"
+            printf 'Verify the APT signing fingerprint through an independent maintainer channel before installing: `%s`\n\n' "$fingerprint"
+            printf 'Chrome extension ID: `%s`\n\n' "$extension_id"
+            printf 'SHA-256 checksums:\n\n```text\n'
+            cat site/checksums.txt
+            printf '```\n\n'
+            printf 'Install from the signed APT repository as described in the project README.\n'
+          } >"$notes"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Pastex $version" \
+            --notes-file "$notes" \
+            dist/*.deb build/deb/usr/share/pastex/pastex.crx \
+            site/archive-keyring.asc site/archive-keyring.gpg \
+            site/archive-keyring.fingerprint.txt site/checksums.txt site/extension-id.txt
 
   deploy:
     needs: build
-    # The github-pages environment only accepts deployments from main, so a
-    # workflow_dispatch on a branch builds and stops there instead of failing.
+    # The github-pages environment only accepts deployments from main, so tag
+    # releases publish a GitHub Release while main keeps publishing the archive.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
@@ -146,4 +209,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

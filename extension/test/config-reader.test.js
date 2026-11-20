@@ -8,7 +8,7 @@ test("offscreen config reader rejects pages and responds only to the extension w
   let listener, reads = 0;
   const chrome = { runtime: { id: "abc", getURL: (p) => "chrome-extension://abc/" + p,
     onMessage: { addListener: (fn) => { listener = fn; } } } };
-  const context = vm.createContext({ chrome, PastexHandleStore: {}, PastexConfigImport: {}, PastexSites: {},
+  const context = vm.createContext({ chrome, PastexHandleStore: {}, PastexConfigImport: {}, PastexSites: {}, PastexManifest: {},
     PastexConfigSource: { create: () => ({ readConfig: async () => { reads++; return { secret: "example" }; },
       readSites: async () => { reads++; return { allowedSites: [] }; } }) } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../config-reader.js"), "utf8"), context);

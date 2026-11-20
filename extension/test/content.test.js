@@ -47,6 +47,7 @@ function setupContent(options = {}) {
   };
   const messages = [];
   const runtime = {
+    id: "pastex-extension-id",
     sendMessage: async (message) => { messages.push(message); return message.type === "pastex-site-allowed" ?
       (options.allowed ? options.allowed() : { allowed: true, capability: "token" }) : { ok: true }; },
     onMessage: { addListener(fn) { events.message = fn; } },
@@ -93,7 +94,17 @@ test("side panel insertion uses the previously focused field", async () => {
   const page = setupContent();
   page.target.focus(); await tick();
   let result;
-  page.events.message({ type: "pastex-insert", text: "Drive content" }, {}, (response) => { result = response; });
+  page.events.message({ type: "pastex-insert", text: "Drive content" }, { id: "pastex-extension-id" }, (response) => { result = response; });
   assert.equal(result.ok, true);
   assert.equal(page.inserted, "Drive content");
+});
+
+test("another extension cannot ask a page to insert text", async () => {
+  const page = setupContent();
+  page.target.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "evil" }, { id: "another-extension" }, (response) => { result = response; });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "unauthorized");
+  assert.equal(page.inserted, "");
 });

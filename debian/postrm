@@ -1,22 +1,15 @@
 #!/bin/sh
-# Pastex post-removal: clean up system configuration when the package is removed.
+# Pastex post-removal: clean up only the marker owned by this package.
+# No groups, accounts, services or browser profiles are touched.
 set -eu
 
-GROUP="pastex"
+NOTE_DIR="/var/lib/pastex"
+NOTE_MARKER="$NOTE_DIR/install-note-shown"
 
 case "${1:-}" in
-    purge|remove)
-        if getent group "$GROUP" >/dev/null 2>&1; then
-            # Remove the group only when it has no remaining members.
-            # Existing members may still be logged in or using the group.
-            MEMBERS="$(getent group "$GROUP" | cut -d: -f4)"
-            if [ -z "$MEMBERS" ]; then
-                groupdel "$GROUP" >/dev/null 2>&1 || true
-            else
-                echo "pastex: group '$GROUP' was kept (members: $MEMBERS)."
-                echo "pastex: remove it manually with: sudo groupdel $GROUP"
-            fi
-        fi
+    purge)
+        rm -f "$NOTE_MARKER"
+        rmdir "$NOTE_DIR" 2>/dev/null || true
         ;;
 esac
 

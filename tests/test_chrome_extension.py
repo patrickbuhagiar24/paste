@@ -119,7 +119,9 @@ def test_no_remote_code_or_eval_in_extension_sources():
 
 
 def test_https_is_only_used_for_google_apis():
-    allowed = {"www.googleapis.com", "oauth2.googleapis.com"}
+    # Drive links are configuration inputs; the links themselves are validated
+    # to this host in config-manifest.js before any request is made.
+    allowed = {"www.googleapis.com", "oauth2.googleapis.com", "drive.google.com"}
     for path in sorted(EXT.glob("*.js")):
         for host in re.findall(r"https://([^/'\"\s]+)", path.read_text(encoding="utf-8")):
             assert host in allowed, f"{path.name} talks to {host}"
@@ -342,10 +344,11 @@ def test_extension_readme_documents_setup_and_signing():
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
-        "~/.config/pastex",
+        "IndexedDB",
         "pastex-google-drive.json",
         "service-account.json",
-        "Choose folder",
+        "Choose manifest (.json)",
+        "only the three download URLs",
     ):
         assert required in readme, f"README misses {required!r}"
 
@@ -368,17 +371,22 @@ def test_release_requires_new_crx_secret():
     workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
     assert "secrets.PASTEX_CRX_PRIVATE_KEY" in workflow
     assert "secrets.PASTEX_CRX_KEY" not in workflow
-    assert 'elif [ "$GITHUB_REF" = refs/heads/main ]' in workflow
+    assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]' in workflow
 
 
-def test_configuration_uses_only_a_user_selected_directory():
+def test_configuration_comes_only_from_a_user_selected_manifest():
     for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/rules", ROOT / "debian/postinst"]:
         text = path.read_text(encoding="utf-8")
         assert "~/.config/pastex" not in text
         assert "pastex-native-host" not in text
     html = (EXT / "sidepanel.html").read_text()
-    assert 'id="choose-folder"' in html
+    assert 'id="choose-manifest"' in html
+    assert 'id="choose-folder"' not in html
+    assert "showOpenFilePicker" in (EXT / "sidepanel.js").read_text()
+    assert "showDirectoryPicker" not in (EXT / "sidepanel.js").read_text()
+    assert "config-manifest.js" in html
+    assert "config-manifest.js" in (EXT / "config-reader.html").read_text()
+    assert "PastexManifest" in (EXT / "config-reader.js").read_text()
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
-    assert "showDirectoryPicker" in (EXT / "sidepanel.js").read_text()
     assert "indexedDB" in (EXT / "handle-store.js").read_text()
     assert "nativeMessaging" not in _manifest()["permissions"]

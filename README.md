@@ -5,10 +5,11 @@ snippets on explicitly allowed sites. Snippets are read and saved directly
 in Google Drive; an internet connection and Drive access are required. A temporary
 browser-session cache makes repeat openings faster; refresh to pick up external changes.
 
-Choose a configuration folder in **Config** containing `pastex-sites.json`,
-`pastex-google-drive.json` and your service-account JSON. Pastex reads these
-files directly; browser permission may need to be granted again after restart.
-See [the extension README](extension/README.md) for setup and security details.
+In **Config**, choose one JSON manifest containing download links for
+`pastex-sites.json`, `pastex-google-drive.json` and your service-account JSON.
+Pastex fetches those links on demand and stores only the URLs; there is no
+folder picker. See [the extension README](extension/README.md) for the manifest
+format and the security trade-off of a linked service-account key.
 
 ## Install on Linux Mint through APT only
 
@@ -20,9 +21,9 @@ https://patrickbuhagiar24.github.io/paste/
 
 Linux Mint uses the repository suite **`mint`**. The suite is a fixed label for this archive (it is not a Mint codename), so one architecture-independent package serves Cinnamon, MATE and Xfce and every Mint release.
 
-**Availability:** these commands work after the maintainer completes [APT repository publishing](apt-repo/README.md), including enabling GitHub Pages under **Settings → Pages → Build and deployment → Source: GitHub Actions**. Once configured, pushes to `main` build and publish the signed repository automatically; the workflow can also be started manually. Adding packaging files to the source tree does not itself configure Pages or create a signing key.
+**Availability:** the archive is published automatically to GitHub Pages on pushes to `main` and by manual workflow dispatch; see [APT repository publishing](apt-repo/README.md). The workflow refuses to deploy when the signing secret is missing, so the public archive is always signed.
 
-Obtain the **full 40-character signing-key fingerprint** from a trusted maintainer channel independent of the repository website. Do not use the fingerprint downloaded from the same website as your only verification. The commands below require Bash, `curl`, and `gpg` (provided by `gnupg`). They download the key into a private temporary directory and ask for the trusted fingerprint before changing system files. If it is unavailable or does not match, stop and contact the maintainer.
+Obtain the **full 40-character signing-key fingerprint** from a trusted maintainer channel independent of the repository website. Do not use the fingerprint downloaded from the same website as your only verification. The commands below require Bash, `curl`, and `gpg` (provided by `gnupg`). They download the key and the deb822 source file into a private temporary directory, ask for the trusted fingerprint before changing system files, and install the **published** `pastex.sources` verbatim so its URL and suite cannot drift from the signed archive. If verification fails, stop and contact the maintainer.
 
 ```bash
 (
@@ -41,14 +42,9 @@ Obtain the **full 40-character signing-key fingerprint** from a trusted maintain
   read -r -p 'Enter the independently verified fingerprint: ' expected
   expected=${expected//[[:space:]]/}
   [[ "${expected^^}" == "$fingerprint" ]] || { echo 'Fingerprint mismatch; nothing installed.' >&2; exit 1; }
-  cat > "$tmpdir/pastex.sources" <<'EOF'
-Types: deb
-URIs: https://patrickbuhagiar24.github.io/paste/
-Suites: mint
-Components: main
-Architectures: all
-Signed-By: /etc/apt/keyrings/pastex.gpg
-EOF
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    -o "$tmpdir/pastex.sources" \
+    https://patrickbuhagiar24.github.io/paste/pastex.sources
   sudo install -d -m 0755 /etc/apt/keyrings
   sudo install -m 0644 "$tmpdir/archive-keyring.gpg" /etc/apt/keyrings/pastex.gpg
   sudo install -m 0644 "$tmpdir/pastex.sources" /etc/apt/sources.list.d/pastex.sources
@@ -57,9 +53,18 @@ EOF
 )
 ```
 
-The local source explicitly scopes the verified key to this repository. No unsigned fallback, `Trusted: yes`, or `apt-key` is used. If a command fails, the subshell stops and removes its temporary directory. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it). APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`.
+The published source explicitly scopes the verified key to this repository. No unsigned fallback, `Trusted: yes`, or `apt-key` is used. If a command fails, the subshell stops and removes its temporary directory. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it). APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`.
 
 That is the whole installation. `apt update` reports `Hit:… https://patrickbuhagiar24.github.io/paste mint InRelease`, which proves the metadata is signed and verified.
+
+## Releases and verification
+
+Pushes to `main` publish the signed APT archive. Pushing a `vX.Y.Z` tag after
+that merge also creates a GitHub Release with the `.deb`, the signed CRX,
+`checksums.txt`, `extension-id.txt`, and the public keyring. The tag must match
+the version in `extension/manifest.json` and `debian/changelog`. The release
+notes repeat the signing fingerprint so it can be cross-checked independently
+of the repository website; see [SECURITY.md](SECURITY.md).
 
 ## Development and packaging
 
@@ -69,5 +74,7 @@ python3 -m pytest tests/ -q
 ./scripts/build-deb.sh
 ```
 
-Release builds must use a stable `PASTEX_CRX_PRIVATE_KEY` CI secret; see the extension README.
-The legacy desktop application has been removed; it remains in Git history.
+`scripts/install.sh` is a development shortcut for a locally built `.deb`; end
+users should install from the signed repository. Release builds must use a
+stable `PASTEX_CRX_PRIVATE_KEY` CI secret; see the extension README. The legacy
+desktop application has been removed; it remains in Git history.

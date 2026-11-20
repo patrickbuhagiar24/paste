@@ -9,7 +9,10 @@
   "use strict";
 
   var Store = window.PastexStore;
-  var Config = window.PastexConfigSource.create(window.PastexHandleStore, window.PastexConfigImport, window.PastexSites);
+  var Config = window.PastexConfigSource.create(
+    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites,
+    window.PastexManifest, typeof fetch === "undefined" ? null : fetch
+  );
 
   var tree = [];
   var settings = { collapsed: [] };
@@ -324,7 +327,12 @@
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration folder.");
+      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration manifest.");
+      return;
+    }
+    if (!response || response.reason !== "no-editable") {
+      // A transport or content-script failure is not a request to copy.
+      setStatus("Insert failed: " + ((response && response.reason) || "the page did not accept the snippet."));
       return;
     }
     try {
@@ -460,18 +468,13 @@
     await runMutation({ action: "reorder", groups: groups });
   }
 
-  // --- user-granted configuration folder ---
+  // --- configuration: one JSON manifest with links ---
 
-  $("choose-folder").addEventListener("click", async function () {
-    if (typeof window.showDirectoryPicker !== "function") {
-      $("config-status").textContent = "This browser does not support selecting a configuration folder.";
-      return;
-    }
+  async function applyConfiguration(load) {
+    $("choose-manifest").disabled = true;
     try {
-      // Must be called directly from a user gesture so the browser can grant access.
-      var folder = await window.showDirectoryPicker({ mode: "read" });
-      $("choose-folder").disabled = true;
-      var found = await Config.choose(folder);
+      var applied = await load();
+      var found = applied.found;
       var issues = [];
       try {
         var response = await chrome.runtime.sendMessage({ type: "pastex-reload-sites" });
@@ -482,11 +485,32 @@
       selectedId = ""; selectedItems.clear();
       render(); renderDriveBar();
       refresh(true);
-      $("config-status").textContent = "Using folder " + folder.name + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
+      $("config-status").textContent = applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
         (issues.length ? " " + issues.join(" ") : "");
     } catch (err) {
-      $("config-status").textContent = err.name === "AbortError" ? "Folder selection canceled; configuration unchanged." : "Could not use folder: " + (err.message || err);
-    } finally { $("choose-folder").disabled = false; }
+      $("config-status").textContent = err.name === "AbortError" ?
+        "Selection canceled; configuration unchanged." :
+        "Could not use configuration: " + (err.message || err);
+    } finally {
+      $("choose-manifest").disabled = false;
+    }
+  }
+
+  $("choose-manifest").addEventListener("click", function () {
+    if (typeof window.showOpenFilePicker !== "function") {
+      $("config-status").textContent = "This browser does not support selecting a manifest file.";
+      return;
+    }
+    // The picker must be called directly from the user gesture.
+    applyConfiguration(async function () {
+      var handles = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: "JSON manifest", accept: { "application/json": [".json"] } }],
+      });
+      var file = await handles[0].getFile();
+      var found = await Config.chooseManifestText(await file.text());
+      return { found: found, label: "Using manifest " + file.name };
+    });
   });
 
   $("btn-config").addEventListener("click", function () {

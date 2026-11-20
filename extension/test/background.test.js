@@ -113,7 +113,7 @@ test("site registration and on-demand injection are limited to configured sites"
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("an unavailable configuration folder does not prevent extension startup", async () => {
+test("an unavailable configuration manifest does not prevent extension startup", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.listeners.installed();
   await new Promise(setImmediate);

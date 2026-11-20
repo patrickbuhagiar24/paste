@@ -49,6 +49,7 @@ rm -rf "$STAGE/usr/share/pastex/extension/test"
 EXT_ID="$(python3 scripts/pack-crx.py --key "$CRX_KEY" --src extension --out "$STAGE/usr/share/pastex/pastex.crx")"
 python3 scripts/pack-crx.py --verify "$STAGE/usr/share/pastex/pastex.crx" >/dev/null
 echo "extension id: $EXT_ID"
+# Published alongside the archive so users can compare the ID Chrome shows.
 
 # Auto-detection: Chrome and Chromium pick these JSON files up on launch
 # and offer to enable the extension with one click.
@@ -66,13 +67,14 @@ gzip -9 -n "$STAGE/usr/share/doc/$PKG/README.md" 2>/dev/null || true
 # Quoted heredoc on purpose: an unquoted one lets the shell expand backticks and
 # "$" inside the Description, which silently deleted the command text from the
 # published 1.10.0 package. Only the placeholders below are substituted.
+# No Depends field: this script does not run debhelper substitutions, and the
+# extension package needs no runtime packages beyond the browser.
 cat > "$STAGE/DEBIAN/control" <<'EOF'
 Package: @PKG@
 Version: @VERSION@-1
 Section: web
 Priority: optional
 Architecture: @ARCH@
-Depends: python3
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Conflicts: paste-teks
 Replaces: paste-teks
@@ -99,6 +101,7 @@ sed -i \
   "$STAGE/DEBIAN/control"
 
 mkdir -p dist
+printf '%s\n' "$EXT_ID" >dist/pastex-id.txt
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT"
 echo "OK: $OUT"
 dpkg-deb --info "$OUT"
