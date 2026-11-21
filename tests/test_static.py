@@ -151,12 +151,12 @@ def test_descriptions_avoid_shell_metacharacters():
         assert "$" not in description, f"{name} uses a shell variable"
 
 
-def test_the_deploy_job_only_runs_on_main():
-    """The github-pages environment rejects branch deployments; do not try."""
+def test_deploy_runs_on_main_or_manual_dispatch():
+    """Pages is unrestricted: main pushes and manual branch dispatch deploy."""
     text = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text(encoding="utf-8")
     deploy = text.split("  deploy:", 1)[1]
     head = deploy.split("steps:", 1)[0]
-    assert "github.ref == 'refs/heads/main'" in head
+    assert "github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'" in head
 
 
 def test_manifest_and_changelog_versions_match():

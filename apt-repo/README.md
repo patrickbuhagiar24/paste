@@ -74,14 +74,14 @@ Then follow [Use the published archive](#use-the-published-archive) above.
 ## Publish through GitHub Pages
 
 1. Open **Settings → Pages** and set **Source** to **GitHub Actions**.
-2. Under **Settings → Environments → github-pages**, allow the branch that publishes the archive (`main`), or choose **No restriction**.
-3. Merge to `main`, or run **Actions → Build .deb & APT repo → Run workflow**.
+2. Under **Settings → Environments → github-pages**, choose **No restriction** so a manual dispatch from a working branch can deploy.
+3. Push to `main`, or run **Actions → Build .deb & APT repo → Run workflow** and pick the branch to deploy. Manual dispatch publishes that branch directly; no PR or merge is required.
 
 The workflow checks that `extension/manifest.json` and `debian/changelog` agree, builds the `.deb`, generates the archive with `scripts/build-apt-repository.sh`, signs it with `scripts/sign-apt-repository.sh`, deploys `site/` to Pages, and uploads the `.deb`, CRX and extension ID as build artifacts. `site/extension-id.txt` and `site/checksums.txt` are published with the archive.
 
 ### Release tags
 
-Push a `vX.Y.Z` tag **after** the matching version has been merged and published from `main`. A tag build verifies the tag against the manifest version and creates an immutable GitHub Release containing the `.deb`, signed CRX, `checksums.txt`, `extension-id.txt`, and both public keyring exports. The release notes repeat the full signing fingerprint and the extension ID, giving users a second, tag-pinned place to cross-check them against the repository website. Tag builds do not deploy to Pages; the `github-pages` environment remains limited to `main`.
+Push a `vX.Y.Z` tag **after** the matching version has been merged and published from `main`. A tag build verifies the tag against the manifest version and creates an immutable GitHub Release containing the `.deb`, signed CRX, `checksums.txt`, `extension-id.txt`, and both public keyring exports. The release notes repeat the full signing fingerprint and the extension ID, giving users a second, tag-pinned place to cross-check them against the repository website. Tag builds do not deploy to Pages; only `main` pushes and manual dispatches do.
 
 ## Signing key
 

@@ -199,9 +199,9 @@ jobs:
 
   deploy:
     needs: build
-    # The github-pages environment only accepts deployments from main, so tag
-    # releases publish a GitHub Release while main keeps publishing the archive.
-    if: github.ref == 'refs/heads/main'
+    # Main pushes and manual dispatch (any branch) deploy to Pages; tag pushes
+    # publish a GitHub Release instead. The Pages environment is unrestricted.
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

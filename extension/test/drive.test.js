@@ -153,6 +153,66 @@ test("listChildren follows pagination", async () => {
   assert.ok(fetchImpl.calls[0].options.headers.Authorization.includes("Bearer"));
 });
 
+test("listChildren asks only for the metadata the library uses", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ files: [] }));
+  await Drive.listChildren("tok", "root", fetchImpl);
+  const url = new URL(fetchImpl.calls[0].url);
+  const fields = url.searchParams.get("fields");
+  assert.match(fields, /files\(id,name,mimeType,modifiedTime,sha256Checksum,size,properties\)/);
+  assert.equal(url.searchParams.get("orderBy"), "folder,name");
+  assert.equal(url.searchParams.get("includeItemsFromAllDrives"), "true");
+});
+
+test("a failed page is retried from the same cursor", async () => {
+  let attempts = 0;
+  const seen = [];
+  const fetchImpl = stubFetch(async (url) => {
+    seen.push(url);
+    if (url.includes("pageToken=next")) {
+      attempts++;
+      if (attempts === 1) throw new Error("Drive API GET /files failed (HTTP 503): busy");
+      return jsonResponse({ files: [{ id: "f2", name: "B", mimeType: "text/plain" }] });
+    }
+    return jsonResponse({ nextPageToken: "next", files: [{ id: "f1", name: "A", mimeType: "text/plain" }] });
+  });
+  const files = await Drive.listChildren("tok", "root", fetchImpl);
+  assert.deepEqual(files.map((f) => f.id), ["f1", "f2"]);
+  assert.equal(seen.length, 3, "only the failed page is fetched again");
+  assert.ok(seen[1].includes("pageToken=next") && seen[2].includes("pageToken=next"));
+});
+
+test("a listing reports the cursor of its last page", async () => {
+  const fetchImpl = stubFetch(async (url) => url.includes("pageToken")
+    ? jsonResponse({ files: [{ id: "f2", name: "B", mimeType: "text/plain" }] })
+    : jsonResponse({ nextPageToken: "next", files: [{ id: "f1", name: "A", mimeType: "text/plain" }] }));
+  let cursor = "";
+  await Drive.listChildren("tok", "root", fetchImpl, { onCursor: (value) => { cursor = value; } });
+  assert.equal(cursor, "next");
+});
+
+test("the centralized index is one label on the root folder", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: { keep: "1" } }));
+  const index = { order: { root: ["b", "a"] }, collapsed: { f: "1" } };
+  await Drive.setIndex("tok", "root", index, fetchImpl, { keep: "1" });
+  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
+  const body = JSON.parse(fetchImpl.calls[0].options.body);
+  assert.equal(body.properties.keep, "1", "the other labels of the folder are preserved");
+  assert.deepEqual(JSON.parse(body.properties.pastex_index), index);
+});
+
+test("the root folder is read with its labels and its timestamp", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({
+    id: "root", name: "Library", mimeType: "application/vnd.google-apps.folder",
+    modifiedTime: "2026-01-01T00:00:00.000Z", properties: { pastex_index: "{}" },
+  }));
+  const folder = await Drive.getFolder("tok", "root", fetchImpl);
+  const fields = new URL(fetchImpl.calls[0].url).searchParams.get("fields");
+  assert.match(fields, /properties/);
+  assert.match(fields, /modifiedTime/);
+  assert.equal(folder.modifiedTime, "2026-01-01T00:00:00.000Z");
+  assert.deepEqual(folder.properties, { pastex_index: "{}" });
+});
+
 test("uploadNew posts multipart, updateText patches media", async () => {
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "n1", modifiedTime: "2026-01-01T00:00:00.000Z" }));
   await Drive.uploadNew("tok", "parent", "Note", "hello", fetchImpl);
@@ -215,10 +275,29 @@ test("Drive pagination rejects a repeated token instead of loading forever", asy
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
 });
 
-test("Drive reorder writes a property rather than renaming or moving a file", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
+test("Drive reorder merges properties instead of erasing collapse state", async () => {
+  const fetchImpl = stubFetch((url, options, n) => n === 1
+    ? jsonResponse({ properties: { pastex_order: "4", pastex_collapsed: "1" } })
+    : jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
   await Drive.setOrder("tok", "id", 2, fetchImpl);
-  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2" } });
-  assert.equal(new URL(fetchImpl.calls[0].url).searchParams.get("supportsAllDrives"), "true");
+  assert.equal(fetchImpl.calls[1].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
+  assert.equal(new URL(fetchImpl.calls[1].url).searchParams.get("supportsAllDrives"), "true");
+});
+
+test("Drive collapse merges properties instead of erasing saved order", async () => {
+  const fetchImpl = stubFetch((url, options, n) => n % 2 === 1
+    ? jsonResponse({ properties: { pastex_order: "3", pastex_collapsed: "0" } })
+    : jsonResponse({ id: "folder", properties: { pastex_collapsed: "1" } }));
+  await Drive.setCollapsed("tok", "folder", true, fetchImpl);
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "3", pastex_collapsed: "1" } });
+  await Drive.setCollapsed("tok", "folder", false, fetchImpl);
+  assert.deepEqual(JSON.parse(fetchImpl.calls[3].options.body), { properties: { pastex_order: "3", pastex_collapsed: "0" } });
+});
+
+test("known Drive properties avoid the pre-PATCH GET while preserving other keys", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
+  await Drive.setOrder("tok", "id", 2, fetchImpl, { pastex_order: "4", pastex_collapsed: "1" });
+  assert.equal(fetchImpl.calls.length, 1, "metadata already loaded with listChildren must not be fetched again");
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
 });

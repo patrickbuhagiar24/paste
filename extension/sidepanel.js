@@ -15,6 +15,8 @@
   );
 
   var tree = [];
+  var index = Store.createIndex([]);
+  var renderPending = false;
   var settings = { collapsed: [] };
   var rootId = "";
   var ready = false;
@@ -26,17 +28,59 @@
   var refreshRequested = false;
   var progressTimer = 0;
   var fromCache = false;
+  var backgroundRefresh = false;
   var configVersion = 0;
   var loadConfigVersion = 0;
   var selecting = false;
   var selectedItems = new Set();
+  var lastCheckedAt = 0;
 
   function $(id) {
     return document.getElementById(id);
   }
 
+  function rebuildIndex() {
+    index = Store.createIndex(tree);
+  }
+
+  // Coalesce progress updates into one paint per frame.
+  function scheduleRender() {
+    if (renderPending) return;
+    renderPending = true;
+    var frame = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+    frame(function () { renderPending = false; render(); });
+  }
+
   function setStatus(text) {
     $("status").textContent = text;
+  }
+
+  // The panel shows when the library was last confirmed with Drive, so the
+  // age of the list is visible even when nothing changed.
+  function relativeTime(timestamp) {
+    if (!timestamp) return "never";
+    var seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 45) return "just now";
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 60) return minutes + " min ago";
+    var hours = Math.round(minutes / 60);
+    if (hours < 24) return hours + " h ago";
+    return Math.round(hours / 24) + " d ago";
+  }
+
+  function renderLastChecked() {
+    var node = $("last-checked");
+    if (!node) return;
+    node.textContent = "Checked: " + relativeTime(lastCheckedAt);
+    node.title = lastCheckedAt
+      ? "Google Drive was last checked at " + new Date(lastCheckedAt).toLocaleTimeString()
+      : "The library has not been checked yet.";
+  }
+
+  function noteChecked(timestamp) {
+    if (!timestamp) return;
+    lastCheckedAt = timestamp;
+    renderLastChecked();
   }
 
   function esc(text) {
@@ -56,6 +100,21 @@
     } else if (!collapsed && at !== -1) {
       settings.collapsed.splice(at, 1);
     }
+  }
+
+  // Folder collapse state is stored in Drive properties, so a reload or a
+  // different computer sees the same structure as the ordering metadata.
+  function applyCollapsedFromTree() {
+    settings.collapsed = index.folders.filter(function (node) { return node.collapsed; })
+      .map(function (node) { return node.id; });
+  }
+
+  async function persistCollapsed(ids, collapsed) {
+    var before = settings.collapsed.slice();
+    ids.forEach(function (id) { setCollapsed(id, collapsed); });
+    render();
+    var result = await runMutation({ action: "collapse", ids: ids, collapsed: collapsed });
+    if (!result) { settings.collapsed = before; render(); }
   }
 
   function clearTree() {
@@ -117,8 +176,7 @@
       toggle.tabIndex = 0;
       function toggleFolder(event) {
         event.stopPropagation();
-        setCollapsed(node.id, !isCollapsed(node.id));
-        render();
+        persistCollapsed([node.id], !isCollapsed(node.id));
       }
       toggle.addEventListener("click", toggleFolder);
       toggle.addEventListener("keydown", function (event) {
@@ -130,8 +188,7 @@
       if (selecting) {
         toggleSelection(node.id);
       } else if (node.kind === "folder") {
-        setCollapsed(node.id, !isCollapsed(node.id));
-        render();
+        persistCollapsed([node.id], !isCollapsed(node.id));
       } else {
         selectNode(node.id);
         insertNode(node);
@@ -159,7 +216,7 @@
 
   function renderSearchResults(matches) {
     clearTree();
-    var host = $("tree");
+    var host = document.createDocumentFragment();
     matches.forEach(function (node) {
       var row = document.createElement("div");
       row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
@@ -188,6 +245,7 @@
       });
       host.appendChild(row);
     });
+    $("tree").appendChild(host);
     $("empty").hidden = matches.length > 0;
     if (!matches.length) {
       $("empty").querySelector("p").innerHTML = "No snippets match.<br />Clear the search to browse everything.";
@@ -196,13 +254,14 @@
 
   function render() {
     if (query) {
-      renderSearchResults(Store.search(tree, query));
+      renderSearchResults(index.search(query));
     } else {
       clearTree();
-      var host = $("tree");
+      var host = document.createDocumentFragment();
       tree.forEach(function (node) {
         renderRow(node, 0, host);
       });
+      $("tree").appendChild(host);
       var hasNodes = tree.length > 0;
       $("empty").hidden = hasNodes;
       if (!hasNodes) {
@@ -234,12 +293,16 @@
   }
 
   function selectedNode() {
-    return selectedId ? Store.findById(tree, selectedId) : null;
+    return selectedId ? index.byId.get(selectedId) || null : null;
   }
 
   function renderDriveBar() {
-    $("drive-status").textContent = busy ? "Drive: loading…" : (ready ? (fromCache ? "Google Drive • session cache" : "Google Drive connected") : "Google Drive unavailable");
+    var folders = index.folders.length;
+    var label = busy ? "Drive: loading…" :
+      (ready ? (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
+    $("drive-status").textContent = label;
     $("btn-sync").disabled = busy;
+    $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
     $("btn-empty-text").disabled = busy || !ready;
@@ -250,19 +313,53 @@
     tree = partial;
     rootId = id;
     ready = true;
+    rebuildIndex();
     if (!progressTimer) progressTimer = window.setTimeout(function () {
       progressTimer = 0;
-      render();
-      setStatus("Loading Google Drive… " + Store.flatten(tree).length + " snippets found.");
+      scheduleRender();
+      setStatus("Loading Google Drive… " + index.texts.length + " snippets found.");
     }, 100);
   }
 
   try {
     var progressPort = chrome.runtime.connect({ name: "pastex-library-progress" });
-    progressPort.onMessage.addListener(function (message) { onProgress(message.tree, message.rootId); });
+    progressPort.onMessage.addListener(function (message) {
+      if (!message) return;
+      // The background worker refreshed the cache while the user was away.
+      if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
+      onProgress(message.tree, message.rootId);
+    });
   } catch (ignored) { /* Loading still works without live progress. */ }
 
-  async function refresh(force) {
+  // A background sync already rewrote the cache, so this only reads the
+  // snapshot back: no Drive request, no loading state and no status spam.
+  async function applyBackgroundChange() {
+    if (busy || loading || backgroundRefresh) return;
+    if ($("editor-overlay") && !$("editor-overlay").hidden) return;
+    backgroundRefresh = true;
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library" });
+      if (!response || !response.ok) return;
+      var result = response.result;
+      if (!result || !result.tree) return;
+      tree = result.tree;
+      rootId = result.rootId;
+      fromCache = result.cached;
+      ready = true;
+      rebuildIndex();
+      applyCollapsedFromTree();
+      if (selectedId && !index.byId.has(selectedId)) selectedId = "";
+      selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
+      render();
+      renderDriveBar();
+      noteChecked(result.lastCheckedAt);
+    } catch (ignored) {
+      // A failed background update keeps the current list; the next manual
+      // refresh reloads it from Drive.
+    } finally { backgroundRefresh = false; }
+  }
+
+  async function refresh(force, quiet) {
     if (busy) { refreshRequested = true; return false; }
     var previous = { tree: tree, rootId: rootId, ready: ready, cached: fromCache };
     busy = true;
@@ -270,7 +367,7 @@
     loadConfigVersion = configVersion;
     renderDriveBar();
     render();
-    setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
+    if (!quiet) setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library", force: !!force });
       if (loadConfigVersion !== configVersion) return false;
@@ -280,12 +377,17 @@
       rootId = result.rootId;
       fromCache = result.cached;
       ready = true;
-      if (selectedId && !Store.findById(tree, selectedId)) selectedId = "";
-      selectedItems.forEach(function (id) { if (!Store.findById(tree, id)) selectedItems.delete(id); });
+      rebuildIndex();
+      applyCollapsedFromTree();
+      if (selectedId && !index.byId.has(selectedId)) selectedId = "";
+      selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
+      noteChecked(result.lastCheckedAt);
       var warnings = result.warnings || [];
-      setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-        (fromCache ? "Session cache: " : "Google Drive loaded: ") + Store.flatten(tree).length + " snippets.");
+      if (!quiet) {
+        setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
+          (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."));
+      }
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
@@ -295,7 +397,7 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
-      setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
+      if (!quiet) setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
       return false;
     } finally {
       loading = false;
@@ -317,7 +419,7 @@
       response = await chrome.runtime.sendMessage({
         type: "pastex-sidepanel-insert",
         id: node.id,
-        text: node.text || "",
+        text: typeof node.text === "string" ? node.text : "",
       });
     } catch (err) {
       response = { ok: false };
@@ -442,7 +544,7 @@
     if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /."); return; }
     if (busy) return;
     var mode = editorMode;
-    var node = Store.findById(tree, editorNodeId);
+    var node = index.byId.get(editorNodeId) || null;
     var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
     if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
       setStatus("That item or folder is no longer available; refresh first."); return;
@@ -465,13 +567,19 @@
     if (busy || query) return;
     var groups = Store.reorderGroups(tree, selectedItems, direction);
     if (!groups.length) return;
-    await runMutation({ action: "reorder", groups: groups });
+    // The worker stores the new order in the centralized index of the root
+    // folder, so every group is sent with the folder it belongs to.
+    var parents = groups.map(function (group) {
+      return parentOf(tree, group[0], rootId) || rootId;
+    });
+    await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
   // --- configuration: one JSON manifest with links ---
 
   async function applyConfiguration(load) {
-    $("choose-manifest").disabled = true;
+    var button = $("btn-config");
+    button.disabled = true;
     try {
       var applied = await load();
       var found = applied.found;
@@ -483,26 +591,30 @@
       configVersion++;
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
-      render(); renderDriveBar();
-      refresh(true);
-      $("config-status").textContent = applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
-        (issues.length ? " " + issues.join(" ") : "");
+      rebuildIndex(); render(); renderDriveBar();
+      // Let an in-flight panel load finish so its status cannot overwrite
+      // the configuration result; then force one clean Drive reload.
+      refreshRequested = false;
+      while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
+      await refresh(true);
+      setStatus(applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
+        (issues.length ? " " + issues.join(" ") : ""));
     } catch (err) {
-      $("config-status").textContent = err.name === "AbortError" ?
+      setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        "Could not use configuration: " + (err.message || err);
+        "Could not use configuration: " + (err.message || err));
     } finally {
-      $("choose-manifest").disabled = false;
+      button.disabled = false;
     }
   }
 
-  $("choose-manifest").addEventListener("click", function () {
+  $("btn-config").addEventListener("click", function () {
     if (typeof window.showOpenFilePicker !== "function") {
-      $("config-status").textContent = "This browser does not support selecting a manifest file.";
+      setStatus("This browser does not support selecting a manifest file.");
       return;
     }
     // The picker must be called directly from the user gesture.
-    applyConfiguration(async function () {
+    return applyConfiguration(async function () {
       var handles = await window.showOpenFilePicker({
         multiple: false,
         types: [{ description: "JSON manifest", accept: { "application/json": [".json"] } }],
@@ -512,12 +624,6 @@
       return { found: found, label: "Using manifest " + file.name };
     });
   });
-
-  $("btn-config").addEventListener("click", function () {
-    $("config-status").textContent = "";
-    $("config-overlay").hidden = false;
-  });
-  $("config-close").addEventListener("click", function () { $("config-overlay").hidden = true; });
 
   // --- events ---
 
@@ -542,6 +648,13 @@
   });
 
   $("btn-sync").addEventListener("click", function () { refresh(true); });
+  $("btn-collapse-all").addEventListener("click", async function () {
+    if (busy || !ready) return;
+    var ids = index.folders.map(function (node) { return node.id; });
+    if (!ids.length) return;
+    if (query) { query = ""; $("search").value = ""; }
+    await persistCollapsed(ids, true);
+  });
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;
     selectedItems.clear();
@@ -563,5 +676,8 @@
   });
   // Use the shared session cache on open; explicit refresh reloads Drive.
   renderDriveBar();
+  renderLastChecked();
+  // The age of the list is refreshed while the panel stays open.
+  if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
   refresh(false);
 })();

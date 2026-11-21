@@ -5,6 +5,7 @@ const Cache = require("../cache.js");
 
 function setup() {
   const data = {};
+  const localData = {};
   let calls = 0;
   const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "account", private_key: "private-secret" } };
   const storage = {
@@ -12,10 +13,15 @@ function setup() {
     async set(values) { Object.assign(data, structuredClone(values)); },
     async remove(key) { delete data[key]; },
   };
+  const local = {
+    async get(key) { return { [key]: localData[key] }; },
+    async set(values) { Object.assign(localData, structuredClone(values)); },
+    async remove(key) { delete localData[key]; },
+  };
   const native = { readConfig: async () => structuredClone(config) };
   const library = { load: async () => ({ tree: [{ id: String(++calls), kind: "text", name: "One", text: "contents" }], session: { rootId: config.drive.folderId }, warnings: [] }) };
-  function make() { return Cache.create(native, {}, library, storage, webcrypto); }
-  return { data, config, storage, native, library, make, get calls() { return calls; } };
+  function make() { return Cache.create(native, {}, library, storage, webcrypto, local); }
+  return { data, localData, config, storage, native, library, make, get calls() { return calls; } };
 }
 
 test("cache is session-only, shared after worker restart and keyed by account and folder", async () => {
@@ -118,4 +124,245 @@ test("an explicit Drive permission denial clears an old snapshot", async () => {
   x.library.load = async () => { throw new Error("Drive API failed (HTTP 403)"); };
   await assert.rejects(cache.get(true), /403/);
   assert.equal(x.data[Cache.KEY], undefined);
+});
+
+test("verified text bodies survive mutation invalidation and are reused on refresh", async () => {
+  const x = setup();
+  let observed;
+  x.library.load = async (native, drive, onUpdate, options) => {
+    observed = options;
+    const cached = options.bodies && options.bodies.item;
+    return {
+      tree: [{ id: "item", kind: "text", name: "Item", text: cached ? cached.text : "fresh" }],
+      session: { rootId: "root" }, warnings: [],
+      bodies: { item: { modifiedTime: "v1", text: "fresh" } },
+    };
+  };
+  const cache = x.make();
+  await cache.get(false);
+  await cache.mutate(async () => {});
+  assert.equal(x.data[Cache.KEY], undefined, "the tree snapshot must be invalidated");
+  await cache.get(true);
+  assert.equal(observed.bodies.item.text, "fresh");
+  assert.equal(x.data[Cache.KEY].bodies.item.text, "fresh");
+});
+
+test("configuration identity is memoized while the config object is unchanged", async () => {
+  const x = setup();
+  const stable = structuredClone(x.config);
+  x.native.readConfig = async () => stable;
+  const cache = x.make();
+  await cache.get(false);
+  const digests = [];
+  const original = webcrypto.subtle.digest;
+  webcrypto.subtle.digest = async (...args) => { digests.push(args); return original(...args); };
+  try {
+    await cache.get(false);
+    await cache.get(false);
+    assert.equal(digests.length, 0);
+  } finally { webcrypto.subtle.digest = original; }
+});
+
+test("a local snapshot survives a browser restart and a stale one silently refreshes", async () => {
+  const x = setup();
+  const first = x.make();
+  await first.get(false);
+  assert.ok(x.localData[Cache.LKEY], "a successful load must persist a derived local snapshot");
+  const id = x.data[Cache.KEY].identity;
+  const second = x.make();
+  await x.storage.remove(Cache.KEY); // simulate a fresh browser process
+  // The last Drive confirmation is older than the freshness window.
+  x.localData[Cache.FKEY][id].savedAt = 0;
+  const result = await second.get(false);
+  assert.equal(result.cached, true);
+  assert.equal(result.tree[0].id, "1");
+  assert.equal(x.calls, 1, "opening from local cache must not block on Drive");
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(x.calls, 2, "a stale local snapshot should refresh in the background");
+});
+
+test("mutations clear derived local snapshots but keep verified bodies in memory", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  assert.ok(Object.keys(x.localData[Cache.LKEY]).length);
+  await cache.mutate(async () => {});
+  assert.deepEqual(x.localData[Cache.LKEY], {});
+  assert.equal(x.data[Cache.KEY], undefined);
+  const next = await cache.get(false);
+  assert.equal(next.tree[0].id, "2");
+});
+
+test("a configuration identity change clears the local snapshot", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  const old = x.data[Cache.KEY].identity;
+  assert.ok(x.localData[Cache.LKEY][old]);
+  x.config.drive.folderId = "other";
+  await cache.get(false);
+  assert.equal(x.localData[Cache.LKEY][old], undefined);
+});
+
+test("idle sync reports whether Drive actually changed", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  x.library.load = async () => ({
+    tree: [{ id: "1", kind: "text", name: "One", text: "contents" }],
+    session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+  });
+  const same = await cache.sync();
+  assert.equal(same.changed, false);
+  assert.equal(same.skipped, false);
+  x.library.load = async () => ({
+    tree: [{ id: "changed", kind: "text", name: "Changed", text: "new" }],
+    session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+  });
+  const different = await cache.sync();
+  assert.equal(different.changed, true);
+  assert.equal(different.skipped, false);
+});
+
+test("an unchanged idle sync keeps the stored snapshot and only moves the freshness stamp", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  const id = x.data[Cache.KEY].identity;
+  const snapshot = x.localData[Cache.LKEY][id];
+  const before = JSON.stringify(snapshot);
+  x.localData[Cache.FKEY][id].savedAt = 0;
+  x.library.load = async () => ({
+    tree: [{ id: "1", kind: "text", name: "One", text: "contents" }],
+    session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {},
+  });
+  const result = await cache.sync();
+  assert.equal(result.changed, false);
+  assert.equal(JSON.stringify(x.localData[Cache.LKEY][id]), before, "an unchanged library must not rewrite the snapshot");
+  assert.ok(x.localData[Cache.FKEY][id].savedAt > 0, "the freshness stamp must move");
+});
+
+test("an idle sync detects reordered, renamed and collapsed items", async () => {
+  const x = setup();
+  const cache = x.make();
+  // The state is mutated step by step, so every check sees the previous one.
+  const state = {
+    tree: [
+      { id: "folder", kind: "folder", name: "Folder", collapsed: false,
+        properties: { pastex_order: "0", pastex_collapsed: "0" },
+        children: [{ id: "a", kind: "text", name: "A", driveName: "A.txt", text: "a",
+          modifiedTime: "t1", properties: { pastex_order: "0" } }] },
+      { id: "b", kind: "text", name: "B", driveName: "B.txt", text: "b",
+        modifiedTime: "t2", properties: { pastex_order: "1" } },
+    ],
+    metadata: { root: "m1" },
+  };
+  x.library.load = async () => ({
+    tree: structuredClone(state.tree),
+    session: { rootId: "root" }, warnings: [], bodies: {},
+    metadata: structuredClone(state.metadata),
+  });
+  await cache.get(false);
+  assert.equal((await cache.sync()).changed, false, "an identical library reports no change");
+
+  // A reordered item.
+  state.tree[1].properties = { pastex_order: "0" };
+  state.tree[0].properties = { pastex_order: "1" };
+  assert.equal((await cache.sync()).changed, true, "a new order must be detected");
+
+  // A collapsed folder.
+  state.tree[0].collapsed = true;
+  state.tree[0].properties = { pastex_order: "1", pastex_collapsed: "1" };
+  assert.equal((await cache.sync()).changed, true, "a collapsed folder must be detected");
+
+  // A renamed item.
+  state.tree[1].name = "Renamed";
+  state.tree[1].driveName = "Renamed.txt";
+  assert.equal((await cache.sync()).changed, true, "a renamed item must be detected");
+
+  // Changed folder metadata only: the visible tree is unchanged.
+  state.metadata = { root: "m2" };
+  assert.equal((await cache.sync()).changed, false, "a metadata-only move does not change the visible tree");
+});
+
+test("an idle sync never runs while a mutation is in flight", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = cache.mutate(async () => { await gate; });
+  await new Promise(setImmediate); // let the mutation start
+  const skipped = await cache.sync();
+  assert.equal(skipped.changed, false);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.tree, null);
+  assert.equal(skipped.rootId, "");
+  release();
+  await mutation;
+});
+
+test("a mutation only invalidates the identity that was written", async () => {
+  const x = setup();
+  const cache = x.make();
+  await cache.get(false);
+  const id = x.data[Cache.KEY].identity;
+  await cache.mutate(async () => {});
+  assert.equal(x.localData[Cache.LKEY][id], undefined, "the written identity is invalidated");
+  assert.equal(x.data[Cache.KEY], undefined);
+  assert.deepEqual(x.localData[Cache.FKEY], {}, "the freshness stamp is invalidated too");
+});
+
+test("the snapshot stores bodies by content hash with their signatures and index", async () => {
+  const x = setup();
+  x.library.load = async () => ({
+    tree: [{ id: "item", kind: "text", name: "Item", text: "contents", hash: "abc" }],
+    session: { rootId: "root" }, warnings: [],
+    bodies: { item: { modifiedTime: "v1", hash: "abc", driveHash: "def" } },
+    texts: { abc: "contents" },
+    metadata: { root: "m1" },
+    signatures: { item: "sig" },
+    index: { order: { root: ["item"] }, collapsed: {} },
+    cursors: { root: "cursor" },
+  });
+  const cache = x.make();
+  await cache.get(false);
+  const snapshot = x.data[Cache.KEY];
+  assert.equal(snapshot.bodies.item.hash, "abc", "a body is addressed by its content hash");
+  assert.equal(snapshot.texts.abc, "contents");
+  assert.equal(snapshot.signatures.item, "sig");
+  assert.deepEqual(snapshot.index, { order: { root: ["item"] }, collapsed: {} });
+  assert.equal(snapshot.cursors.root, "cursor");
+});
+
+test("the cache reports when the library was last checked", async () => {
+  const x = setup();
+  const cache = x.make();
+  const first = await cache.get(false);
+  assert.ok(first.lastCheckedAt > 0, "a load reports the moment of the check");
+  const second = await cache.get(false);
+  assert.equal(second.lastCheckedAt, first.lastCheckedAt, "a cached read keeps the confirmation time");
+  const third = await cache.get(true);
+  assert.ok(third.lastCheckedAt >= first.lastCheckedAt, "a fresh load moves the confirmation time");
+});
+
+test("a changed node signature refreshes the snapshot without disturbing the panel", async () => {
+  const x = setup();
+  let signature = "one";
+  x.library.load = async () => ({
+    tree: [{ id: "item", kind: "text", name: "Item", text: "contents", hash: "abc" }],
+    session: { rootId: "root" }, warnings: [],
+    bodies: { item: { modifiedTime: "v1", hash: "abc", driveHash: "def" } },
+    texts: { abc: "contents" },
+    metadata: { root: "m1" },
+    signatures: { item: signature },
+    index: { order: {}, collapsed: {} },
+  });
+  const cache = x.make();
+  await cache.get(false);
+  assert.equal((await cache.sync()).changed, false);
+  signature = "two";
+  const result = await cache.sync();
+  assert.equal(result.changed, false, "the visible tree did not change");
+  assert.equal(x.data[Cache.KEY].signatures.item, "two", "the new signature is stored");
 });

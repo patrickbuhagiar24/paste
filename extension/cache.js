@@ -1,6 +1,19 @@
-/* Browser-session cache of a Drive library, shared by the worker and panel.
- * Credentials are never stored. Chrome's session storage is memory-only and
- * is not exposed to content scripts. Drive remains the source of truth.
+/* Cache of a Drive library shared by the worker and panel.
+ *
+ * Credentials are never stored. The session snapshot is memory-only; a second,
+ * derived snapshot in storage.local makes the first panel open after a browser
+ * restart instant. Drive is still the source of truth: a local snapshot is
+ * keyed by a SHA-256 identity and silently refreshed when it is stale, while
+ * mutations invalidate both copies before and after the write.
+ *
+ * Verified text bodies are addressed by the SHA-256 of their content and
+ * survive tree invalidations, so an explicit refresh does not re-download
+ * unchanged files. Every node also keeps the signature of the metadata Drive
+ * reported for it, so a refresh only rebuilds the branch that changed.
+ *
+ * The background (idle) sync loads Drive once and compares the result with the
+ * stored snapshot. The snapshot is only rewritten when Drive really reports a
+ * difference; an unchanged library only moves a small freshness stamp.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
@@ -8,12 +21,24 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
   var KEY = "pastex.drive.session.v1";
+  var LKEY = "pastex.drive.local.v1";
+  var FKEY = "pastex.drive.fresh.v1";
+  var FRESH_MS = 60000;
+  var MAX_LOCAL = 5;
 
-  function create(native, drive, library, storage, cryptoApi) {
+  function create(native, drive, library, storage, cryptoApi, persistent) {
     var memory = null;
+    var bodies = {};
+    var texts = {};
+    var signatures = {};
+    var index = null;
+    var cursors = {};
+    var identityCache = { config: null, value: "" };
     var revision = 0;
     var inflight = null;
     var mutations = Promise.resolve();
+    var mutating = 0;
+    var silentTimer = 0;
 
     async function identity() {
       var config = await native.readConfig();
@@ -21,63 +46,310 @@
         throw new Error(config.serviceAccountError || "Configure a service-account.json link in the configuration manifest.");
       if (!config.drive || !config.drive.folderId)
         throw new Error(config.driveError || "Configure a pastex-google-drive.json link in the configuration manifest.");
+      if (identityCache.config === config) return identityCache.value;
       var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
-      return Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      identityCache.value = Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      identityCache.config = config;
+      return identityCache.value;
     }
 
-    async function discard() {
+    // The derived snapshots live in storage.local so they survive a browser
+    // restart; the session copy is only a fast path inside one session.
+    function localStore() { return persistent || storage; }
+
+    async function localAll() {
+      var store = localStore();
+      if (!store) return {};
+      try { return (await store.get(LKEY))[LKEY] || {}; } catch (ignored) { return {}; }
+    }
+
+    async function clearSnapshot() {
       memory = null;
       try { if (storage) await storage.remove(KEY); } catch (ignored) { /* memory-only fallback */ }
     }
 
+    async function clearLocal(key) {
+      var store = localStore();
+      if (!store) return;
+      try {
+        var all = await localAll();
+        if (key) delete all[key]; else all = {};
+        await store.set({ [LKEY]: all });
+      } catch (ignored) { /* local cache is best-effort */ }
+    }
+
+    // A tiny map of identity -> last confirmed Drive check. It is kept apart
+    // from the snapshot so an unchanged library never rewrites a big blob.
+    async function freshAll() {
+      var store = localStore();
+      if (!store) return {};
+      try { return (await store.get(FKEY))[FKEY] || {}; } catch (ignored) { return {}; }
+    }
+
+    async function clearFresh(key) {
+      var store = localStore();
+      if (!store) return;
+      try {
+        var all = await freshAll();
+        if (key) delete all[key]; else all = {};
+        await store.set({ [FKEY]: all });
+      } catch (ignored) { /* the stamp is optional */ }
+    }
+
+    // The confirmation stamp lives in its own tiny map, so an unchanged
+    // library never rewrites the (much larger) snapshot blob. A snapshot
+    // written by an older version falls back to its own savedAt value.
+    async function freshStamp(key, snapshot) {
+      var all = await freshAll();
+      if (all[key]) return all[key].savedAt || 0;
+      return (snapshot && snapshot.savedAt) || 0;
+    }
+
+    async function markFresh(key) {
+      var store = localStore();
+      var stamp = Date.now();
+      if (!store) return stamp;
+      try {
+        var all = await freshAll();
+        all[key] = { savedAt: stamp };
+        var keys = Object.keys(all).sort(function (a, b) { return (all[b].savedAt || 0) - (all[a].savedAt || 0); });
+        keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
+        await store.set({ [FKEY]: all });
+      } catch (ignored) { /* the stamp is optional */ }
+      return stamp;
+    }
+
+    async function discardAll() {
+      await clearSnapshot();
+      await clearLocal();
+      await clearFresh();
+      bodies = {};
+      texts = {};
+      signatures = {};
+      index = null;
+      cursors = {};
+      identityCache = { config: null, value: "" };
+    }
+
+    // A write only invalidates the identity that was written to; snapshots of
+    // other accounts stay usable.
     async function invalidate() {
       revision++;
-      await discard();
+      // Keep verified bodies in memory; drop every derived snapshot because a
+      // write may have changed the tree or its Drive properties.
+      await clearSnapshot();
+      var key = identityCache.value;
+      await clearLocal(key || undefined);
+      await clearFresh(key || undefined);
     }
 
     async function readStored() {
-      if (memory) return memory;
-      try { if (storage) memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
+      if (!memory && storage) {
+        try { memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
+      }
+      if (memory && memory.bodies) bodies = memory.bodies;
+      if (memory && memory.texts) texts = memory.texts;
+      if (memory && memory.signatures) signatures = memory.signatures;
+      if (memory && memory.index) index = memory.index;
+      if (memory && memory.cursors) cursors = memory.cursors;
       return memory;
     }
 
-    async function get(force, onUpdate) {
+    function snapshot(key, rootId, tree, metadata) {
+      return { identity: key, rootId: rootId, tree: tree, bodies: bodies,
+        texts: texts, signatures: signatures, index: index, cursors: cursors,
+        metadata: metadata, savedAt: Date.now() };
+    }
+
+    async function writeSnapshot(key, rootId, tree, metadata) {
+      var snap = snapshot(key, rootId, tree, metadata);
+      memory = snap;
+      try { if (storage) await storage.set({ [KEY]: snap }); }
+      catch (ignored) { try { if (storage) await storage.remove(KEY); } catch (ignoredAgain) {} }
+      var store = localStore();
+      if (!store) return;
+      try {
+        var all = await localAll();
+        all[key] = snap;
+        var keys = Object.keys(all).sort(function (a, b) {
+          return (all[b].savedAt || 0) - (all[a].savedAt || 0);
+        });
+        keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
+        await store.set({ [LKEY]: all });
+      } catch (ignored) { /* a full local cache must never block Drive */ }
+    }
+
+    function forceRefreshPending(stamp) {
+      return Date.now() - (stamp || 0) >= FRESH_MS;
+    }
+
+    function scheduleStaleRefresh(stamp, onUpdate) {
+      if (forceRefreshPending(stamp) && !inflight && !silentTimer) {
+        silentTimer = setTimeout(function () {
+          silentTimer = 0;
+          if (inflight) return;
+          get(true, onUpdate).catch(function () {});
+        }, 250);
+      }
+    }
+
+    // The bodies, the node signatures and the centralized index of a load
+    // replace the stored ones. A body is addressed by the SHA-256 of its
+    // content, so the same text is stored once.
+    function mergeResult(result) {
+      Object.keys((result && result.bodies) || {}).forEach(function (id) { bodies[id] = result.bodies[id]; });
+      Object.keys((result && result.texts) || {}).forEach(function (hash) { texts[hash] = result.texts[hash]; });
+      if (result && result.signatures) signatures = Object.assign({}, signatures, result.signatures);
+      if (result && result.index) index = result.index;
+      if (result && result.cursors) cursors = result.cursors;
+    }
+
+    // A signature of the fields the user actually sees. Drive returns a few
+    // volatile system properties, so comparing raw metadata would report a
+    // change on every single check. A body is addressed by its content
+    // hash, so a long snippet does not have to be read again to compare it.
+    function nodeSignature(node) {
+      if (!node || typeof node !== "object") return String(node);
+      var props = node.properties || {};
+      if (node.kind === "folder") {
+        return JSON.stringify([node.id, node.kind, node.name || "", !!node.collapsed,
+          props.pastex_order || "", props.pastex_collapsed || "",
+          (node.children || []).map(nodeSignature)]);
+      }
+      return JSON.stringify([node.id, node.kind, node.name || "", node.driveName || "",
+        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred, props.pastex_order || ""]);
+    }
+
+    function treeSignature(tree) {
+      return JSON.stringify((tree || []).map(nodeSignature));
+    }
+
+    function metadataSignature(metadata) {
+      var keys = Object.keys(metadata || {}).sort();
+      return JSON.stringify(keys.map(function (key) { return key + ":" + metadata[key]; }));
+    }
+
+    // The signature map of the nodes: one line per item, so a large library
+    // is compared without touching the bodies again.
+    function signaturesSignature(signatures) {
+      var keys = Object.keys(signatures || {}).sort();
+      return JSON.stringify(keys.map(function (key) { return key + ":" + signatures[key]; }));
+    }
+
+    function indexSignature(index) {
+      if (!index) return "";
+      var order = index.order || {}, collapsed = index.collapsed || {};
+      var parents = Object.keys(order).sort();
+      var folders = Object.keys(collapsed).sort();
+      return JSON.stringify({
+        order: parents.map(function (parent) { return parent + ":" + (order[parent] || []).join(","); }),
+        collapsed: folders.map(function (folder) { return folder + ":" + collapsed[folder]; }),
+      });
+    }
+
+    // Two snapshots describe the same library when their tree, their folder
+    // metadata, their node signatures and their centralized index are
+    // identical. Bodies are re-verified by content hash during the load, so
+    // they are not part of the comparison.
+    function sameLibrary(previous, tree, metadata, signatures, index) {
+      if (!previous) return false;
+      if (treeSignature(previous.tree) !== treeSignature(tree)) return false;
+      if (metadataSignature(previous.metadata) !== metadataSignature(metadata)) return false;
+      if (signatures !== undefined && signaturesSignature(previous.signatures) !== signaturesSignature(signatures)) return false;
+      if (index !== undefined && indexSignature(previous.index) !== indexSignature(index)) return false;
+      return true;
+    }
+
+    function sameTree(previous, tree) {
+      if (!previous) return false;
+      return treeSignature(previous.tree) === treeSignature(tree);
+    }
+
+    async function get(force, onUpdate, options) {
+      options = options || {};
       await mutations;
       var currentRevision = revision;
       var key;
       try { key = await identity(); }
-      catch (err) { await discard(); throw err; }
+      catch (err) {
+        // The configuration could not be read or is invalid, so the session
+        // snapshot cannot be attributed to an identity any more. The keyed
+        // local snapshots are kept: they are only served for their own
+        // identity, and a transient read failure must not throw them away.
+        await clearSnapshot();
+        throw err;
+      }
       var saved = await readStored();
-      if (currentRevision !== revision) return get(force, onUpdate);
-      if (saved && saved.identity !== key) { await discard(); saved = null; }
-      if (!force && saved) return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true };
+      if (currentRevision !== revision) return get(force, onUpdate, options);
+      if (saved && saved.identity !== key) {
+        // Another account or folder: the old snapshot no longer describes
+        // anything the user is allowed to see, so it is dropped. Snapshots of
+        // other identities stay in the local cache, keyed and unusable for
+        // this configuration.
+        await clearSnapshot();
+        await clearLocal(saved.identity);
+        await clearFresh(saved.identity);
+        saved = null;
+      }
+      var stamp = await freshStamp(key, saved);
+      if (!force && saved) {
+        scheduleStaleRefresh(stamp, onUpdate);
+        return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true, lastCheckedAt: stamp };
+      }
+      var local = (await localAll())[key];
+      if (local && local.identity !== key) { await clearLocal(key); local = null; }
+      if (local && (!memory || !memory.tree)) {
+        memory = local;
+        bodies = local.bodies || {};
+        texts = local.texts || {};
+        signatures = local.signatures || {};
+        index = local.index || null;
+      }
+      if (!force && local) {
+        try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) {}
+        var localStamp = await freshStamp(key, local);
+        scheduleStaleRefresh(localStamp, onUpdate);
+        return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true, lastCheckedAt: localStamp };
+      }
       if (inflight) {
         if (!force && inflight.identity === key) return inflight.promise;
         try { await inflight.promise; } catch (ignored) {}
-        return get(force, onUpdate);
+        return get(force, onUpdate, options);
       }
       var started = revision;
       var flight = { identity: key };
       flight.promise = (async function () {
+        var previous = memory && memory.identity === key ? memory : null;
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
-        });
+        }, { bodies: bodies, texts: texts, deferCollapsed: true, index: index,
+          signatures: signatures,
+          metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
+        mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [], cached: false };
         // Never replace a complete snapshot with a partial/error listing.
         // Explicit revocation of an item also invalidates the older snapshot.
-        if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discard();
+        if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
         if (!response.warnings.length) {
-          memory = { identity: key, rootId: response.rootId, tree: response.tree };
-          try { if (storage) await storage.set({ [KEY]: memory }); }
-          catch (ignored) {
-            // A failed replacement must not leave an older snapshot in session
-            // storage for the next worker lifetime.
-            try { if (storage) await storage.remove(KEY); } catch (ignoredAgain) {}
+          var treeSame = sameTree(previous, response.tree);
+          if (options.onlyIfChanged && sameLibrary(previous, response.tree, result.metadata, result.signatures, result.index)) {
+            // Nothing changed on Drive: keep the stored snapshot and only move
+            // the freshness stamp.
+            response.lastCheckedAt = await markFresh(key);
+            response.unchanged = true;
+          } else {
+            // The tree may be identical while a folder timestamp moved; the
+            // snapshot is still refreshed, but the user is not interrupted.
+            await writeSnapshot(key, response.rootId, response.tree, result.metadata);
+            response.lastCheckedAt = await markFresh(key);
+            response.unchanged = treeSame;
           }
-          if (started !== revision) { await discard(); throw new Error("Drive library changed while loading; refresh again."); }
+          if (started !== revision) { await clearSnapshot(); throw new Error("Drive library changed while loading; refresh again."); }
         }
+        // The panel shows when the library was last confirmed with Drive.
+        response.lastCheckedAt = response.lastCheckedAt || Date.now();
         return response;
       })();
       inflight = flight;
@@ -85,21 +357,35 @@
       catch (err) {
         // If Drive explicitly denies access, do not serve the old snapshot on
         // the next opening. A mere offline/timeout failure may keep it.
-        if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) await discard();
+        if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) await discardAll();
         throw err;
       } finally { if (inflight === flight) inflight = null; }
     }
 
+    // Called by the background idle alarm. It never reports progress to the
+    // panel and it only rewrites the cache when Drive reports a difference.
+    async function sync() {
+      if (inflight || silentTimer || mutating > 0) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
+      var response = await get(true, null, { onlyIfChanged: true });
+      if ((response.warnings || []).length) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
+      return { changed: response.unchanged === false, skipped: false,
+        tree: response.tree, rootId: response.rootId,
+        lastCheckedAt: response.lastCheckedAt || Date.now() };
+    }
+
     function mutate(fn) {
       var operation = mutations.then(async function () {
-        await invalidate();
-        try { return await fn(); }
-        finally { await invalidate(); }
+        mutating++;
+        try {
+          await invalidate();
+          try { return await fn(); }
+          finally { await invalidate(); }
+        } finally { mutating--; }
       });
       mutations = operation.catch(function () {});
       return operation;
     }
-    return { get: get, invalidate: invalidate, mutate: mutate };
+    return { get: get, sync: sync, invalidate: invalidate, mutate: mutate };
   }
-  return { create: create, KEY: KEY };
+  return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY, FRESH_MS: FRESH_MS, MAX_LOCAL: MAX_LOCAL };
 });

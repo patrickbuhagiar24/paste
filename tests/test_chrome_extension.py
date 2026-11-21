@@ -37,6 +37,8 @@ def test_manifest_permissions_are_minimal_and_documented():
     manifest = _manifest()
     assert set(manifest["permissions"]) == {
         "sidePanel",
+        "alarms",
+        "idle",
         "scripting",
         "activeTab",
         "clipboardWrite",
@@ -71,20 +73,85 @@ def test_picker_has_no_shortcut_escape_handler_or_context_menu():
     assert "pastex-open-panel" in (EXT / "content.js").read_text(encoding="utf-8")
 
 
-def test_snippet_cache_is_session_only_and_mutations_stay_in_drive():
+def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     manifest = _manifest()
     assert "storage" in manifest["permissions"]
     background = (EXT / "background.js").read_text(encoding="utf-8")
     cache = (EXT / "cache.js").read_text(encoding="utf-8")
     assert "chrome.storage.session" in background
-    assert "storage.local" not in background + cache
+    assert "chrome.storage.local" in background
     assert "storage.sync" not in background + cache
     assert "libraryCache.mutate" in background
     assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background
-    assert "PastexDrive.trashFile" in background and "PastexDrive.setOrder" in background
+    assert "PastexDrive.trashFile" in background and "PastexDrive.setIndex" in background
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert 'id="btn-insert"' not in panel
     assert 'id="selection-actions"' in panel
+
+
+def test_bodies_are_cached_by_their_content_hash():
+    # The body cache is addressed by the SHA-256 of the body, so an
+    # unchanged snippet is never downloaded again.
+    assert (EXT / "hash.js").is_file()
+    hashing = (EXT / "hash.js").read_text(encoding="utf-8")
+    assert "sha256Hex" in hashing
+    library = (EXT / "library.js").read_text(encoding="utf-8")
+    cache = (EXT / "cache.js").read_text(encoding="utf-8")
+    assert "PastexHash" in library or "require(\"./hash.js\")" in library
+    assert "sha256Checksum" in library, "Drive reports the checksum of a body"
+    assert "hash" in cache and "texts" in cache
+    # Every node keeps the signature of the metadata Drive reported for it.
+    assert "signatures" in library and "signatures" in cache
+
+
+def test_the_order_and_the_collapse_state_live_in_one_label():
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    library = (EXT / "library.js").read_text(encoding="utf-8")
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "pastex_index" in drive, "the root folder carries the central index"
+    assert "pastex_index" in library and "parseIndex" in library
+    assert "PastexDrive.setIndex" in background
+    assert "PastexDrive.setOrder" not in background, "the order is not written per item"
+
+
+def test_the_background_interval_grows_while_nothing_changes():
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "IDLE_MAX_PERIOD_MINUTES" in background
+    assert "adaptBackoff" in background
+    assert "syncPeriodMinutes" in background
+    # The idle gate and the alarm stay the only background triggers.
+    assert "chrome.idle.queryState" in background
+    assert "chrome.alarms.onAlarm.addListener" in background
+
+
+def test_the_panel_shows_the_last_check_and_keeps_the_manual_refresh():
+    panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+    assert 'id="last-checked"' in panel
+    assert "lastCheckedAt" in script
+    assert 'id="btn-sync"' in panel, "the manual refresh stays the fallback"
+    # The create buttons moved to the end of the toolbar.
+    toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
+    order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
+    assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]
+
+
+def test_background_sync_only_runs_while_the_user_is_away():
+    manifest = _manifest()
+    assert "alarms" in manifest["permissions"]
+    assert "idle" in manifest["permissions"]
+    background = (EXT / "background.js").read_text(encoding="utf-8")
+    cache = (EXT / "cache.js").read_text(encoding="utf-8")
+    # The alarm and idle listeners are registered at the top level so a
+    # terminated MV3 worker is woken up again.
+    assert "chrome.alarms.onAlarm.addListener" in background
+    assert "chrome.idle.onStateChanged.addListener" in background
+    assert "chrome.idle.queryState" in background
+    # An active user never triggers a background fetch.
+    assert 'state === "active"' in background
+    # The cache is only rewritten when Drive really reports a difference.
+    assert "onlyIfChanged" in cache
+    assert "sameLibrary" in cache
 
 
 def test_manifest_icons_exist_and_match_sizes():
@@ -347,7 +414,7 @@ def test_extension_readme_documents_setup_and_signing():
         "IndexedDB",
         "pastex-google-drive.json",
         "service-account.json",
-        "Choose manifest (.json)",
+        "The file picker opens directly",
         "only the three download URLs",
     ):
         assert required in readme, f"README misses {required!r}"
@@ -380,9 +447,12 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
         assert "~/.config/pastex" not in text
         assert "pastex-native-host" not in text
     html = (EXT / "sidepanel.html").read_text()
-    assert 'id="choose-manifest"' in html
+    assert 'id="btn-config"' in html
+    assert 'id="config-overlay"' not in html and 'id="choose-manifest"' not in html
     assert 'id="choose-folder"' not in html
-    assert "showOpenFilePicker" in (EXT / "sidepanel.js").read_text()
+    script = (EXT / "sidepanel.js").read_text()
+    assert '$("btn-config").addEventListener' in script
+    assert "showOpenFilePicker({" in script
     assert "showDirectoryPicker" not in (EXT / "sidepanel.js").read_text()
     assert "config-manifest.js" in html
     assert "config-manifest.js" in (EXT / "config-reader.html").read_text()
@@ -390,3 +460,21 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
     assert "indexedDB" in (EXT / "handle-store.js").read_text()
     assert "nativeMessaging" not in _manifest()["permissions"]
+
+
+def test_sidepanel_has_collapse_all_and_verbatim_insert():
+    html = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+    content = (EXT / "content.js").read_text(encoding="utf-8")
+    assert 'id="btn-collapse-all"' in html
+    assert "<footer" not in html
+    assert 'id="status"' in html and html.index('id="status"') < html.index("</header>")
+    assert "btn-collapse-all" in script
+    assert "Google Drive • session cache · " in script
+    assert "Session cache: " not in script
+    assert "Snippets loaded from session cache." not in script
+    assert "pastex_collapsed" in (EXT / "library.js").read_text(encoding="utf-8")
+    assert "pastex_collapsed" in (EXT / "drive.js").read_text(encoding="utf-8")
+    # Textarea/input insertion must use setRangeText, which keeps newlines.
+    assert "target.setRangeText(text, start, end, \"end\")" in content
+    assert 'typeof node.text === "string" ? node.text : ""' in script

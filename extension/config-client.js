@@ -14,11 +14,15 @@
     })();
     try { await pending; } finally { pending = null; }
   }
-  async function read(operation) {
+  async function read(operation, force) {
     await ensureDocument();
-    var response = await chrome.runtime.sendMessage({ target: "pastex-config-reader", operation: operation });
+    var response = await chrome.runtime.sendMessage({ target: "pastex-config-reader", operation: operation, force: !!force });
     if (!response || !response.ok) throw new Error((response && response.error) || "Configuration reader unavailable; open Config and choose the manifest again.");
     return response.data;
   }
-  root.PastexConfigClient = { readConfig: function () { return read("drive"); }, readSites: function () { return read("sites"); } };
+  root.PastexConfigClient = {
+    readConfig: function (force) { return read("drive", force); },
+    readSites: function (force) { return read("sites", force); },
+    invalidate: function () { return read("invalidate"); },
+  };
 })(self);

@@ -1,3 +1,75 @@
+pastex (2.10.2-1) unstable; urgency=medium
+
+  * Make the in-page launcher at the cursor stand out: a deep indigo disc
+    with a dark rim, a white inner ring, a coloured glow and a slow halo,
+    with larger rims for users who ask for more contrast.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:25:00 +0000
+
+pastex (2.10.1-1) unstable; urgency=medium
+
+  * Order the side panel toolbar as Collapse all, Select, Refresh, Config,
+    Text and Folder.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:05:00 +0000
+
+pastex (2.10.0-1) unstable; urgency=medium
+
+  * Cache snippet bodies by the SHA-256 of their content and keep a signature
+    per node, so a refresh only lists and downloads the branch that changed.
+  * Store the order and the collapse state of the library in one label on the
+    root folder instead of one write per item.
+  * Ask Drive only for the metadata the library uses, and retry a failed page
+    from the same listing cursor.
+  * Let the background check slow down while Drive keeps reporting the same
+    library, and speed up again as soon as a change is seen.
+  * Show when the library was last checked with Google Drive, and keep the
+    manual refresh button as the fallback.
+  * Move the new folder and new snippet buttons to the end of the toolbar.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:40:00 +0000
+
+pastex (2.9.0-1) unstable; urgency=medium
+
+  * Synchronize with Google Drive in the background only while the user is
+    away, and rewrite the cache only when Drive really reports a change.
+  * Keep the panel instant: a background refresh repaints an open panel
+    without a visible loading state.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 12:05:00 +0000
+
+pastex (2.8.0-1) unstable; urgency=medium
+
+  * Add a derived local snippet cache so the panel opens instantly after a
+    browser restart, with a silent background refresh for stale snapshots.
+  * Keep Drive as the source of truth and invalidate cached snapshots on writes.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 11:16:58 +0000
+
+pastex (2.7.1-1) unstable; urgency=medium
+
+  * Parallelize bulk Drive writes and reuse loaded properties to avoid an
+    extra GET for each order or collapse change.
+  * Reuse unchanged folder metadata so refreshes skip nested listings.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 11:09:56 +0000
+
+pastex (2.7.0-1) unstable; urgency=medium
+
+  * Open the JSON manifest picker directly from the Config button.
+  * Memoize linked configuration, reuse unchanged snippet text and defer
+    bodies inside collapsed folders for faster panel loads.
+  * Index snippet lookups and coalesce progress renders.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 10:49:58 +0000
+
+pastex (2.6.0-1) unstable; urgency=medium
+
+  * Persist folder collapse state alongside snippet ordering in Drive.
+  * Remove the side panel footer and keep brief messages in the Drive bar.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 02:02:32 +0000
+
 pastex (2.5.0-1) unstable; urgency=medium
 
   * Read configuration directly from a user-selected folder.

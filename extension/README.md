@@ -38,8 +38,8 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
    An empty list allows no sites. Use HTTP(S) origins only, without paths,
    ports, credentials or global wildcards. Wildcard subdomains include the
    base domain. If missing, invalid or inaccessible, the allowlist fails closed.
-4. Open the side panel, click **Config** then **Choose manifest (.json)**, and
-   select a local JSON file with exactly these three keys:
+4. Open the side panel and click **Config**. The file picker opens directly;
+   select a local JSON manifest file with exactly these three keys:
 
    ```json
    {
@@ -54,6 +54,8 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
 Chrome stores only the three download URLs in extension IndexedDB, never the
 downloaded JSON or the service-account key. Pastex fetches them into memory on
 demand. The links keep working across restarts as long as they stay downloadable.
+Snippet text is cached separately in `chrome.storage.local`, keyed by a
+SHA-256 hash of the configuration; credentials are never written there.
 
 After modifying site JSON, open **Config** again and reselect the manifest to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
@@ -65,12 +67,45 @@ to sign authentication requests to Google.
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
 Drive trash. After changes, Pastex reloads the library from Drive. The side
-panel uses an in-memory Chrome session cache: reopening it does not download
-the library again, and closing the browser clears the
-cache. The cache contains snippet text (not the service-account key) and is
-accessible to the extension, not websites. If the library exceeds Chrome's
+panel uses an in-memory Chrome session cache plus a derived local cache:
+reopening it does not download the library again, and the first open after a
+browser restart is served from `chrome.storage.local` before a silent refresh
+starts. A snapshot older than one minute refreshes in the background. The
+cache contains snippet text (not the service-account key) and is accessible to
+the extension, not websites. If the library exceeds Chrome's
 session-storage quota, Pastex falls back to the service worker's memory; the
 cache may then disappear when the worker stops.
+
+### Background synchronization
+
+Pastex never polls Drive while you work. The service worker watches the
+browser's idle state (`chrome.idle`) and an alarm (`chrome.alarms`);
+when there has been no keyboard or mouse input for a minute, or the screen is
+locked, it performs exactly one Drive check. The result is compared with the
+cached snapshot: an unchanged library only moves a small freshness stamp, and
+the snapshot itself is rewritten only when Drive really reports a difference.
+An open side panel is repainted from the fresh cache without a visible loading
+state. A panel operation in progress (a save, a reorder, a manual refresh)
+suppresses the background check, and the background check never writes to
+Drive.
+
+The interval between two checks adapts: it starts at two minutes, doubles
+after every pair of checks that finds no change, and stops at thirty minutes.
+A change returns it to the fast interval at once. The learned interval is
+stored in `chrome.storage.local`, so a restarted worker keeps it.
+
+A check asks Drive only for the metadata the library needs, and a listing
+walks the pages with Drive's own cursor, so a page that fails is retried from
+the same place instead of starting the folder over. Every node keeps a
+signature of the metadata Drive reported for it (name, type, timestamp, Drive's
+content checksum and labels). A node with the same signature is reused as it
+is, so only the branch that really changed is listed and downloaded again.
+Snippet bodies are stored under the SHA-256 of their content, which keeps
+them across a rebuild of the tree and recognizes an unchanged body even when
+its timestamp moved.
+
+The panel shows when the library was last confirmed with Google Drive, next to
+the drive status. Use **↻ Refresh** to check Drive right away.
 
 Cached content can be stale, including after a folder is changed or access is
 revoked elsewhere. Use **↻ Refresh** to fetch current Drive contents; explicit
@@ -82,10 +117,16 @@ invalidate the snapshot. No snippet changes are queued for offline sync.
 to move selected items within their own folders, and **Delete** to move them to
 Drive trash after confirmation. Click the folder arrow to expand or collapse it
 while selecting. Moving is disabled during search; clear the search first.
-Manual order is saved in each item's Google Drive `pastex_order` property, so
-other Pastex instances can see it after refreshing. Unranked new files follow
-ranked items in Drive's normal order. Concurrent reordering on different devices
-can overwrite the same metadata; refresh before editing shared lists.
+Manual order and the collapsed state of the folders are stored together in one
+Google Drive label, `pastex_index`, on the root folder of the library. One
+reorder or one **Collapse all** is therefore a single Drive write instead of
+one write per item, and the structure survives a panel reload, a browser
+restart and a move to another computer using the same Drive folder. Libraries
+that were ordered with earlier versions keep their per-item `pastex_order` and
+`pastex_collapsed` labels: they are still read, and the central label wins
+as soon as Pastex writes it. Unranked new files follow ranked items in Drive's
+normal order. Concurrent reordering on different devices can overwrite the
+same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
@@ -102,12 +143,29 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. On an allowed site, focus an editable field and click the floating
-**⚡** button to open the Pastex side panel. There is
+snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Refresh**,
+**Config**, **＋ Text** and **＋ Folder**. **Collapse all** folds every folder
+and clears the search first. The drive bar shows
+`Google Drive • session cache · N snippets` when the list came from the
+session or local cache; the label is kept for compatibility, and the moment of
+the last check with Drive is shown next to it.
+
+On an allowed site, focus an editable field and click the floating
+**⚡** button to open the Pastex side panel. The launcher is a deep indigo
+disc with a near-black rim, a white inner ring and a soft halo, so it reads
+at a glance on a light page, on a dark page and on a colourful one. The halo
+stops when the system asks for reduced motion, and the rim grows when the
+system asks for more contrast. `assets/launcher-preview.html` shows the
+launcher on all three backgrounds. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it; its row has **Rename**, **Edit**, and **Delete** actions. If no editable field is focused on an allowed page, it is copied
-to the clipboard. Restricted browser pages cannot receive scripts. Sites not
-listed in `pastex-sites.json` are not injected or targeted.
+to insert it; its row has **Rename**, **Edit**, and **Delete** actions. The
+complete snippet text is inserted verbatim, including newlines and trailing
+spaces, into textareas and editable fields; a single-line input cannot display
+line breaks. The allowlist is cached for 30 seconds so a click does not have to
+re-download the linked configuration; reselecting the manifest refreshes it
+immediately. If no editable field is focused on an allowed page, the text is
+copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
+not listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
@@ -146,7 +204,10 @@ signed package from the APT repository.
 The apt package ships `/usr/share/pastex/pastex.crx`, the unpacked extension,
 and external extension metadata for Chrome and Chromium. `external_crx`
 registers the CRX in `/usr/share/google-chrome/extensions` and
-`/usr/share/chromium/extensions`. It does not install a native host.
+`/usr/share/chromium/extensions`. It does not install a native host. Chrome
+reads those registration files when the browser process starts, not on every
+window close: after an upgrade, quit the browser completely (or reboot) before
+checking that the new extension version is active.
 
 CRX IDs come from the signing key. Configure the `PASTEX_CRX_PRIVATE_KEY` GitHub Actions secret for
 release CI (use `PASTEX_CRX_KEY` as the local build environment variable) and use the same key on every upgrade. Without it, local builds use
@@ -157,6 +218,8 @@ an update manifest; the package does not silently force-install extensions.
 
 Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site launcher; `storage` provides the temporary session
-cache; `clipboardWrite` is the fallback on approved sites; `offscreen` reads configuration and downloads manifest links in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites,
+cache; `alarms` and `idle` drive the background synchronization that runs only
+while the user is away; `clipboardWrite` is the fallback on approved sites;
+`offscreen` reads configuration and downloads manifest links in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites,
 the Google API endpoints and the manifest's Drive links; Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

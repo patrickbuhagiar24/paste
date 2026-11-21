@@ -59,6 +59,40 @@
     return groups;
   }
 
+  // Build once per tree update: search and id lookups then avoid repeated
+  // recursive walks and repeated lowercasing of every snippet body.
+  function createIndex(nodes) {
+    var byId = new Map(), texts = [], folders = [], lowered = [];
+    walk(nodes, function (node) {
+      byId.set(node.id, node);
+      if (node.kind === "folder") {
+        folders.push(node);
+      } else {
+        texts.push(node);
+        lowered.push({
+          node: node,
+          name: String(node.name || "").toLowerCase(),
+          text: String(node.text || "").toLowerCase(),
+        });
+      }
+    });
+    return {
+      byId: byId,
+      texts: texts,
+      folders: folders,
+      search: function (query) {
+        var q = String(query || "").trim().toLowerCase();
+        if (!q) return texts;
+        var names = [], contents = [];
+        lowered.forEach(function (entry) {
+          if (entry.name.indexOf(q) !== -1) names.push(entry.node);
+          else if (entry.text.indexOf(q) !== -1) contents.push(entry.node);
+        });
+        return names.concat(contents);
+      },
+    };
+  }
+
   function selectedRoots(nodes, selected) {
     var result = [];
     function visit(siblings) {
@@ -71,5 +105,5 @@
     return result;
   }
   return { walk: walk, flatten: flatten, findById: findById, search: search,
-    reorderGroups: reorderGroups, selectedRoots: selectedRoots };
+    createIndex: createIndex, reorderGroups: reorderGroups, selectedRoots: selectedRoots };
 });

@@ -51,15 +51,9 @@
       return false;
     }
     target.focus({ preventScroll: true });
-    // execCommand first: it preserves undo and notifies frameworks (React).
-    try {
-      if (document.execCommand("insertText", false, text)) {
-        return true;
-      }
-    } catch (ignored) {
-      /* fall through to the manual path */
-    }
     var tag = (target.tagName || "").toLowerCase();
+    // Inputs and textareas must keep the snippet byte-for-byte, including
+    // newlines and trailing spaces. execCommand can normalise or drop them.
     if (tag === "input" || tag === "textarea") {
       try {
         var start = target.selectionStart === null ? target.value.length : target.selectionStart;
@@ -70,6 +64,14 @@
       } catch (ignored) {
         return false;
       }
+    }
+    // Contenteditable: execCommand preserves undo and notifies frameworks.
+    try {
+      if (document.execCommand("insertText", false, text)) {
+        return true;
+      }
+    } catch (ignored) {
+      /* fall through to the manual path */
     }
     if (target.isContentEditable) {
       try {
@@ -99,11 +101,29 @@
     buttonHost.id = "pastex-float-host";
     var shadow = buttonHost.attachShadow({ mode: "closed" });
     var style = document.createElement("style");
+    // The launcher must read at a glance on any page: a deep indigo disc
+    // with a near-black rim, a white inner ring and a coloured glow. The
+    // white ring keeps it visible on dark pages, the dark rim on light ones.
     style.textContent =
-      ".pastex-float{position:fixed;z-index:2147483647;width:30px;height:30px;border-radius:50%;" +
-      "border:1px solid #9ec1e8;background:#e8f1fd;color:#174a7c;font-size:15px;line-height:1;" +
-      "cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.25);padding:0}" +
-      ".pastex-float:hover{background:#d3e5fb}";
+      ".pastex-float{position:fixed;z-index:2147483647;width:32px;height:32px;border-radius:50%;" +
+      "border:2px solid #101a3d;background:linear-gradient(180deg,#6366f1 0%,#3730a3 100%);" +
+      "color:#fff;font-size:17px;line-height:1;cursor:pointer;padding:0;" +
+      "font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;" +
+      "box-shadow:0 0 0 2px #fff,0 0 0 4px #101a3d,0 0 18px 4px rgba(99,102,241,.6)," +
+      "0 3px 10px rgba(0,0,0,.4);transition:transform .12s ease,background .12s ease}" +
+      ".pastex-float:hover{background:linear-gradient(180deg,#818cf8 0%,#4338ca 100%);" +
+      "transform:scale(1.08)}" +
+      ".pastex-float:active{transform:scale(.94)}" +
+      ".pastex-float:focus-visible{outline:3px solid #facc15;outline-offset:3px}" +
+      // A slow halo around the button marks it as the Pastex launcher.
+      ".pastex-float::after{content:'';position:absolute;inset:-2px;border-radius:50%;" +
+      "border:2px solid rgba(99,102,241,.85);pointer-events:none;" +
+      "animation:pastex-halo 2.4s ease-out infinite}" +
+      "@keyframes pastex-halo{0%{transform:scale(1);opacity:.85}" +
+      "70%{transform:scale(2);opacity:0}100%{transform:scale(2);opacity:0}}" +
+      "@media (prefers-reduced-motion: reduce){.pastex-float::after{animation:none;opacity:0}}" +
+      "@media (prefers-contrast: more){.pastex-float{border-width:3px;" +
+      "box-shadow:0 0 0 3px #fff,0 0 0 6px #000,0 0 22px 6px rgba(99,102,241,.8)}}";
     var button = document.createElement("button");
     button.className = "pastex-float";
     button.title = "Open Pastex side panel";
@@ -132,8 +152,9 @@
     if (!button) {
       return;
     }
-    var x = Math.min(window.innerWidth - 38, Math.max(4, rect.right - 34));
-    var y = Math.min(window.innerHeight - 38, Math.max(4, rect.bottom - 38));
+    // The button sits over the bottom right corner of the focused field.
+    var x = Math.min(window.innerWidth - 40, Math.max(4, rect.right - 36));
+    var y = Math.min(window.innerHeight - 40, Math.max(4, rect.bottom - 40));
     button.style.left = x + "px";
     button.style.top = y + "px";
     button.style.display = "block";
