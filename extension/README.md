@@ -67,14 +67,26 @@ to sign authentication requests to Google.
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
 Drive trash. After changes, Pastex reloads the library from Drive. The side
-panel uses an in-memory Chrome session cache plus a derived local cache:
-reopening it does not download the library again, and the first open after a
-browser restart is served from `chrome.storage.local` before a silent refresh
-starts. A snapshot older than one minute refreshes in the background. The
-cache contains snippet text (not the service-account key) and is accessible to
-the extension, not websites. If the library exceeds Chrome's
-session-storage quota, Pastex falls back to the service worker's memory; the
-cache may then disappear when the worker stops.
+panel uses an in-memory Chrome session cache plus a derived local cache that
+stores the **whole** library, folders and every body (a collapsed folder is
+not deferred when the cache is written). Reopening the panel therefore shows
+every snippet without a Drive request, and opening a snippet never waits for
+a download. The first open after a browser restart is served from
+`chrome.storage.local` before a silent refresh starts.
+
+`storage.local` is bounded, so a write degrades in stages instead of failing
+silently: the complete snapshot first, then the same snapshot with each body
+kept once, then only the newest snapshot. A complete snapshot is never
+replaced by a degraded one. A cached open reports how many rows still miss a
+body; the panel shows the list at once and the worker fills those rows without
+listing Drive again, then repaints. The cache contains snippet text (not the
+service-account key) and is accessible to the extension, not websites.
+
+A background check is also cheaper than before: a metadata-only pass
+(`verify`) compares folder and item signatures and reads the timing label
+without downloading a body, and only a real difference falls back to the full
+listing. The panel always paints from the cache in the same frame; Drive is
+contacted in the background, never in front of the next click.
 
 ### Background synchronization
 
@@ -144,14 +156,31 @@ needed to keep the same extension identity across upgrades.
 
 Open the side panel with the toolbar icon to create, edit, search and organize
 snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Refresh**,
-**Config**, **＋ Text** and **＋ Folder**. **Collapse all** folds every folder
-and clears the search first. The drive bar shows
+**Config**, **＋ Text** and **＋ Folder**. **＋ Text** and **＋ Folder** are
+filled primary buttons; **Refresh** takes that role while Drive is
+unavailable, because it is the action that helps then. **Collapse all** folds
+every folder and clears the search first. The drive bar shows a state dot and
 `Google Drive • session cache · N snippets` when the list came from the
 session or local cache; the label is kept for compatibility, and the moment of
 the last check with Drive is shown next to it.
 
+The panel is built to be readable at a glance. Every text pair reaches WCAG
+AA (body text and row labels reach AAA), buttons have a visible outline and
+the selected row is marked by a strong tint, a filled accent bar and a
+heavier label. Actions have one meaning each: **Save**, **＋ Text** and
+**＋ Folder** are filled primary buttons, **Delete** is filled red and turns
+red under the pointer, and a disabled primary steps back to the plain
+outline. Row actions (rename, edit, delete) appear on hover, on the selected
+row and on keyboard focus. A dark theme follows the system preference, and
+`prefers-contrast: more` and `prefers-reduced-motion: reduce` are honoured.
+The palette and these rules are checked numerically in
+`extension/test/appearance.test.js`.
+
 On an allowed site, focus an editable field and click the floating
-**⚡** button to open the Pastex side panel. The launcher is a deep indigo
+**⚡** button to open the Pastex side panel. From Chrome 141 the same button
+is a toggle: while the panel is open it reads **×** and closes it again.
+Older Chrome keeps the open-only behavior, and the soundness of the click is
+unchanged (the same short-lived capability authorizes either action). The launcher is a deep indigo
 disc with a near-black rim, a white inner ring and a soft halo, so it reads
 at a glance on a light page, on a dark page and on a colourful one. The halo
 stops when the system asks for reduced motion, and the rim grows when the

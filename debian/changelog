@@ -1,3 +1,43 @@
+pastex (2.12.0-1) unstable; urgency=medium
+
+  * Turn the in-page launcher into a toggle: on Chrome 141+ the same button
+    that opens the side panel closes it too, with the same short-lived
+    capability and a visible Close/Open glyph.
+  * Add a Close button to the panel itself when the browser supports
+    sidePanel.close().
+  * Make the cursor and highlight states unmistakable: a heavier pointer
+    border on hovered rows, a stronger focus halo for buttons, and a column
+    guide line for nested rows.
+  * Cache the whole library: collapsed folders are no longer deferred when the
+    snapshot is written, so every snippet is served from the cache.
+  * Degrade gracefully under the storage quota: complete snapshot, then
+    bodies stored once, then only the newest snapshot; never replace a
+    complete snapshot with a degraded one.
+  * Report rows that are still missing a body, fill them in the worker
+    without listing Drive, and repaint once.
+  * Verify a cached library with a metadata-only pass instead of a full
+    listing, so an unchanged library costs a fraction of the requests.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Sat, 21 Nov 2026 21:40:00 +0000
+
+pastex (2.11.0-1) unstable; urgency=medium
+
+  * Give the side panel a contrast-checked palette: every text pair reaches
+    WCAG AA, the selected row gets a strong tint with an accent bar, and
+    buttons have a visible outline instead of a near-white border.
+  * Separate the actions by meaning: Save, Text and Folder are filled
+    primary buttons, Delete is red, and a disabled primary steps back to a
+    plain outline. Refresh is primary while Drive is unavailable.
+  * Add a dark theme that follows the system preference, stronger borders
+    for prefers-contrast, and no motion for prefers-reduced-motion.
+  * Show the Drive state as a dot plus text, colour the status line by
+    outcome, and mark the selection count as a filled chip.
+  * Check the palette and the state rules numerically in
+    extension/test/appearance.test.js.
+  * Align the in-page launcher with the panel's indigo.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Sat, 21 Nov 2026 20:10:00 +0000
+
 pastex (2.10.2-1) unstable; urgency=medium
 
   * Make the in-page launcher at the cursor stand out: a deep indigo disc

@@ -20,7 +20,8 @@ class Element {
   }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
   get firstChild() { return this.children[0]; }
-  setAttribute() {}
+  setAttribute(name, value) { this[name] = value; }
+  removeAttribute(name) { delete this[name]; }
   querySelector() { return this.paragraph || (this.paragraph = new Element("p")); }
   addEventListener(name, fn) { this.listeners[name] = fn; }
   focus() {}
@@ -28,7 +29,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected", "btn-close-panel"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -73,7 +74,8 @@ function panelHarness(fail, options = {}) {
       pickerCalls++;
       return options.manifestPicker ? options.manifestPicker(opts) : [{ getFile: async () => ({ name: "config.json", text: async () => "{}" }) }];
     },
-    confirm: () => options.confirm !== false, setTimeout, clearTimeout };
+    confirm: () => options.confirm !== false, setTimeout, clearTimeout,
+    addEventListener() {}};
   let progress = () => {};
   let cache;
   const runtime = {
@@ -342,7 +344,8 @@ test("a background sync notification repaints the panel from the cache", async (
 test("the toolbar moves the create buttons to the end", () => {
   const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
   const toolbar = html.split('<div class="toolbar"')[1].split("</div>")[0];
-  const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1]);
+  const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1])
+    .filter((id) => id !== "btn-close-panel");
   assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]);
 });
 
@@ -381,4 +384,35 @@ test("the manual refresh button is still the fallback for a stale library", asyn
   elements["btn-sync"].listeners.click();
   await settled();
   assert.ok(messages.some((message) => message.type === "pastex-panel-library" && message.force === true));
+});
+
+test("a cached open with a row missing its body asks the worker to fill it", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "" }];
+  const { elements, messages } = panelHarness(false, {
+    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], pending: 1 } },
+  });
+  await settled();
+  await settled();
+  assert.ok(messages.some((m) => m.type === "pastex-panel-fill"),
+    "the panel must ask for the rows the snapshot is missing");
+  assert.match(allText(elements.tree), /Alpha/, "the list is shown before the fill");
+});
+
+test("a complete cached open does not ask for a fill", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
+  const { messages } = panelHarness(false, {
+    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], pending: 0 } },
+  });
+  await settled();
+  await settled();
+  assert.equal(messages.filter((m) => m.type === "pastex-panel-fill").length, 0);
+});
+
+test("the panel offers Close only when the browser can close a side panel", async () => {
+  const script = fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8");
+  assert.match(script, /typeof chrome\.sidePanel\.close === "function"/,
+    "closing is feature-detected, because sidePanel.close() is Chrome 141+");
+  const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
+  assert.ok(/<button id="btn-close-panel"[^>]*hidden/.test(html),
+    "the button starts hidden and is revealed only when usable");
 });

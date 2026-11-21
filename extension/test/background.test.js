@@ -14,8 +14,9 @@ function settle(ms) {
 }
 
 
-function harness(home, unavailable, shared) {
+function harness(home, unavailable, shared, closeUnsupported) {
   const listeners = {};
+  const closed = [];
   const event = (name) => ({ addListener(fn) { listeners[name] = fn; } });
   let launches = 0;
   let registered = [];
@@ -67,9 +68,12 @@ function harness(home, unavailable, shared) {
         executeScript: async () => { injected++; }, insertCSS: async () => {},
       },
       tabs: { get: async (id) => ({ id, url: id === 1 ? "https://allowed.example/path" : "https://blocked.example/" }),
+        query: async () => [{ id: 1, url: "https://allowed.example/path" }],
         sendMessage: async () => { throw new Error("no receiver"); } },
       alarms, idle: idleApi,
-      action: { onClicked: event("action") }, sidePanel: { open: (options) => { opened.push(options); return Promise.resolve(); } },
+      action: { onClicked: event("action") },
+      sidePanel: Object.assign({ open: (options) => { opened.push(options); return Promise.resolve(); } },
+        closeUnsupported ? {} : { close: (options) => { closed.push(options); return Promise.resolve(); } }),
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
     crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL, console: { warn() {} },
@@ -81,7 +85,7 @@ function harness(home, unavailable, shared) {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ext, "background.js"), "utf8"), context);
-  return { listeners, context, listenersForApis, opened, alarmCalls,
+  return { listeners, context, listenersForApis, opened, closed, alarmCalls,
     set idle(value) { idleState = value; },
     get launches() { return launches; },
     get registered() { return registered; }, get injected() { return injected; } };
@@ -454,4 +458,70 @@ test("the growing interval is kept when the worker restarts", async () => {
       .map((call) => call.options.periodInMinutes);
     assert.ok(kept.includes(4), "the stored interval is used again");
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+// --- the in-page launcher toggles the panel -------------------------------
+
+function panelScenario(closeUnsupported) {
+  const browser = harness(os.tmpdir(), true, undefined, closeUnsupported);
+  browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked pastex-sites.json" });
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  const sender = { id: "abc", tab: { id: 1, windowId: 8, url: "https://allowed.example/path" }, frameId: 0, url: "https://allowed.example/path" };
+  const ask = (message) => new Promise((resolve) => browser.listeners.message(message, sender, resolve));
+  return { browser, sender, ask };
+}
+
+test("the launcher receives a capability that can close the panel when Chrome supports it", async () => {
+  const { browser, ask } = panelScenario(false);
+  await browser.listeners.startup();
+  await settle();
+  const authorization = await ask({ type: "pastex-site-allowed" });
+  assert.equal(authorization.allowed, true);
+  assert.equal(authorization.toggle, true, "Chrome 141+ gets the toggle");
+  const closed = await ask({ type: "pastex-open-panel", action: "close", capability: authorization.capability });
+  assert.equal(closed.ok, true);
+  assert.equal(browser.closed.length, 1, "the same button closes the panel again");
+  assert.equal(browser.closed[0].windowId, 8);
+
+  const older = panelScenario(true);
+  await older.browser.listeners.startup();
+  await settle();
+  const oldAuthorization = await older.ask({ type: "pastex-site-allowed" });
+  assert.equal(oldAuthorization.toggle, false, "older Chrome is told there is no close()");
+  const refused = await older.ask({ type: "pastex-open-panel", action: "close", capability: oldAuthorization.capability });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, "unsupported");
+});
+
+test("closing needs the same capability as opening", async () => {
+  const { browser, ask } = panelScenario(false);
+  await browser.listeners.startup();
+  await settle();
+  const authorization = await ask({ type: "pastex-site-allowed" });
+  const forged = await ask({ type: "pastex-open-panel", action: "close", capability: "not-the-token" });
+  assert.equal(forged.ok, false);
+  assert.equal(browser.closed.length, 0, "a stolen or stale token cannot close the panel");
+  // A page that is not on the allowlist cannot close it either.
+  const other = { id: "abc", tab: { id: 2, windowId: 8, url: "https://blocked.example/" }, frameId: 0, url: "https://blocked.example/" };
+  const denied = await new Promise((resolve) => browser.listeners.message(
+    { type: "pastex-open-panel", action: "close", capability: authorization.capability }, other, resolve));
+  assert.equal(denied.ok, false);
+});
+
+test("the open panel tells the page to switch the launcher to close", async () => {
+  const { browser, sender } = panelScenario(false);
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const sent = [];
+  browser.context.chrome.tabs.sendMessage = async (tabId, message) => { sent.push({ tabId, message }); };
+  const response = await new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-state", open: true }, panel, resolve));
+  await settle();
+  assert.equal(response.ok, true);
+  assert.equal(sent[0].tabId, 1);
+  assert.equal(sent[0].message.type, "pastex-panel-state");
+  assert.equal(sent[0].message.open, true);
+  // A content script cannot claim the panel state.
+  const spoof = await new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-state", open: true }, sender, resolve));
+  assert.equal(spoof.ok, false);
 });

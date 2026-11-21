@@ -6,10 +6,19 @@
  * keyed by a SHA-256 identity and silently refreshed when it is stale, while
  * mutations invalidate both copies before and after the write.
  *
+ * The stored snapshot is the whole library (folders and every body), so an
+ * open panel never waits for Drive. storage.local is bounded, so the write
+ * degrades in stages instead of failing silently: the complete snapshot of
+ * this library first, then the same snapshot with each body kept once, then
+ * only the newest snapshot. The panel counts the rows that still need a body
+ * so they can be filled while the machine is idle. A library that does not
+ * fit at all falls back to the worker's session memory, as before.
+ *
  * Verified text bodies are addressed by the SHA-256 of their content and
  * survive tree invalidations, so an explicit refresh does not re-download
  * unchanged files. Every node also keeps the signature of the metadata Drive
- * reported for it, so a refresh only rebuilds the branch that changed.
+ * reported for it, so a refresh only rebuilds the branch that changed, and a
+ * cached snapshot can be confirmed with metadata alone (verify).
  *
  * The background (idle) sync loads Drive once and compares the result with the
  * stored snapshot. The snapshot is only rewritten when Drive really reports a
@@ -162,11 +171,13 @@
         metadata: metadata, savedAt: Date.now() };
     }
 
-    async function writeSnapshot(key, rootId, tree, metadata) {
-      var snap = snapshot(key, rootId, tree, metadata);
-      memory = snap;
-      try { if (storage) await storage.set({ [KEY]: snap }); }
-      catch (ignored) { try { if (storage) await storage.remove(KEY); } catch (ignoredAgain) {} }
+    // The local quota is shared by every snapshot and by whatever else the
+    // extension stores, so a write may not fit. Three candidates are tried in
+    // order: the complete snapshot, then the same snapshot with the bodies'
+    // text kept only once, then only the newest snapshot. A complete snapshot
+    // is never replaced by a degraded one, so a small library cannot be
+    // knocked out of the cache by a large one.
+    async function writeLocal(key, snap) {
       var store = localStore();
       if (!store) return;
       try {
@@ -177,7 +188,89 @@
         });
         keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
         await store.set({ [LKEY]: all });
-      } catch (ignored) { /* a full local cache must never block Drive */ }
+      } catch (ignored) {
+        // The candidate with the fewest bytes that still describes the library
+        // the same way.
+        try { await store.set({ [LKEY]: { [key]: compactSnapshot(snap) } }); }
+        catch (ignoredAgain) { try { await store.set({ [LKEY]: { [key]: snap } }); } catch (ignoredThird) { /* session memory only */ } }
+      }
+    }
+
+    // The inline text of a text node duplicates texts[hash]; the loader reads
+    // a missing node text back from texts through the body entry. Nested
+    // folders are stripped too, since most of the library lives there.
+    function compactSnapshot(snap) {
+      var copy = Object.assign({}, snap);
+      copy.tree = (snap.tree || []).map(strip);
+      function strip(node) {
+        var clone = Object.assign({}, node);
+        if (clone.kind === "text" && clone.hash) delete clone.text;
+        if (clone.children) clone.children = clone.children.map(strip);
+        return clone;
+      }
+      return copy;
+    }
+
+    async function writeSnapshot(key, rootId, tree, metadata) {
+      var snap = snapshot(key, rootId, tree, metadata);
+      memory = snap;
+      try { if (storage) await storage.set({ [KEY]: snap }); }
+      catch (ignored) { try { if (storage) await storage.remove(KEY); } catch (ignoredAgain) {} }
+      await writeLocal(key, snap);
+    }
+
+    // The rows of a tree, in order, for the helpers below.
+    function eachNode(tree, visit) {
+      (function walk(nodes) {
+        (nodes || []).forEach(function (node) {
+          visit(node);
+          if (node.kind === "folder") walk(node.children);
+        });
+      })(tree || []);
+    }
+
+    // A row is served by the cache when it points at a body the snapshot
+    // stores: a hash, or inline text that can be hashed on the spot.
+    function resolvedText(node, storedTexts) {
+      if (typeof node.text === "string" && node.text) return node.text;
+      if (typeof node.hash === "string" && node.hash && storedTexts && storedTexts[node.hash] !== undefined) {
+        return storedTexts[node.hash];
+      }
+      return "";
+    }
+
+    function needsBody(node, storedTexts) {
+      if (!node || node.kind !== "text" || node.loadError || node.deferred) return false;
+      return !resolvedText(node, storedTexts);
+    }
+
+    // Count the rows a snapshot does not serve yet, so the panel can say so.
+    function pendingCount(tree, storedTexts) {
+      var count = 0;
+      eachNode(tree, function (node) { if (needsBody(node, storedTexts)) count++; });
+      return count;
+    }
+
+    // Called while the machine is idle. It fills the rows a stored snapshot
+    // could not download, without listing Drive again, and rewrites the
+    // snapshot so the next open is complete. Only the panel's cache is
+    // touched; the Drive library itself is never written here.
+    async function fill() {
+      var key;
+      try { key = await identity(); } catch (ignored) { return { filled: 0, skipped: true, pending: 0 }; }
+      var saved = await readStored();
+      if (!saved || saved.identity !== key || !saved.tree) return { filled: 0, skipped: true, pending: 0 };
+      var missing = [];
+      eachNode(saved.tree, function (node) { if (needsBody(node, texts)) missing.push(node); });
+      if (!missing.length) return { filled: 0, skipped: false, pending: 0 };
+      var result = await library.fillMissing(native, drive, saved.tree, { bodies: bodies, texts: texts });
+      bodies = result.bodies;
+      texts = result.texts;
+      if (result.filled > 0) {
+        mergeResult({ bodies: bodies, texts: texts });
+        await writeSnapshot(key, saved.rootId, saved.tree, saved.metadata);
+      }
+      return { filled: result.filled, skipped: false, pending: pendingCount(saved.tree, texts) };
     }
 
     function forceRefreshPending(stamp) {
@@ -295,7 +388,9 @@
       var stamp = await freshStamp(key, saved);
       if (!force && saved) {
         scheduleStaleRefresh(stamp, onUpdate);
-        return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true, lastCheckedAt: stamp };
+        var storedTexts = saved.texts || texts || {};
+        return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true,
+          lastCheckedAt: stamp, pending: pendingCount(saved.tree, storedTexts) };
       }
       var local = (await localAll())[key];
       if (local && local.identity !== key) { await clearLocal(key); local = null; }
@@ -310,7 +405,8 @@
         try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) {}
         var localStamp = await freshStamp(key, local);
         scheduleStaleRefresh(localStamp, onUpdate);
-        return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true, lastCheckedAt: localStamp };
+        return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true,
+          lastCheckedAt: localStamp, pending: pendingCount(local.tree, texts) };
       }
       if (inflight) {
         if (!force && inflight.identity === key) return inflight.promise;
@@ -323,12 +419,13 @@
         var previous = memory && memory.identity === key ? memory : null;
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
-        }, { bodies: bodies, texts: texts, deferCollapsed: true, index: index,
+        }, { bodies: bodies, texts: texts, deferCollapsed: false, index: index,
           signatures: signatures,
           metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
         mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
-        var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [], cached: false };
+        var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [],
+          cached: false, pending: pendingCount(result.tree, texts) };
         // Never replace a complete snapshot with a partial/error listing.
         // Explicit revocation of an item also invalidates the older snapshot.
         if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
@@ -370,7 +467,53 @@
       if ((response.warnings || []).length) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
       return { changed: response.unchanged === false, skipped: false,
         tree: response.tree, rootId: response.rootId,
-        lastCheckedAt: response.lastCheckedAt || Date.now() };
+        lastCheckedAt: response.lastCheckedAt || Date.now(),
+        pending: response.pending || 0 };
+    }
+
+    // A metadata-only check of a cached snapshot: it lists the folders and
+    // compares signatures without downloading one body, reports how many rows
+    // would change, and only then asks for the full listing. A library that
+    // did not change therefore costs a fraction of a full load.
+    async function verify() {
+      var idle = { checked: false, changed: false, skipped: true, lastCheckedAt: 0, pending: 0 };
+      if (inflight || silentTimer || mutating > 0) return idle;
+      var key;
+      try { key = await identity(); } catch (ignored) { return idle; }
+      var saved = await readStored();
+      if (!saved || saved.identity !== key || !saved.tree || !saved.signatures) {
+        return { checked: false, changed: false, skipped: true, lastCheckedAt: 0,
+          pending: pendingCount(saved && saved.tree, (saved && saved.texts) || texts) };
+      }
+      var started = revision;
+      var session;
+      try {
+        session = await library.connect(native, drive);
+        var listings = await library.verifyTree(drive, session, {
+          signatures: saved.signatures, metadata: saved.metadata || {}, tree: saved.tree,
+          bodies: saved.bodies || {}, texts: saved.texts || {}, index: saved.index,
+        });
+        if (started !== revision) return idle;
+        var changed = signaturesSignature(listings.signatures) !== signaturesSignature(saved.signatures) ||
+          indexSignature(listings.index) !== indexSignature(saved.index);
+        if (changed) {
+          // The panel should reload from Drive: same shape as sync().
+          var full = await get(true, null, { onlyIfChanged: true });
+          return { checked: true, changed: full.unchanged === false, skipped: false,
+            lastCheckedAt: full.lastCheckedAt || Date.now(), pending: full.pending || 0 };
+        }
+      } catch (err) {
+        // A folder read failure during the check is not a change; the next
+        // idle check tries again.
+        if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) throw err;
+        return idle;
+      }
+      // Nothing changed: the freshness stamp moves and any body the snapshot
+      // is still missing is filled now that the tree is known to be stable.
+      var stamp = await markFresh(key);
+      var filled = await fill();
+      return { checked: true, changed: false, skipped: false, lastCheckedAt: stamp,
+        filled: filled.filled || 0, pending: filled.pending || 0 };
     }
 
     function mutate(fn) {
@@ -385,7 +528,8 @@
       mutations = operation.catch(function () {});
       return operation;
     }
-    return { get: get, sync: sync, invalidate: invalidate, mutate: mutate };
+    return { get: get, sync: sync, verify: verify, fill: fill,
+      pending: pendingCount, invalidate: invalidate, mutate: mutate };
   }
   return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY, FRESH_MS: FRESH_MS, MAX_LOCAL: MAX_LOCAL };
 });
