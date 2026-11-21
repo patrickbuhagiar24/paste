@@ -2,6 +2,7 @@
 const assert = require("node:assert/strict");
 const { webcrypto } = require("node:crypto");
 const Cache = require("../cache.js");
+const Library = require("../library.js");
 
 function setup() {
   const data = {};
@@ -365,4 +366,110 @@ test("a changed node signature refreshes the snapshot without disturbing the pan
   const result = await cache.sync();
   assert.equal(result.changed, false, "the visible tree did not change");
   assert.equal(x.data[Cache.KEY].signatures.item, "two", "the new signature is stored");
+});
+
+// --- the stored snapshot is the whole library ------------------------------
+
+function nestedWorld() {
+  const data = {}, localData = {};
+  const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "a", private_key: "k" } };
+  const area = (store) => ({
+    async get(key) { return { [key]: store[key] }; },
+    async set(values) { Object.assign(store, structuredClone(values)); },
+    async remove(key) { delete store[key]; },
+  });
+  const sessionArea = area(data), localArea = area(localData);
+  let downloads = 0, listings = 0;
+  const drive = {
+    FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
+    parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
+    getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root", properties: {} }),
+    listChildren: async (token, parent) => {
+      listings++;
+      return parent === "root"
+        ? [{ id: "f1", name: "F", mimeType: "application/vnd.google-apps.folder", properties: { pastex_collapsed: "1" } }]
+        : [{ id: "t2", name: "Two.txt", mimeType: "text/plain", modifiedTime: "m2" }];
+    },
+    downloadText: async (token, id) => { downloads++; return "body of " + id; },
+  };
+  const native = { readConfig: async () => structuredClone(config) };
+  const make = () => Cache.create(native, drive, Library, sessionArea, webcrypto, localArea);
+  return { data, localData, sessionArea, localArea, make,
+    get downloads() { return downloads; }, get listings() { return listings; } };
+}
+
+test("a cold load stores every body, including collapsed folders", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  const first = await cache.get(false);
+  assert.equal(first.pending, 0);
+  const snapshot = w.data[Cache.KEY];
+  assert.ok(Object.values(snapshot.texts).includes("body of t2"),
+    "a collapsed folder is cached instead of deferred");
+  assert.equal(w.downloads, 1);
+});
+
+test("a cached open serves every row without a Drive request", async () => {
+  const w = nestedWorld();
+  await w.make().get(false);
+  const downloads = w.downloads, listings = w.listings;
+  const reopened = await w.make().get(false);
+  assert.equal(reopened.cached, true);
+  assert.equal(reopened.pending, 0);
+  assert.equal(reopened.tree[0].children[0].text, "body of t2");
+  assert.equal(w.downloads, downloads, "opening from the cache downloads nothing");
+  assert.equal(w.listings, listings, "opening from the cache lists nothing");
+});
+
+test("a metadata-only verify confirms an unchanged library without a body download", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const downloads = w.downloads;
+  const result = await cache.verify();
+  assert.equal(result.checked, true);
+  assert.equal(result.changed, false);
+  assert.equal(w.downloads, downloads, "verification must not download a body");
+});
+
+test("a snapshot missing a body reports it, and the fill pass restores it", async () => {
+  const w = nestedWorld();
+  await w.make().get(false);
+  delete w.data[Cache.KEY];
+  const key = Object.keys(w.localData[Cache.LKEY])[0];
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY][key];
+  // Simulate a degraded write: the row survives, its body does not.
+  stored.texts = {};
+  delete stored.tree[0].children[0].text;
+  delete stored.tree[0].children[0].hash;
+  await w.localArea.set({ [Cache.LKEY]: { [key]: stored } });
+  const cache = w.make();
+  const cached = await cache.get(false);
+  assert.equal(cached.pending, 1, "the panel is told which rows are missing a body");
+  const filled = await cache.fill();
+  assert.equal(filled.filled, 1);
+  assert.equal(filled.pending, 0);
+  assert.equal((await w.localArea.get(Cache.LKEY))[Cache.LKEY][key].texts[
+    Object.keys((await w.localArea.get(Cache.LKEY))[Cache.LKEY][key].texts)[0]], "body of t2");
+});
+
+test("a complete snapshot is not replaced by a degraded one when the quota is tight", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  // The next write cannot fit: the writer must keep a usable snapshot.
+  const original = w.localArea.set;
+  let writes = 0;
+  w.localArea.set = async (values) => {
+    writes++;
+    if (writes === 1) throw new Error("QUOTA_BYTES quota exceeded");
+    return original(values);
+  };
+  await cache.get(true);
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY];
+  assert.ok(stored, "a failed complete write still leaves a snapshot");
+  const rows = [].concat(...Object.values(stored).map((snapshot) =>
+    (snapshot.tree || []).flatMap((node) => node.children || [])));
+  assert.ok(rows.every((node) => node.kind !== "text" || node.hash || node.text),
+    "the degraded snapshot still describes every row");
 });

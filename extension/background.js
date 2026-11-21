@@ -79,6 +79,17 @@ function idleState() {
   });
 }
 
+// The cached snapshot may miss a few bodies (quota, an older snapshot). Once
+// they are filled in the worker, the open panel can repaint from the complete
+// snapshot; nothing is posted when the check filled nothing.
+function notifyPanelsFilled(filled) {
+  if (!filled) return;
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ filled: true }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
 // Notify an open panel that the background sync found new content, so it can
 // repaint from the (already fresh) cache without another Drive round trip.
 function notifyPanelsChanged(lastCheckedAt) {
@@ -149,13 +160,18 @@ async function runIdleSync(assumeIdle) {
   if (panelBusy()) return;
   idleSyncRunning = true;
   try {
-    var result = await libraryCache.sync();
+    // A metadata-only check confirms an unchanged library without downloading
+    // a body; only a real difference falls back to the full listing.
+    var result = await libraryCache.verify();
+    if (result && result.skipped) result = await libraryCache.sync();
     nextSyncAt = 0;
     // A skipped check never touched Drive, so it does not move the interval.
     if (result && !result.skipped) {
       adaptBackoff(!!result.changed);
       if (result.changed) notifyPanelsChanged(result.lastCheckedAt);
     }
+    // The panel can be told when the stored snapshot became complete again.
+    if (result) notifyPanelsFilled(result.filled);
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
@@ -289,6 +305,13 @@ async function messageTab(tabOrId, message) {
   }
 }
 
+// Best effort: the page may have no launcher, and that is not an error.
+async function messageToLauncher(tab, message) {
+  if (!tab || typeof tab.id !== "number") return;
+  try { await chrome.tabs.sendMessage(tab.id, message); }
+  catch (ignored) { /* no content script in this tab */ }
+}
+
 async function insertIntoActiveTab(id, text) {
   var tab = await activeTab();
   if (!tab) {
@@ -404,6 +427,13 @@ chrome.action.onClicked.addListener(async function (tab) {
   }
 });
 
+// Content scripts must authenticate on an allowed site before opening or
+// closing a panel. Closing exists only from Chrome 141, so the sender is told
+// whether a toggle is possible instead of guessing.
+function panelToggleSupported() {
+  return !!(chrome.sidePanel && typeof chrome.sidePanel.close === "function");
+}
+
 // Content scripts must authenticate on an allowed site before opening a panel.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
@@ -416,6 +446,19 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-open-panel") {
     if (!sender || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0) {
       sendResponse({ ok: false }); return false;
+    }
+    // The launcher asks the worker to close the panel when the request comes
+    // from the same page that holds the open panel.
+    if (message.action === "close") {
+      var closing = panelGrants.get(grantKey(sender));
+      if (!closing || closing.token !== message.capability || closing.url !== sender.url ||
+          closing.expires < Date.now() || closing.revision !== siteRevision) {
+        sendResponse({ ok: false }); return false;
+      }
+      if (!panelToggleSupported()) { sendResponse({ ok: false, reason: "unsupported" }); return false; }
+      chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true, closed: true }); })
+        .catch(function () { sendResponse({ ok: false }); });
+      return true;
     }
     var grant = panelGrants.get(grantKey(sender));
     if (!grant || grant.token !== message.capability || grant.url !== sender.url || grant.tabUrl !== sender.tab.url || grant.expires < Date.now() ||
@@ -441,8 +484,27 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!allowed) { panelGrants.delete(key); sendResponse({ allowed: false }); return; }
       var token = crypto.randomUUID();
       panelGrants.set(key, { token: token, url: sender.url, tabUrl: sender.tab.url, expires: Date.now() + 30000, revision: revision });
-      sendResponse({ allowed: true, capability: token });
+      sendResponse({ allowed: true, capability: token, toggle: panelToggleSupported() });
     }).catch(function () { panelGrants.delete(key); sendResponse({ allowed: false }); });
+    return true;
+  }
+  if (message && message.type === "pastex-panel-state") {
+    // The open panel tells the active page whether the in-page launcher
+    // should read ⚡ (open) or × (close). Only the page's own launcher uses
+    // it, and the content script still verifies the sender.
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    activeTab().then(function (tab) {
+      if (!tab) { sendResponse({ ok: true }); return; }
+      return messageToLauncher(tab, { type: "pastex-panel-state", open: !!message.open });
+    }).then(function () { sendResponse({ ok: true }); })
+      .catch(function () { sendResponse({ ok: true }); });
+    return true;
+  }
+  if (message && message.type === "pastex-panel-fill") {
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    var filling = trackPanelOperation(libraryCache.fill());
+    filling.then(function (result) { sendResponse({ ok: true, result: result }); })
+      .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }
   if (message && (message.type === "pastex-panel-library" || message.type === "pastex-panel-mutate")) {

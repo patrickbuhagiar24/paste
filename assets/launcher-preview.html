@@ -21,22 +21,22 @@
       /* The style below mirrors the launcher in extension/content.js. */
       .pastex-float {
         position: fixed; z-index: 2147483647; width: 32px; height: 32px; border-radius: 50%;
-        border: 2px solid #101a3d; background: linear-gradient(180deg, #6366f1 0%, #3730a3 100%);
+        border: 2px solid #101a3d; background: linear-gradient(180deg, #3b5bdb 0%, #1c3585 100%);
         color: #fff; font-size: 17px; line-height: 1; cursor: pointer; padding: 0;
         font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
-        box-shadow: 0 0 0 2px #fff, 0 0 0 4px #101a3d, 0 0 18px 4px rgba(99, 102, 241, .6),
+        box-shadow: 0 0 0 2px #fff, 0 0 0 4px #101a3d, 0 0 18px 4px rgba(59, 91, 219, .62),
           0 3px 10px rgba(0, 0, 0, .4);
         transition: transform .12s ease, background .12s ease;
       }
       .pastex-float:hover {
-        background: linear-gradient(180deg, #818cf8 0%, #4338ca 100%);
+        background: linear-gradient(180deg, #4c6ef5 0%, #24409a 100%);
         transform: scale(1.08);
       }
       .pastex-float:active { transform: scale(.94); }
       .pastex-float:focus-visible { outline: 3px solid #facc15; outline-offset: 3px; }
       .pastex-float::after {
         content: ''; position: absolute; inset: -2px; border-radius: 50%;
-        border: 2px solid rgba(99, 102, 241, .85); pointer-events: none;
+        border: 2px solid rgba(59, 91, 219, .85); pointer-events: none;
         animation: pastex-halo 2.4s ease-out infinite;
       }
       @keyframes pastex-halo {
@@ -46,7 +46,7 @@
       }
       @media (prefers-reduced-motion: reduce) { .pastex-float::after { animation: none; opacity: 0; } }
       @media (prefers-contrast: more) {
-        .pastex-float { border-width: 3px; box-shadow: 0 0 0 3px #fff, 0 0 0 6px #000, 0 0 22px 6px rgba(99, 102, 241, .8); }
+        .pastex-float { border-width: 3px; box-shadow: 0 0 0 3px #fff, 0 0 0 6px #000, 0 0 22px 6px rgba(59, 91, 219, .82); }
       }
     </style>
   </head>

@@ -1,3 +1,101 @@
+/* Pastex side panel.
+ *
+ * Visual rules the palette follows:
+ *  - Every text pair reaches WCAG AA (the muted text is near 7:1).
+ *  - Action buttons are split into secondary (outline), primary (filled) and
+ *    destructive (filled red) so an action never looks like a different one.
+ *  - Rows have a visible idle wash, a hover and a strong "selected" tint with
+ *    an accent bar; the numbers behind the palette are checked in
+ *    extension/test/appearance.test.js.
+ *  - A dark theme follows prefers-color-scheme, and prefers-contrast gives
+ *    stronger borders and heavier selection marks.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --ink: #0f172a;
+  --muted: #475569;
+  --placeholder: #5b6b83;
+  --bg: #ffffff;
+  --surface: #f7f9fd;
+  --border: #c9d6e6;
+  --border-strong: #6f819b;
+
+  --row-idle: #edf2f9;
+  --row-hover: #cfe1f9;
+  --row-selected: #aac9f3;
+  --row-selected-bar: #12357f;
+  --row-toggle: #1e40af;
+  --guide: #9db2cc;
+
+  --accent: #12357f;
+  --accent-soft: #eef3ff;
+
+  --primary-top: #2b4fd0;
+  --primary-bottom: #1c3585;
+  --primary-hover-top: #3a60e0;
+  --primary-hover-bottom: #24409a;
+  --primary-text: #ffffff;
+
+  --danger: #b91c1c;
+  --danger-hover: #991b1b;
+  --danger-top: #cf2127;
+  --danger-ink: #b91c1c;
+  --danger-text: #ffffff;
+
+  --focus: #1d4ed8;
+  --focus-strong: #0b2a6b;
+  --focus-halo: rgba(29, 78, 216, 0.28);
+  --chip-text: #ffffff;
+  --chip-bg: #b91c1c;
+  --overlay: rgba(10, 22, 44, 0.5);
+  --row-sheen: rgba(255, 255, 255, 0.3);
+  --shadow-row: rgba(15, 23, 42, 0.08);
+  --shadow-dialog: rgba(10, 22, 44, 0.32);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e9eff8;
+    --muted: #a8b6c9;
+    --placeholder: #8c9ab0;
+    --bg: #12161d;
+    --surface: #182130;
+    --border: #5d7190;
+    --border-strong: #7b8da9;
+
+    --row-idle: #1b2434;
+    --row-hover: #28374f;
+    --row-selected: #344d77;
+    --row-selected-bar: #8fb0ff;
+    --row-toggle: #9ec1ff;
+    --guide: #4a5f7d;
+
+    --accent: #9ec1ff;
+    --accent-soft: #1b2434;
+
+    --primary-top: #3b5bdb;
+    --primary-bottom: #2f49b8;
+    --primary-hover-top: #4263e8;
+    --primary-hover-bottom: #3652c4;
+
+    --danger: #b91c1c;
+    --danger-hover: #a11a1a;
+    --danger-top: #c4262b;
+    --danger-ink: #ff9b9b;
+
+    --focus: #a8c6ff;
+    --focus-strong: #dbe8ff;
+    --focus-halo: rgba(168, 198, 255, 0.3);
+    --chip-bg: #b91c1c;
+    --overlay: rgba(0, 0, 0, 0.6);
+    --row-sheen: rgba(255, 255, 255, 0.06);
+    --shadow-row: rgba(0, 0, 0, 0.45);
+    --shadow-dialog: rgba(0, 0, 0, 0.65);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -11,52 +109,167 @@ body {
   margin: 0;
   display: flex;
   flex-direction: column;
-  font: 13px system-ui, sans-serif;
-  color: #222;
-  background: #fff;
+  font: 13px/1.45 system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
 }
+
+/* --- buttons ------------------------------------------------------------ */
 
 button {
   font: inherit;
-  border: 1px solid #c6d8ec;
-  background: #f2f7fd;
-  border-radius: 5px;
-  padding: 3px 8px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 9px;
   cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease,
+    box-shadow 0.12s ease, transform 0.06s ease;
 }
 
 button:hover:not(:disabled) {
-  background: #e0edfb;
+  background: var(--row-hover);
+  border-color: var(--accent);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* One pointer/cursor halo for every control: a full-strength ring plus a
+ * separating gap, so it reads on white, on the tinted rows and on top of a
+ * filled primary button. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.row:focus-visible,
+.row .toggle:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button.primary:focus-visible,
+button.danger:focus-visible,
+button[aria-pressed="true"]:focus-visible {
+  outline-color: var(--focus-strong);
+  box-shadow: 0 0 0 5px var(--focus-halo);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: default;
 }
 
+button.primary:disabled,
+button.danger:disabled {
+  opacity: 1;
+  color: var(--muted);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: none;
+  /* An emoji or symbol would otherwise keep its colour and still look live. */
+  filter: grayscale(1);
+}
+
+button.danger:disabled {
+  color: var(--danger-ink);
+}
+
+/* Action names carry the meaning. Primary marks the safe commit action,
+ * danger the irreversible one, so Save never looks like Delete. */
+button.primary {
+  color: var(--primary-text);
+  background: linear-gradient(180deg, var(--primary-top) 0%, var(--primary-bottom) 100%);
+  border-color: var(--primary-bottom);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1px 3px var(--shadow-row);
+}
+
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--primary-hover-top) 0%, var(--primary-hover-bottom) 100%);
+  border-color: var(--primary-hover-bottom);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 3px 10px var(--shadow-row);
+}
+
+button.danger {
+  color: var(--danger-text);
+  background: linear-gradient(180deg, var(--danger-top) 0%, var(--danger) 100%);
+  border-color: var(--danger);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 3px var(--shadow-row);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+}
+
+button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* On a narrow panel the toolbar buttons share the width, so they are told
+ * apart by weight and fill instead of colour. */
+.toolbar button[aria-pressed="true"],
+.toolbar button.primary {
+  font-weight: 700;
+}
+
+@media (prefers-contrast: more) {
+  button {
+    border-width: 2px;
+  }
+
+  button.primary,
+  button.danger {
+    border-color: var(--ink);
+  }
+}
+
+/* --- header ------------------------------------------------------------- */
+
 header {
-  padding: 6px;
-  border-bottom: 1px solid #d8e4f2;
+  padding: 7px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 #search {
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px 9px;
   font: inherit;
-  border: 1px solid #c6d8ec;
-  border-radius: 5px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+
+/* Chrome paints placeholders at a reduced opacity by default, which would
+ * undo the measured contrast of --placeholder. */
+#search::placeholder {
+  color: var(--placeholder);
+  opacity: 1;
+}
+
+#search:focus-visible {
+  border-color: var(--focus);
 }
 
 .toolbar {
   display: flex;
-  gap: 4px;
+  gap: 5px;
   flex-wrap: wrap;
-  margin-top: 6px;
+  margin-top: 7px;
 }
 
 .toolbar button {
   flex: 1 1 auto;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 #drive-bar {
@@ -64,9 +277,9 @@ header {
   justify-content: space-between;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
-  color: #5a6b7d;
-  font-size: 12px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
 #drive-status {
@@ -75,6 +288,48 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The dot repeats the Drive label in colour, so the panel state is readable
+ * without reading the sentence. The text always says the same, so colour is
+ * never the only signal. */
+#drive-status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  vertical-align: 0.05em;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--muted);
+}
+
+#drive-status[data-state="ready"]::before {
+  background: #15803d;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #15803d;
+}
+
+#drive-status[data-state="busy"]::before {
+  background: #1d4ed8;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #1d4ed8;
+}
+
+#drive-status[data-state="error"]::before {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--danger);
+}
+
+@media (prefers-color-scheme: dark) {
+  #drive-status[data-state="ready"]::before {
+    background: #4ade80;
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #4ade80;
+  }
+
+  #drive-status[data-state="busy"]::before {
+    background: #93b4ff;
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #93b4ff;
+  }
 }
 
 #last-checked {
@@ -92,6 +347,31 @@ header {
   white-space: nowrap;
 }
 
+/* The header status line carries both confirmations and failures, so it is
+ * announced and coloured by state; the message itself is not colour-coded
+ * only, it is written out. */
+#status[data-state="error"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+#status[data-state="ok"] {
+  color: #15803d;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  #status[data-state="ok"] {
+    color: #4ade80;
+  }
+
+  #status[data-state="error"] {
+    color: #ff9b9b;
+  }
+}
+
+/* --- the snippet list --------------------------------------------------- */
+
 main {
   flex: 1 1 auto;
   overflow: auto;
@@ -99,30 +379,53 @@ main {
 }
 
 #tree {
-  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
 }
 
 .row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  border-radius: 5px;
+  gap: 3px;
+  min-height: 26px;
+  padding: 3px 6px 3px 8px;
+  color: var(--ink);
+  background: var(--row-idle);
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
 }
 
 .row:hover {
-  background: #eef4fc;
+  background: var(--row-hover);
+  border-color: var(--accent);
 }
 
-.row.selected {
-  background: #d9e9fa;
+/* The selection must win over :hover, so the hover rule above comes first
+ * and the selected rules below are equally specific. */
+.row.selected,
+.row.selected:hover {
+  background: var(--row-selected);
+  border-color: var(--accent);
+  border-left: 3px solid var(--row-selected-bar);
+  box-shadow: inset 0 1px 0 var(--row-sheen);
+}
+
+.row.selected .label {
+  font-weight: 600;
 }
 
 .row .toggle {
-  flex: 0 0 16px;
-  color: #5a6b7d;
+  flex: 0 0 18px;
+  color: var(--row-toggle);
+  font-weight: 700;
+  text-align: center;
   user-select: none;
 }
 
@@ -134,44 +437,107 @@ main {
 
 .row .mini {
   flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  padding: 1px 3px;
+  padding: 1px 4px;
   font-size: 12px;
+  line-height: 1.2;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
   opacity: 0;
+  transition: opacity 0.1s ease;
 }
 
+/* Row actions appear on hover, on keyboard focus and on the selected row;
+ * they stay hidden while they are irrelevant but never on focus. */
 .row:hover .mini,
-.row.selected .mini {
+.row.selected .mini,
+.row:focus-within .mini {
   opacity: 1;
 }
 
-.row .mini:hover {
-  background: #cfe2f8;
+.row:hover .label {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.row .mini:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--accent);
+  box-shadow: 0 1px 3px var(--shadow-row);
+}
+
+/* Deleting is the one row action that cannot be undone from the panel, so it
+ * turns red under the pointer while rename and edit stay neutral. */
+.row .mini[data-kind="danger"]:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger);
+  border-color: var(--danger);
+  box-shadow: 0 1px 3px var(--shadow-row);
+}
+
+.row .mini:focus-visible {
+  opacity: 1;
 }
 
 .children {
-  margin-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 18px;
+  padding-left: 7px;
+  border-left: 1px solid var(--guide);
+}
+
+/* A folder name is a group heading, so it reads slightly stronger than a
+ * snippet name; the icon in front already says which kind a row is. */
+.row[data-kind="folder"] .label {
+  letter-spacing: 0.01em;
+  font-weight: 650;
 }
 
 #empty {
+  padding: 30px 14px;
+  color: var(--muted);
   text-align: center;
-  color: #777;
-  padding: 24px 12px;
+}
+
+#empty p {
+  margin: 10px 0 14px;
 }
 
 .empty-icon {
   font-size: 34px;
 }
 
+#empty button {
+  min-width: 140px;
+}
+
+@media (prefers-contrast: more) {
+  .row {
+    border-color: var(--border);
+  }
+
+  .row.selected {
+    border: 2px solid var(--ink);
+    border-left: 5px solid var(--accent);
+  }
+}
+
+/* --- editor dialog ------------------------------------------------------ */
+
 #editor-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(30, 50, 70, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
+  background: var(--overlay);
 }
 
 #editor-overlay[hidden] {
@@ -179,24 +545,28 @@ main {
 }
 
 #editor {
-  background: #fff;
-  border-radius: 8px;
-  padding: 12px;
   width: min(420px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);
   overflow: auto;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px var(--shadow-dialog);
 }
 
 #editor h2 {
-  margin: 0 0 8px;
-  font-size: 15px;
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: var(--ink);
 }
 
 #editor label {
   display: block;
-  margin: 8px 0 3px;
-  color: #5a6b7d;
+  margin: 10px 0 3px;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 #editor input[type="text"],
@@ -204,26 +574,83 @@ main {
 #editor textarea {
   width: 100%;
   font: inherit;
-  padding: 6px 8px;
-  border: 1px solid #c6d8ec;
-  border-radius: 5px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 9px;
+}
+
+#editor textarea {
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+#editor input[type="text"]:focus-visible,
+#editor select:focus-visible,
+#editor textarea:focus-visible {
+  border-color: var(--focus);
+  background: var(--bg);
 }
 
 .editor-buttons {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: 14px;
 }
+
+.editor-buttons button {
+  min-width: 84px;
+}
+
+/* --- selection bar ------------------------------------------------------ */
 
 #selection-actions {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
-  border-top: 1px solid #d8e4f2;
+  padding: 7px 8px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 
-#selection-actions[hidden] { display: none; }
-#selection-count { flex: 1; }
-#btn-select[aria-pressed="true"] { background: #cfe2f8; }
+#selection-actions[hidden] {
+  display: none;
+}
+
+#selection-count {
+  flex: 1;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* The count turns into a filled chip while something is selected, so the
+ * bottom bar is unmistakable at a glance. */
+#selection-count.has-items {
+  align-self: center;
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: var(--chip-text);
+  background: var(--chip-bg);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+#selection-actions button {
+  font-size: 12.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .row,
+  .row .mini {
+    transition: none;
+  }
+
+  button:active:not(:disabled) {
+    transform: none;
+  }
+}

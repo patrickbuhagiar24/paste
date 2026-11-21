@@ -109,6 +109,13 @@
     var cursors = {};
     var seen = new Set();
 
+    // Collapsed content is deferred by default, so opening the panel does not
+    // pay for folders the user has not asked for. The cache passes
+    // deferCollapsed: false because it stores the whole library, and the
+    // signature walk (signaturesOnly) asks for signatures only, so it never
+    // defers a folder it still has to walk.
+    var deferCollapsed = options.deferCollapsed !== false;
+
     // The previous tree is indexed once, so an unchanged folder can be
     // reused without listing its children again.
     var cachedNodes = new Map();
@@ -242,9 +249,10 @@
             // The folder did not change: its whole subtree is reused.
             folder.children = (cached.children || []).map(cloneNode);
           } else {
-            jobs.push(visit(file.id, folder.children, deferred || collapsed).catch(function (err) {
-              folder.loadError = err.message || String(err);
-            }).finally(update));
+            jobs.push(visit(file.id, folder.children,
+              deferred || (deferCollapsed && collapsed) || !!options.signaturesOnly, null)
+              .catch(function (err) { folder.loadError = err.message || String(err); })
+              .finally(update));
           }
         } else if ((file.mimeType || "").indexOf("application/vnd.google-apps.") !== 0 &&
                    (file.mimeType === drive.TEXT_MIME || /\.txt$/i.test(file.name || ""))) {
@@ -264,6 +272,8 @@
             };
             texts[body.hash] = body.text;
           } else if (deferred) {
+            // Collapsed content is loaded when the folder is opened, unless
+            // the caller asks for a complete snapshot.
             node.deferred = true;
           } else {
             node.loadError = "Loading from Google Drive…";
@@ -319,6 +329,59 @@
     };
   }
 
+  // Fill the bodies a stored snapshot is missing, without listing the
+  // library again: a text node without a hash keeps its row and gets its
+  // body from Drive. The caller decides when to run it (idle) and stores the
+  // result through the normal snapshot path.
+  async function fillMissing(native, drive, tree, options) {
+    options = options || {};
+    var session = await connect(native, drive);
+    var bodies = options.bodies || {};
+    var texts = options.texts || {};
+    // A row with a hash already points at a verified body. A row without one
+    // keeps text that was never content-addressed, so it is hashed first: if
+    // the snapshot already stores that text, nothing is downloaded.
+    var missing = [];
+    (function walk(rows) {
+      (rows || []).forEach(function (node) {
+        if (node.kind === "folder") { walk(node.children); return; }
+        if (node.loadError || node.deferred) return;
+        if (typeof node.hash === "string" && node.hash) return;
+        var text = typeof node.text === "string" ? node.text : "";
+        // An empty row is a row without a body, not an empty snippet: it is
+        // downloaded rather than hashed into the empty string.
+        var hash = text ? Hash.sha256Hex(text) : "";
+        if (text && texts[hash] !== undefined) {
+          node.hash = hash;
+        } else {
+          missing.push({ node: node, hash: hash, text: text });
+        }
+      });
+    })(tree);
+    if (!missing.length) return { tree: tree, bodies: bodies, texts: texts, filled: 0 };
+    var filled = 0;
+    await Promise.all(missing.map(function (item) {
+      return drive.downloadText(session.token, item.node.id).then(function (text) {
+        var hash = Hash.sha256Hex(text);
+        item.node.text = text;
+        item.node.hash = hash;
+        texts[hash] = text;
+        bodies[item.node.id] = { modifiedTime: item.node.modifiedTime || "", hash: hash, driveHash: "" };
+        filled++;
+      }).catch(function (err) { item.node.loadError = err.message || String(err); });
+    }));
+    return { tree: tree, bodies: bodies, texts: texts, filled: filled, session: session };
+  }
+
+  // The signature walk used for a cheap freshness check: it needs a session
+  // (one token and one folder read) but lists only what changed and never
+  // downloads a body.
+  async function verifyTree(drive, session, options) {
+    return loadTree(drive, session.token, session.rootId, null, Object.assign({}, options || {}, {
+      signaturesOnly: true, index: session.index,
+    }), session);
+  }
+
   async function load(native, drive, onUpdate, options) {
     var session = await connect(native, drive);
     // The index of the root folder is the freshest one: it is read with the
@@ -341,7 +404,7 @@
       signatures: result.signatures, index: result.index, cursors: result.cursors };
   }
 
-  return { connect: connect, loadTree: loadTree, load: load,
+  return { connect: connect, loadTree: loadTree, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
     parseIndex: parseIndex, cloneIndex: cloneIndex, nodeSignature: nodeSignature,
     emptyIndex: emptyIndex };
 });

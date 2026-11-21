@@ -22,6 +22,16 @@
   var capability = "";
   var authTimer = 0;
   var focusGeneration = 0;
+  // Whether this page may also close the panel again (Chrome 141+) and
+  // whether the launcher currently opens or closes it.
+  var canToggle = false;
+  var panelOpen = false;
+
+  function setLauncherLabel(button) {
+    if (!button) return;
+    button.textContent = canToggle && panelOpen ? "×" : "⚡";
+    button.title = canToggle && panelOpen ? "Close Pastex side panel" : "Open Pastex side panel";
+  }
 
   function isEditable(el) {
     if (!el || el === document.body || el === document.documentElement) {
@@ -106,24 +116,24 @@
     // white ring keeps it visible on dark pages, the dark rim on light ones.
     style.textContent =
       ".pastex-float{position:fixed;z-index:2147483647;width:32px;height:32px;border-radius:50%;" +
-      "border:2px solid #101a3d;background:linear-gradient(180deg,#6366f1 0%,#3730a3 100%);" +
+      "border:2px solid #101a3d;background:linear-gradient(180deg,#3b5bdb 0%,#1c3585 100%);" +
       "color:#fff;font-size:17px;line-height:1;cursor:pointer;padding:0;" +
       "font-family:'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif;" +
-      "box-shadow:0 0 0 2px #fff,0 0 0 4px #101a3d,0 0 18px 4px rgba(99,102,241,.6)," +
+      "box-shadow:0 0 0 2px #fff,0 0 0 4px #101a3d,0 0 18px 4px rgba(59,91,219,.62)," +
       "0 3px 10px rgba(0,0,0,.4);transition:transform .12s ease,background .12s ease}" +
-      ".pastex-float:hover{background:linear-gradient(180deg,#818cf8 0%,#4338ca 100%);" +
+      ".pastex-float:hover{background:linear-gradient(180deg,#4c6ef5 0%,#24409a 100%);" +
       "transform:scale(1.08)}" +
       ".pastex-float:active{transform:scale(.94)}" +
       ".pastex-float:focus-visible{outline:3px solid #facc15;outline-offset:3px}" +
       // A slow halo around the button marks it as the Pastex launcher.
       ".pastex-float::after{content:'';position:absolute;inset:-2px;border-radius:50%;" +
-      "border:2px solid rgba(99,102,241,.85);pointer-events:none;" +
+      "border:2px solid rgba(59,91,219,.85);pointer-events:none;" +
       "animation:pastex-halo 2.4s ease-out infinite}" +
       "@keyframes pastex-halo{0%{transform:scale(1);opacity:.85}" +
       "70%{transform:scale(2);opacity:0}100%{transform:scale(2);opacity:0}}" +
       "@media (prefers-reduced-motion: reduce){.pastex-float::after{animation:none;opacity:0}}" +
       "@media (prefers-contrast: more){.pastex-float{border-width:3px;" +
-      "box-shadow:0 0 0 3px #fff,0 0 0 6px #000,0 0 22px 6px rgba(99,102,241,.8)}}";
+      "box-shadow:0 0 0 3px #fff,0 0 0 6px #000,0 0 22px 6px rgba(59,91,219,.82)}}";
     var button = document.createElement("button");
     button.className = "pastex-float";
     button.title = "Open Pastex side panel";
@@ -133,9 +143,22 @@
       // and move the button away before the click lands.
       if (!event.isTrusted || !capability) return;
       event.preventDefault();
-      chrome.runtime.sendMessage({ type: "pastex-open-panel", capability: capability }).then(function (response) {
-        if (!response || !response.ok) button.title = "Could not open Pastex; use its toolbar icon.";
-      }).catch(function () { button.title = "Could not open Pastex; use its toolbar icon."; });
+      var closing = canToggle && panelOpen;
+      chrome.runtime.sendMessage({
+        type: "pastex-open-panel", capability: capability, action: closing ? "close" : "open",
+      }).then(function (response) {
+        if (!response || !response.ok) {
+          // The page lost its authorization (for example the allowlist) or the
+          // browser refused; the button says what the next click will do.
+          setLauncherLabel(button);
+          button.title = closing ? "Could not close Pastex; use the panel's own close button." :
+            "Could not open Pastex; use its toolbar icon.";
+          return;
+        }
+        if (response.closed) panelOpen = false;
+        else if (!closing) panelOpen = true;
+        setLauncherLabel(button);
+      }).catch(function () { button.title = "Could not reach Pastex; use its toolbar icon."; });
     });
     shadow.appendChild(style);
     shadow.appendChild(button);
@@ -188,7 +211,9 @@
         return;
       }
       capability = response.capability;
+      canToggle = !!response.toggle;
       cancelHideButton();
+      if (buttonHost) setLauncherLabel(buttonHost.__pastexButton);
       positionButton(el);
       authTimer = window.setTimeout(function () { authorize(el, generation); }, 10000);
     }).catch(function () { if (generation === focusGeneration) { capability = ""; hideButton(); } });
@@ -226,6 +251,16 @@
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || typeof message.type !== "string" || message.type.indexOf("pastex-") !== 0) {
       return false;
+    }
+    if (message.type === "pastex-panel-state") {
+      if (!sender || sender.id !== chrome.runtime.id) {
+        sendResponse({ ok: false, reason: "unauthorized" });
+        return true;
+      }
+      panelOpen = !!message.open;
+      if (buttonHost) setLauncherLabel(buttonHost.__pastexButton);
+      sendResponse({ ok: true });
+      return true;
     }
     if (message.type === "pastex-insert") {
       // Only our background worker may ask this page to insert text.

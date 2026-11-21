@@ -51,8 +51,15 @@
     frame(function () { renderPending = false; render(); });
   }
 
-  function setStatus(text) {
-    $("status").textContent = text;
+  // The header status is the only place that reports what just happened.
+  // Callers pass a tone ("ok" or "error") so the stylesheet can colour the
+  // line; the message itself always says what happened, so colour is never
+  // the only signal.
+  function setStatus(text, tone) {
+    var node = $("status");
+    node.textContent = text;
+    if (tone) node.setAttribute("data-state", tone);
+    else node.removeAttribute("data-state");
   }
 
   // The panel shows when the library was last confirmed with Drive, so the
@@ -86,6 +93,16 @@
   function esc(text) {
     return String(text === undefined || text === null ? "" : text);
   }
+
+  // The in-page launcher is the same switch for the panel, so an open panel
+  // tells the page it is open and says goodbye when it closes.
+  function announcePanelState(open) {
+    try {
+      chrome.runtime.sendMessage({ type: "pastex-panel-state", open: !!open }).catch(function () {});
+    } catch (ignored) { /* older Chrome contexts reject the send */ }
+  }
+  window.addEventListener("pagehide", function () { announcePanelState(false); });
+  window.addEventListener("unload", function () { announcePanelState(false); });
 
   // --- tree rendering ---
 
@@ -147,12 +164,15 @@
       if (node.loadError) { edit.disabled = true; edit.title = "Cannot edit: " + node.loadError; }
       row.appendChild(edit);
     }
-    row.appendChild(miniButton("Delete", "🗑", function () { deleteNodes([node]); }));
+    var remove = miniButton("Delete", "🗑", function () { deleteNodes([node]); });
+    remove.setAttribute("data-kind", "danger");
+    row.appendChild(remove);
   }
 
   function renderRow(node, depth, host) {
     var row = document.createElement("div");
     row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
+    row.setAttribute("data-kind", node.kind === "folder" ? "folder" : "text");
     row.setAttribute("role", "treeitem");
     if (selecting) row.setAttribute("aria-selected", String(selectedItems.has(node.id)));
     row.style.paddingLeft = 4 + depth * 2 + "px";
@@ -220,6 +240,7 @@
     matches.forEach(function (node) {
       var row = document.createElement("div");
       row.className = "row" + ((selecting ? selectedItems.has(node.id) : node.id === selectedId) ? " selected" : "");
+      row.setAttribute("data-kind", "text");
       var icon = document.createElement("span");
       icon.className = "toggle";
       icon.textContent = "📄";
@@ -282,6 +303,7 @@
     $("btn-select").setAttribute("aria-pressed", String(selecting));
     $("btn-select").textContent = selecting ? "Done" : "Select";
     $("selection-count").textContent = selectedItems.size + " selected";
+    $("selection-count").className = selectedItems.size ? "has-items" : "";
     $("btn-up").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, -1).length;
     $("btn-down").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, 1).length;
     $("btn-delete-selected").disabled = busy || !ready || !selectedItems.size;
@@ -298,18 +320,26 @@
 
   function renderDriveBar() {
     var folders = index.folders.length;
+    var state = busy ? "busy" : (ready ? "ready" : "error");
     var label = busy ? "Drive: loading…" :
       (ready ? (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
     $("drive-status").textContent = label;
+    $("drive-status").setAttribute("data-state", state);
     $("btn-sync").disabled = busy;
     $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
     $("btn-empty-text").disabled = busy || !ready;
+    // While Drive is unusable, Refresh is the action that helps; the create
+    // buttons keep their primary look only when a click can succeed.
+    $("btn-sync").className = ready ? "" : "primary";
   }
 
   function onProgress(partial, id) {
     if (!loading || loadConfigVersion !== configVersion) return;
+    // A listing painted from the session snapshot is already complete: a
+    // Drive round trip after it would only re-download what is on screen.
+    if (fromCache) return;
     tree = partial;
     rootId = id;
     ready = true;
@@ -327,9 +357,36 @@
       if (!message) return;
       // The background worker refreshed the cache while the user was away.
       if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
+      if (message.filled) { applyBackgroundChange(); return; }
       onProgress(message.tree, message.rootId);
     });
   } catch (ignored) { /* Loading still works without live progress. */ }
+
+  // The stored snapshot can be missing a few bodies (quota). They are filled
+  // in the worker without listing Drive, and the panel repaints once when the
+  // snapshot is complete.
+  // The fill needs the panel to be idle, so it is queued behind the current
+  // load instead of running in the middle of it. A microtask is enough: the
+  // busy flag is cleared in the load's finally block.
+  var fillScheduled = false;
+  function scheduleFill() {
+    if (fillScheduled) return;
+    fillScheduled = true;
+    Promise.resolve().then(function () {
+      fillScheduled = false;
+      fillMissingBodies();
+    });
+  }
+
+  async function fillMissingBodies() {
+    if (!ready || busy || loading) return;
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-fill" });
+      if (!response || !response.ok || !response.result || !response.result.filled) return;
+      await applyBackgroundChange();
+      setStatus("Loaded the rest of the library from the cache.", "ok");
+    } catch (ignored) { /* a later open tries again */ }
+  }
 
   // A background sync already rewrote the cache, so this only reads the
   // snapshot back: no Drive request, no loading state and no status spam.
@@ -353,6 +410,7 @@
       render();
       renderDriveBar();
       noteChecked(result.lastCheckedAt);
+      if (result.pending) fillMissingBodies();
     } catch (ignored) {
       // A failed background update keeps the current list; the next manual
       // refresh reloads it from Drive.
@@ -383,10 +441,13 @@
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
       noteChecked(result.lastCheckedAt);
+      // The cached open is instant; the rest of the library (if the snapshot
+      // is missing bodies) is filled from the worker without a Drive listing.
+      if (result.cached && result.pending) scheduleFill();
       var warnings = result.warnings || [];
       if (!quiet) {
         setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-          (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."));
+          (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."), warnings.length ? "error" : "ok");
       }
       return true;
     } catch (err) {
@@ -397,7 +458,7 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
-      if (!quiet) setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""));
+      if (!quiet) setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""), "error");
       return false;
     } finally {
       loading = false;
@@ -412,7 +473,7 @@
   // --- insert into the page (or copy as the fallback) ---
 
   async function insertNode(node) {
-    if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError); return; }
+    if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError, "error"); return; }
     setStatus("Inserting…");
     var response = null;
     try {
@@ -425,23 +486,23 @@
       response = { ok: false };
     }
     if (response && response.ok) {
-      setStatus("Inserted into the page.");
+      setStatus("Inserted into the page.", "ok");
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration manifest.");
+      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration manifest.", "error");
       return;
     }
     if (!response || response.reason !== "no-editable") {
       // A transport or content-script failure is not a request to copy.
-      setStatus("Insert failed: " + ((response && response.reason) || "the page did not accept the snippet."));
+      setStatus("Insert failed: " + ((response && response.reason) || "the page did not accept the snippet."), "error");
       return;
     }
     try {
       await navigator.clipboard.writeText(node.text || "");
-      setStatus("No editable field focused — copied. Press Ctrl+V.");
+      setStatus("No editable field focused — copied. Press Ctrl+V.", "ok");
     } catch (err) {
-      setStatus("Could not insert or copy.");
+      setStatus("Could not insert or copy.", "error");
     }
   }
 
@@ -462,7 +523,7 @@
 
   function openEditor(mode, node) {
     if (node && node.loadError && mode === "edit-text") {
-      setStatus("Cannot edit an unreadable Drive item: " + node.loadError);
+      setStatus("Cannot edit an unreadable Drive item: " + node.loadError, "error");
       return;
     }
     editorMode = mode;
@@ -535,19 +596,19 @@
       failure = "Drive operation failed (some changes may have succeeded): " + (err.message || err);
     } finally { busy = false; }
     await refresh(true);
-    if (failure) setStatus(failure);
+    if (failure) setStatus(failure, "error");
     return result;
   }
 
   async function saveEditor() {
     var name = $("editor-name").value.trim();
-    if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /."); return; }
+    if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /.", "error"); return; }
     if (busy) return;
     var mode = editorMode;
     var node = index.byId.get(editorNodeId) || null;
     var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
     if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
-      setStatus("That item or folder is no longer available; refresh first."); return;
+      setStatus("That item or folder is no longer available; refresh first.", "error"); return;
     }
     var result = await runMutation({ action: "save", mode: mode, name: name, node: node,
       parentId: parentId, text: $("editor-text").value });
@@ -598,11 +659,11 @@
       while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
       await refresh(true);
       setStatus(applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
-        (issues.length ? " " + issues.join(" ") : ""));
+        (issues.length ? " " + issues.join(" ") : ""), issues.length ? "error" : "ok");
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        "Could not use configuration: " + (err.message || err));
+        "Could not use configuration: " + (err.message || err), err.name === "AbortError" ? "" : "error");
     } finally {
       button.disabled = false;
     }
@@ -648,6 +709,14 @@
   });
 
   $("btn-sync").addEventListener("click", function () { refresh(true); });
+  // Closing exists from Chrome 141; the button is only offered when it works.
+  if (chrome.sidePanel && typeof chrome.sidePanel.close === "function") {
+    $("btn-close-panel").hidden = false;
+    $("btn-close-panel").addEventListener("click", function () {
+      chrome.sidePanel.close({ windowId: chrome.windows && chrome.windows.WINDOW_ID_CURRENT })
+        .catch(function () { setStatus("Use the side panel's close button.", "error"); });
+    });
+  }
   $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
     var ids = index.folders.map(function (node) { return node.id; });
@@ -679,5 +748,6 @@
   renderLastChecked();
   // The age of the list is refreshed while the panel stays open.
   if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
+  announcePanelState(true);
   refresh(false);
 })();

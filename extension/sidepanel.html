@@ -11,10 +11,11 @@
       <div class="toolbar" role="toolbar" aria-label="Snippet actions">
         <button id="btn-collapse-all" title="Collapse all folders" disabled>▸ Collapse all</button>
         <button id="btn-select" aria-pressed="false" title="Select items to move or delete">Select</button>
+        <button id="btn-close-panel" title="Close the Pastex side panel" hidden>✕ Close</button>
         <button id="btn-sync" title="Reload from Google Drive">↻ Refresh</button>
         <button id="btn-config" title="Import configuration files">Config</button>
-        <button id="btn-text" title="New snippet">＋ Text</button>
-        <button id="btn-folder" title="New folder">＋ Folder</button>
+        <button id="btn-text" class="primary" title="New snippet">＋ Text</button>
+        <button id="btn-folder" class="primary" title="New folder">＋ Folder</button>
       </div>
       <div id="drive-bar">
         <span id="drive-status" aria-live="polite">Drive: not connected.</span>
@@ -27,7 +28,7 @@
       <div id="empty" hidden>
         <div class="empty-icon">📁</div>
         <p>Connect to Google Drive to show your snippets.</p>
-        <button id="btn-empty-text">＋ New snippet</button>
+        <button id="btn-empty-text" class="primary">＋ New snippet</button>
       </div>
     </main>
     <div id="editor-overlay" hidden>
@@ -42,7 +43,7 @@
           <textarea id="editor-text" rows="10"></textarea>
         </div>
         <div class="editor-buttons">
-          <button id="editor-save">Save</button>
+          <button id="editor-save" class="primary">Save</button>
           <button id="editor-cancel">Cancel</button>
         </div>
       </div>
@@ -51,7 +52,7 @@
       <span id="selection-count">0 selected</span>
       <button id="btn-up" disabled>↑ Up</button>
       <button id="btn-down" disabled>↓ Down</button>
-      <button id="btn-delete-selected" disabled>🗑 Delete</button>
+      <button id="btn-delete-selected" class="danger" disabled>🗑 Delete</button>
     </div>
     <script src="store.js"></script>
     <script src="sites.js"></script>
