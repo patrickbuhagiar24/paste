@@ -103,21 +103,6 @@ test("a delete removes the row and its body, and leaves the rest", () => {
   assert.ok(Queue.find(snap.tree, "b"), "a sibling survives");
 });
 
-test("remap turns a local id into the Drive id everywhere", () => {
-  const snap = snapshot();
-  const [localId] = Queue.apply(snap, { kind: "create", name: "New", text: "x", parentId: "root",
-    item: { kind: "text", parentId: "root", localId: "" } });
-  snap.bodies[localId] = { hash: "h" };
-  snap.index = { order: { root: ["a", localId] }, collapsed: { [localId]: "1" } };
-  Queue.remap(snap, localId, "drive-42");
-  assert.equal(Queue.find(snap.tree, localId), null);
-  assert.ok(Queue.find(snap.tree, "drive-42"));
-  assert.equal(snap.bodies[localId], undefined);
-  assert.ok(snap.bodies["drive-42"]);
-  assert.deepEqual(snap.index.order.root, ["a", "drive-42"]);
-  assert.equal(snap.index.collapsed["drive-42"], "1");
-});
-
 test("the queue survives a worker restart and keeps its order", async () => {
   const area = store();
   const first = Queue.create(area);

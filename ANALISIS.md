@@ -229,6 +229,7 @@ Sebelumnya `get()` bisa memicu listing Drive dari klik panel (jalur
 | Tombol **↻ Sync** | listing penuh | **kirim antrean saja, tanpa baca Drive** (ditahan bila situs masih terbuka) |
 | Konfigurasi baru dimuat | listing berikutnya | **satu full sync**, lalu cache |
 | Pemeriksaan latar | listing metadata saat idle | tetap, dan satu-satunya jalan ke Drive saat menganggur |
+| Browser dibuka | pemanasan cache 3 detik | **nol request** bila antrean kosong; bila ada, antrean dikirim |
 | Edit di situs | tulis langsung ke Drive | **tulis ke cache + antrean**, flush saat tab **ditutup** (bukan disembunyikan) |
 
 ### Antrean tulis yang tahan restart

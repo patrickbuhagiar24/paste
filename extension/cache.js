@@ -134,11 +134,18 @@
       try {
         var all = await freshAll();
         all[key] = { savedAt: stamp };
-        var keys = Object.keys(all).sort(function (a, b) { return (all[b].savedAt || 0) - (all[a].savedAt || 0); });
-        keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
+        pruneEntries(all);
         await store.set({ [FKEY]: all });
       } catch (ignored) { /* the stamp is optional */ }
       return stamp;
+    }
+
+    // Keep the newest MAX_LOCAL entries of a keyed store and drop the rest.
+    // Both stores are bounded the same way, so the rule lives in one place.
+    function pruneEntries(all) {
+      Object.keys(all).sort(function (a, b) {
+        return ((all[b] && all[b].savedAt) || 0) - ((all[a] && all[a].savedAt) || 0);
+      }).slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
     }
 
     async function discardAll() {
@@ -214,10 +221,7 @@
       try {
         var all = await localAll();
         all[key] = snap;
-        var keys = Object.keys(all).sort(function (a, b) {
-          return (all[b].savedAt || 0) - (all[a].savedAt || 0);
-        });
-        keys.slice(MAX_LOCAL).forEach(function (old) { delete all[old]; });
+        pruneEntries(all);
         await store.set({ [LKEY]: all });
       } catch (ignored) {
         // The candidate with the fewest bytes that still describes the library
@@ -412,11 +416,9 @@
       var stamp = await freshStamp(key, saved);
       // The Sync button asks for a real read. Without this, "force" would be
       // accepted and ignored, and the button would do nothing visible.
-      if (force) {
-        // Sync is also a body refresh: an item that failed to load before is
-        // fetched again, instead of being skipped as "unchanged".
-        return loadFromDrive(key, onUpdate, Object.assign({}, options, { fillBodies: true }));
-      }
+      // An explicit request reads Drive again, tree and bodies alike: the fill
+      // pass retries rows that failed before, so one button fixes both.
+      if (force) return loadFromDrive(key, onUpdate, options);
       if (saved) {
         var storedTexts = saved.texts || texts || {};
         return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true,
@@ -432,7 +434,9 @@
         index = local.index || null;
       }
       if (local) {
-        try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) {}
+        // The derived snapshot becomes the session copy, so the next read of
+        // this worker is served without touching local storage again.
+        try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) { /* the local copy is still served */ }
         var localStamp = await freshStamp(key, local);
         return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true,
           lastCheckedAt: localStamp, pending: pendingCount(local.tree, texts) };
@@ -661,5 +665,5 @@
       configurationChanged: configurationChanged, mutateLocal: mutateLocal,
       dropLocal: dropLocal, current: current };
   }
-  return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY, FRESH_MS: FRESH_MS, MAX_LOCAL: MAX_LOCAL };
+  return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY };
 });

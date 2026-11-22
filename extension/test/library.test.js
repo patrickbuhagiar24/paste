@@ -285,3 +285,33 @@ test("a body whose text is missing is downloaded again instead of turning into n
   assert.equal(downloads, 2, "a body without its text is fetched again");
   assert.equal(second.tree[0].text, "inside body");
 });
+
+test("a body that failed to load is retried by the fill pass", async () => {
+  const drive = fakeDrive();
+  let attempt = 0;
+  drive.downloadText = async (token, id) => {
+    if (id === "top" && attempt++ === 0) throw new Error("quota exceeded");
+    return id === "top" ? "top content" : "nested content";
+  };
+  const first = await Library.load(native, drive);
+  const row = first.tree.find((node) => node.id === "top");
+  assert.equal(row.loadError, "quota exceeded", "the first read reports the failure");
+  // The fill pass used to skip every row that had a loadError, so a body that
+  // failed once was never read again until the snapshot was thrown away.
+  const filled = await Library.fillMissing(native, drive, first.tree, { bodies: first.bodies, texts: first.texts });
+  assert.equal(filled.filled, 1, "the failed body is downloaded on the retry");
+  assert.equal(filled.tree.find((node) => node.id === "top").loadError, undefined,
+    "the warning is cleared once the row is readable");
+});
+
+test("a deferred row waits for its folder and is not treated as a failure", async () => {
+  const drive = fakeDrive();
+  let downloads = 0;
+  drive.downloadText = async (token, id) => { downloads++; return "nested content"; };
+  const result = await Library.load(native, drive, null, { deferCollapsed: true });
+  const folder = result.tree.find((node) => node.id === "folder");
+  folder.collapsed = true;
+  const before = downloads;
+  await Library.fillMissing(native, drive, result.tree, { bodies: result.bodies, texts: result.texts });
+  assert.equal(downloads, before, "a deferred row is not fetched by a fill pass");
+});
