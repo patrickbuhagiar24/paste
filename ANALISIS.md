@@ -193,6 +193,81 @@ tutup (dan penolakannya), serta tombol Close yang hanya muncul bila didukung.
 
 ---
 
+## 1c. Ronde ketiga: baca dari cache, tulis saat tab ditinggalkan
+
+### Tombol ikon toolbar: sekarang benar-benar toggle
+
+Saya memeriksa repositori **yousub** (`patrickbuhagiar24/youtube`). Tombol
+ikonnya **bukan** `action.onClicked` manual, melainkan satu baris di service
+worker:
+
+```js
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+```
+
+Dengan itu **Chrome sendiri** yang menangani klik: buka panel pada klik
+pertama, tutup pada klik berikutnya (Chrome 141+). Pastex sebelumnya memakai
+`chrome.action.onClicked` yang hanya bisa membuka. Perubahan:
+
+- `action.onClicked` dihapus, `setPanelBehavior` dipasang saat worker start.
+- Tidak ada listener yang merebut klik, jadi perilaku toggle milik Chrome utuh.
+- Ini juga menghapus kebutuhan akan tombol **Close** di panel: permintaan Anda
+  untuk menghapusnya sejalan dengan mekanisme ini. Tombol ✕ Close di panel
+  dihapus, begitu pula deteksi `sidePanel.close()` di panel.
+
+Ikon ⚡ di dalam halaman tetap toggle buka/tutup seperti ronde sebelumnya
+(capability 30 detik yang sama).
+
+### Sinkronisasi: sekali saat konfigurasi dimuat, sisanya cache
+
+Sebelumnya `get()` bisa memicu listing Drive dari klik panel (jalur
+`force`, `scheduleStaleRefresh`, dan snapshot yang hilang). Sekarang:
+
+| Kejadian | Sebelum | Sesudah |
+| --- | --- | --- |
+| Buka panel | bisa listing bila snapshot basi | **selalu dari cache**, nol request |
+| Refresh manual | listing penuh | **baca ulang cache** (penulisan antrean tetap sinkron) |
+| Konfigurasi baru dimuat | listing berikutnya | **satu full sync**, lalu cache |
+| Pemeriksaan latar | listing metadata saat idle | tetap, dan satu-satunya jalan ke Drive saat menganggur |
+| Edit di situs | tulis langsung ke Drive | **tulis ke cache + antrean**, flush saat tab ditutup/disembunyikan |
+
+### Antrean tulis yang tahan restart
+
+Antrean disimpan di `chrome.storage.local` (`extension/queue.js`), sehingga:
+
+- Browser yang ditutup sebelum sempat flush **tidak kehilangan edit**: antrean
+  dikirim saat start berikutnya.
+- Satu edit = satu entri. Baris baru memakai id lokal (`local-…`) sampai
+  unggahan selesai; setelah flush, satu pembacaan penuh mengganti id lokal
+  dengan id Drive.
+- Indeks (urutan + status lipat) diantrekan sebagai **satu** entri `order` dan
+  ditulis dalam satu request, bukan satu per baris.
+- Kegagalan sementara (offline, kuota) → entri dipertahankan. Kegagalan
+  permanen (HTTP 400/403/404/410, "already exists", "not found") → entri
+  dibuang dari antrean **dan** barisnya dibuang dari cache, supaya tidak
+  dicoba selamanya dan tidak menampilkan baris yang tidak ada di Drive.
+- Drive bar menampilkan berapa perubahan yang masih menunggu.
+
+Catatan jujur: karena Drive tetap sumber kebenaran, flush diakhiri satu
+pembacaan penuh. Artinya "sinkronkan semuanya saat tab ditutup" benar-benar
+terjadi, tetapi biayanya satu listing penuh per flush (bukan per edit).
+
+### Ringkasan pengujian ronde ketiga
+
+| Suite | Hasil |
+| --- | --- |
+| `node extension/test/run.js` | **149 lulus** (dari 133) |
+| `pytest tests/ -q` | **68 lulus** |
+
+Uji baru: perilaku edit lokal (create/edit/rename/reorder/collapse/delete),
+id lokal dan remap, antrean yang bertahan setelah restart worker, `indexOf`
+yang melewati baris yang belum ada di Drive, toggle toolbar lewat
+`setPanelBehavior`, create di situs yang tidak menyentuh Drive, flush yang
+menulis ke Drive lalu memberi baris id Drive-nya, serta penolakan `flush-now`
+dari halaman yang bukan situs diizinkan/bukan frame utama.
+
+---
+
 ## 2. Analisis proyek dan saran perbaikan
 
 ### Yang sudah bagus (dan sebaiknya dipertahankan)
@@ -296,5 +371,6 @@ tutup (dan penolakannya), serta tombol Close yang hanya muncul bila didukung.
 | `extension/background.js` | cek latar metadata-only, relay status panel, isi-cache, toggle buka/tutup |
 | `extension/content.js` | ikon ⚡/× (toggle buka-tutup, capability sama) |
 | `extension/sidepanel.js`, `.html` | tombol ✕ Close, pengisian baris, mikro-tugas fill |
-| `extension/test/*` | uji cache lengkap, kuota, verify, toggle, tombol Close |
+| `extension/queue.js` | **baru**: edit lokal, id lokal & remap, indeks, antrean tahan restart |
+| `extension/test/*` | uji cache lengkap, kuota, verify, toggle, antrean & flush, tampilan |
 | `extension/README.md`, `debian/changelog`, `extension/manifest.json` | dokumentasi, entri 2.12.0, versi |

@@ -1,0 +1,299 @@
+/* Deferred snippets: edits made while the user is on a site stay in the cache
+ * and reach Drive only once the tab is left.
+ *
+ * Everything is applied to the cached snapshot immediately, so the panel and
+ * the launcher always read the same, current library. A single Drive write is
+ * queued per edit and is kept in storage.local, so a browser that is closed
+ * before the flush can still send it on the next start. The worker is the only
+ * writer: it reads this module, never the page.
+ */
+(function (root, factory) {
+  if (typeof module === "object" && module.exports) module.exports = factory();
+  else root.PastexQueue = factory();
+})(typeof self !== "undefined" ? self : this, function () {
+  "use strict";
+  var KEY = "pastex.deferred.v1";
+  var MAX = 500;
+
+  // --- the cached snapshot, edited in place ---------------------------------
+  //
+  // These helpers work on the shape stored by cache.js: the tree, the bodies
+  // keyed by Drive id and the texts keyed by the SHA-256 of the content. A
+  // local id starts with "local-" and is replaced by the Drive id once the
+  // write lands, so an edit made before the flush still refers to the same row.
+
+  function walk(nodes, fn) {
+    (nodes || []).forEach(function (node) {
+      fn(node);
+      if (node.kind === "folder" && node.children) walk(node.children, fn);
+    });
+  }
+
+  function find(nodes, id) {
+    var hit = null;
+    walk(nodes, function (node) { if (!hit && node.id === id) hit = node; });
+    return hit;
+  }
+
+  function siblingsOf(nodes, id) {
+    for (var i = 0; i < (nodes || []).length; i++) {
+      if (nodes[i].id === id) return nodes;
+      if (nodes[i].kind === "folder") {
+        var found = siblingsOf(nodes[i].children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function parentIdOf(nodes, id, parent) {
+    for (var i = 0; i < (nodes || []).length; i++) {
+      if (nodes[i].id === id) return parent || "";
+      if (nodes[i].kind === "folder") {
+        var found = parentIdOf(nodes[i].children, id, nodes[i].id);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  }
+
+  function remove(nodes, id) {
+    var siblings = siblingsOf(nodes, id);
+    if (!siblings) return null;
+    for (var i = 0; i < siblings.length; i++) {
+      if (siblings[i].id === id) return siblings.splice(i, 1)[0];
+    }
+    return null;
+  }
+
+  // The tree returned by the library is the content of the root folder, so a
+  // row with no parent folder is a sibling of the top-level rows. A row is
+  // only appended when its folder really exists, so a stale parent is a no-op
+  // rather than a row that the next read would lose.
+  function insertInto(nodes, parentId, node) {
+    if (!parentId) { nodes.push(node); return nodes; }
+    var parent = find(nodes, parentId);
+    if (!parent || parent.kind !== "folder") return null;
+    parent.children = parent.children || [];
+    parent.children.push(node);
+    return parent.children;
+  }
+
+  function textNode(id, name, text, parentId, driverId) {
+    return {
+      id: id, kind: "text", name: name, driveName: (/\.txt$/i.test(name) ? name : name + ".txt"),
+      parentId: parentId || "", driverId: driverId || "",
+      collapsed: false, deferred: false, loadError: "",
+      // A row that has never been written to Drive has no hash yet; the worker
+      // hashes the body when it uploads it.
+      text: text, hash: "",
+    };
+  }
+
+  function folderNode(id, name, parentId) {
+    return {
+      id: id, kind: "folder", name: name, driveName: name,
+      parentId: parentId || "", driverId: "",
+      collapsed: false, deferred: false, loadError: "", children: [],
+    };
+  }
+
+  // Apply a queued command to a snapshot. Returns the ids that were touched,
+  // so the caller knows what to remap after the flush. A command that no
+  // longer has a target (an item deleted in the meantime) is a no-op.
+  function apply(snapshot, command, newId) {
+    var tree = snapshot.tree || (snapshot.tree = []);
+    var item = command.item || {};
+    // The panel sends the destination folder with the command; the queue
+    // stores it on the item because the write needs it later.
+    if (item.parentId === undefined && command.parentId !== undefined) item.parentId = command.parentId;
+    // A row created before it reached Drive has neither id; the caller names it.
+    // An edit, a rename or a move always names the row it changes.
+    var id = item.localId || item.id || newId ||
+      ("local-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+    if (command.kind === "delete") {
+      (command.ids || []).forEach(function (target) {
+        remove(tree, target);
+        if (snapshot.bodies) delete snapshot.bodies[target];
+      });
+      return command.ids || [];
+    }
+    if (command.kind === "move" || command.kind === "rename" || command.kind === "edit") {
+      var target = find(tree, id);
+      if (!target) return [];
+      if (command.kind === "edit") {
+        target.name = command.name;
+        if (typeof command.text === "string") target.text = command.text;
+        // An edited body is no longer the stored one.
+        target.hash = "";
+        if (snapshot.bodies) delete snapshot.bodies[target.id];
+      } else if (command.kind === "rename") {
+        target.name = command.name;
+      } else if (item.parentId !== undefined && parentIdOf(tree, id, "") !== item.parentId) {
+        if (remove(tree, id)) insertInto(tree, item.parentId, target);
+      }
+      return [id];
+    }
+    if (command.kind === "create") {
+      if (find(tree, id)) return [];
+      var name = command.name || item.name || "Untitled";
+      var created = item.kind === "folder"
+        ? folderNode(id, name, item.parentId)
+        : textNode(id, name, command.text || "", item.parentId);
+      var rootId = snapshot.rootId || snapshot.root || "";
+      var intoRoot = !item.parentId || item.parentId === rootId || !find(tree, item.parentId);
+      var siblings = intoRoot ? (tree.push(created), tree) : insertInto(tree, item.parentId, created);
+      return siblings ? [id] : [];
+    }
+    if (command.kind === "reorder") {
+      var groups = command.groups || [];
+      var parents = command.parents || [];
+      groups.forEach(function (group, at) {
+        var parent = parents[at] || snapshot.rootId || "";
+        // The tree is the content of the root folder, so a group in the root
+        // folder reorders the tree itself.
+        var holder = parent && parent !== snapshot.rootId && parent !== snapshot.root ? find(tree, parent) : null;
+        var siblings = holder ? holder.children : tree;
+        if (!siblings) return;
+        var wanted = (group || []).map(function (id) { return find(tree, id); }).filter(Boolean);
+        if (!wanted.length) return;
+        // Reorder only the given rows, leaving any row the group does not
+        // mention (a stale list) where it was.
+        var order = wanted.map(function (node) { return node.id; });
+        var next = siblings.slice();
+        var slots = [];
+        next.forEach(function (node, i) { if (order.indexOf(node.id) !== -1) slots.push(i); });
+        slots.forEach(function (slot, i) { next[slot] = wanted[i]; });
+        siblings.length = 0;
+        Array.prototype.push.apply(siblings, next);
+      });
+      return [];
+    }
+    if (command.kind === "collapse") {
+      (command.ids || []).forEach(function (target) {
+        var node = find(tree, target);
+        if (node) node.collapsed = !!command.collapsed;
+      });
+      return command.ids || [];
+    }
+    return [];
+  }
+
+  // Replace a local id everywhere a snapshot may refer to it: the rows, the
+  // bodies and the ordering/collapse index.
+  function remap(snapshot, from, to) {
+    walk(snapshot.tree, function (node) {
+      if (node.parentId === from) node.parentId = to;
+      if (node.id === from) node.id = to;
+    });
+    if (snapshot.bodies && snapshot.bodies[from]) {
+      snapshot.bodies[to] = snapshot.bodies[from];
+      delete snapshot.bodies[from];
+    }
+    var index = snapshot.index;
+    if (index && index.order) {
+      Object.keys(index.order).forEach(function (parent) {
+        if (parent === from) { index.order[to] = index.order[parent]; delete index.order[parent]; }
+        index.order[parent] = (index.order[parent] || []).map(function (id) { return id === from ? to : id; });
+      });
+    }
+    if (index && index.collapsed && index.collapsed[from] !== undefined) {
+      index.collapsed[to] = index.collapsed[from];
+      delete index.collapsed[from];
+    }
+  }
+
+  // The ordering and collapse state of every folder, as the centralized index
+  // stores it. A row that never reached Drive has no place in it yet.
+  function indexOf(tree) {
+    var index = { order: {}, collapsed: {} };
+    (function walkFolders(nodes, parentId) {
+      var ids = [];
+      (nodes || []).forEach(function (node) {
+        // A row that never reached Drive is skipped, but its folder is still
+        // walked so nothing nested inside it is lost.
+        if (String(node.id).indexOf("local-") !== 0) {
+          ids.push(node.id);
+          if (node.collapsed) index.collapsed[node.id] = "1";
+        }
+        if (node.kind === "folder") walkFolders(node.children, node.id);
+      });
+      // The root folder's own children are recorded too: the tree supplied
+      // here is the content of the root folder, so "" is its key.
+      index.order[parentId || ""] = ids;
+    })(tree, "");
+    return index;
+  }
+
+  // --- the queue itself -----------------------------------------------------
+
+  function create(storage) {
+    var cached = null;
+
+    async function read() {
+      if (cached) return cached;
+      if (!storage) { cached = []; return cached; }
+      try {
+        var stored = (await storage.get(KEY))[KEY];
+        cached = Array.isArray(stored) ? stored : [];
+      } catch (ignored) { cached = []; }
+      return cached;
+    }
+
+    async function write(list) {
+      cached = list;
+      if (!storage) return;
+      try {
+        if (list.length) await storage.set({ [KEY]: list });
+        else await storage.remove(KEY);
+      } catch (ignored) { /* the queue survives in memory for this session */ }
+    }
+
+    async function push(commands) {
+      var list = (await read()).slice();
+      var at = Date.now();
+      (commands || []).forEach(function (command, order) {
+        command.queuedAt = at;
+        command.order = order;
+        // A later edit of a row that has not reached Drive yet replaces the
+        // queued write for it, so one new row costs one upload, not two. A
+        // failure never strands the row: the entry keeps the newest state.
+        var localId = command.item && (command.item.localId || (String(command.item.id || "").indexOf("local-") === 0 ? command.item.id : ""));
+        var at2 = localId ? list.findIndex(function (existing) {
+          var other = existing.item && (existing.item.localId || existing.item.id || "");
+          return other === localId && existing.kind !== "delete" && existing.kind !== "order";
+        }) : -1;
+        if (at2 !== -1 && command.kind !== "delete") { list[at2] = command; return; }
+        if (at2 !== -1 && command.kind === "delete") { list.splice(at2, 1); return; }
+        list.push(command);
+      });
+      // A very long queue is a sign that the flush never ran; keep the newest
+      // edits and say so instead of growing without bound.
+      if (list.length > MAX) list = list.slice(list.length - MAX);
+      await write(list);
+      return list;
+    }
+
+    async function all() { return (await read()).slice().sort(byOrder); }
+
+    async function remove(ids) {
+      var drop = new Set(ids || []);
+      var list = (await read()).filter(function (command) { return !drop.has(command.id); });
+      await write(list);
+      return list;
+    }
+
+    async function clear() { await write([]); }
+
+    function byOrder(a, b) {
+      return (a.queuedAt || 0) - (b.queuedAt || 0) || (a.order || 0) - (b.order || 0);
+    }
+
+    return { all: all, push: push, remove: remove, clear: clear };
+  }
+
+  return {
+    create: create, apply: apply, remap: remap, find: find, KEY: KEY, indexOf: indexOf,
+    walk: walk, parentIdOf: parentIdOf, siblingsOf: siblingsOf,
+  };
+});

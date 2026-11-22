@@ -1,16 +1,21 @@
 /* Pastex background service worker (Manifest V3).
  *
- *  - Toolbar click opens the Side Panel.
+ *  - The toolbar icon is a toggle: Chrome opens the side panel on click and
+ *    closes it on the next click (Chrome 141+), through the panel behavior.
  *  - The in-page ⚡ button opens the side panel on approved sites.
  *  - Content scripts are injected on demand for tabs that were already
  *    open when the extension was installed or updated.
  */
 
-importScripts("sites.js", "config-client.js", "drive.js", "hash.js", "library.js", "cache.js");
+importScripts("sites.js", "config-client.js", "drive.js", "hash.js", "library.js", "queue.js", "cache.js");
 
 var PastexConfig = PastexConfigClient;
 
 var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto, chrome.storage.local);
+var deferredQueue = PastexQueue.create(chrome.storage.local);
+// Every edit that has not reached Drive yet lives in the queue; a flush sends
+// them one at a time while the panel is not using the library.
+var flushRunning = false;
 var progressPorts = new Set();
 var progressTimer = 0;
 var pendingProgress = null;
@@ -71,6 +76,33 @@ function panelBusy() {
   return panelOperations > 0;
 }
 
+// An allowed site with a visible tab is "in use": no background check may run
+// while the user is on one, even if the machine has gone idle. The content
+// script reports the visibility of its own tab.
+var siteInUse = new Set();
+
+function markSiteVisibility(sender, visible) {
+  if (!sender || !sender.tab || typeof sender.tab.id !== "number") return;
+  if (visible) siteInUse.add(sender.tab.id);
+  else siteInUse.delete(sender.tab.id);
+}
+
+function siteBusy() {
+  return siteInUse.size > 0;
+}
+
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener(function (tabId, info) {
+    siteInUse.delete(tabId);
+    if (info && info.isWindowClosing) return;
+    // Only the last site tab closing counts as leaving, and the worker is the
+    // saver of last resort when a page could not report it itself.
+    if (siteInUse.size === 0) retryDeferredWrites();
+  });
+}
+
+
+
 function idleState() {
   return new Promise(function (resolve) {
     if (!chrome.idle || typeof chrome.idle.queryState !== "function") { resolve("unknown"); return; }
@@ -92,6 +124,15 @@ function notifyPanelsFilled(filled) {
 
 // Notify an open panel that the background sync found new content, so it can
 // repaint from the (already fresh) cache without another Drive round trip.
+// A local edit changed the cached library; the open panel repaints from the
+// cache, with no Drive request.
+function notifyPanelsLocal(pending) {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ local: true, pending: pending || 0 }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
 function notifyPanelsChanged(lastCheckedAt) {
   progressPorts.forEach(function (port) {
     try { port.postMessage({ changed: true, lastCheckedAt: lastCheckedAt || Date.now() }); }
@@ -148,7 +189,7 @@ function adaptBackoff(changed) {
 // the user is never charged for a request while working.
 async function runIdleSync(assumeIdle) {
   if (idleSyncRunning) return;
-  if (panelBusy()) return;
+  if (panelBusy() || siteBusy()) return;
   // A broken configuration is not worth retrying every minute.
   if (Date.now() < nextSyncAt) return;
   var state = await idleState();
@@ -204,6 +245,14 @@ function trackPanelOperation(promise) {
 
 function trustedPanel(sender) {
   return sender && sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("sidepanel.html");
+}
+
+// A content script on an approved site may report that its tab was left. It
+// can only trigger the flush that is already scheduled, never a Drive write of
+// its own, and it still needs a sender that belongs to this extension.
+function trustedStoppedSite(sender) {
+  return !!(sender && sender.id === chrome.runtime.id && sender.tab && sender.frameId === 0 && sender.url &&
+    /^https?:/i.test(sender.url));
 }
 
 chrome.runtime.onConnect.addListener(function (port) {
@@ -325,63 +374,306 @@ async function insertIntoActiveTab(id, text) {
   }
 }
 
-// The worker serializes Drive writes and invalidates the shared cache before
-// and after every write, including partial failures. Only the panel can write.
-async function mutateDrive(command) {
-  return libraryCache.mutate(async function () {
-    var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
-    if (!command.rootId || session.rootId !== command.rootId) throw new Error("Drive folder changed; refresh the list first.");
-    var token = session.token;
-    if (command.action === "save") {
-      var mode = command.mode, name = command.name, node = command.node;
-      if (typeof name !== "string" || !name.trim() || name.indexOf("/") !== -1 || !command.parentId)
-        throw new Error("Invalid name or parent folder.");
-      var driveName = mode === "new-text" ? name.replace(/\.txt$/i, "") + ".txt" : name;
-      if (node && node.kind === "text") driveName = name.replace(/\.txt$/i, "") + (/\.txt$/i.test(node.driveName || "") ? ".txt" : "");
-      if (!node || (driveName !== node.driveName && driveName !== node.name)) {
-        var children = await PastexDrive.listChildren(token, command.parentId);
-        if (children.some(function (child) { return child.name === driveName && child.id !== (node && node.id); }))
-          throw new Error("An item with that name already exists in this folder.");
-      }
-      if (mode === "new-folder") return { id: await PastexDrive.createFolder(token, name, command.parentId) };
-      if (mode === "new-text") return { id: (await PastexDrive.uploadNew(token, command.parentId, name.replace(/\.txt$/i, ""), command.text)).id };
-      if (!node || !node.id || ["edit-text", "rename-text", "rename-folder"].indexOf(mode) === -1) throw new Error("Invalid edit request.");
-      if (mode === "edit-text" && command.text !== node.text) await PastexDrive.updateText(token, node.id, command.text);
-      if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
-      return { id: node.id };
+// One Drive write, with the session already resolved. sendQueued is its only
+// caller: a panel edit never reaches this, it only reaches the queue.
+async function applyDriveCommand(session, command) {
+  var token = session.token;
+  if (command.action === "save") {
+    var mode = command.mode, name = command.name, node = command.node;
+    if (typeof name !== "string" || !name.trim() || name.indexOf("/") !== -1 || !command.parentId)
+      throw new Error("Invalid name or parent folder.");
+    var driveName = mode === "new-text" ? name.replace(/\.txt$/i, "") + ".txt" : name;
+    if (node && node.kind === "text") driveName = name.replace(/\.txt$/i, "") + (/\.txt$/i.test(node.driveName || "") ? ".txt" : "");
+    if (!node || (driveName !== node.driveName && driveName !== node.name)) {
+      var children = await PastexDrive.listChildren(token, command.parentId);
+      if (children.some(function (child) { return child.name === driveName && child.id !== (node && node.id); }))
+        throw new Error("An item with that name already exists in this folder.");
     }
-    if (command.action === "delete") {
-      var results = await mapLimit(command.ids || [], 6, function (id) {
-        return PastexDrive.trashFile(token, id).then(function () { return ""; },
-          function (err) { return err.message || String(err); });
-      });
-      var failures = results.filter(Boolean);
-      if (failures.length) throw new Error(failures.length + " item(s) could not be deleted: " + failures[0]);
-      return {};
+    if (mode === "new-folder") return { id: await PastexDrive.createFolder(token, name, command.parentId) };
+    if (mode === "new-text") return { id: (await PastexDrive.uploadNew(token, command.parentId, name.replace(/\.txt$/i, ""), command.text)).id };
+    if (!node || !node.id || ["edit-text", "rename-text", "rename-folder"].indexOf(mode) === -1) throw new Error("Invalid edit request.");
+    if (mode === "edit-text" && command.text !== node.text) await PastexDrive.updateText(token, node.id, command.text);
+    if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
+    return { id: node.id };
+  }
+  if (command.action === "delete") {
+    var results = await mapLimit(command.ids || [], 6, function (id) {
+      return PastexDrive.trashFile(token, id).then(function () { return ""; },
+        function (err) { return err.message || String(err); });
+    });
+    var failures = results.filter(Boolean);
+    if (failures.length) throw new Error(failures.length + " item(s) could not be deleted: " + failures[0]);
+    return {};
+  }
+  // The order and the collapse state of the library live in one label on
+  // the root folder, so a reorder or a collapse is a single Drive write.
+  if (command.action === "reorder") {
+    var order = PastexLibrary.cloneIndex(session.index);
+    var groups = command.groups || [];
+    var parents = command.parents || [];
+    for (var j = 0; j < groups.length; j++) {
+      var parent = parents[j] || session.rootId;
+      order.order[parent] = (groups[j] || []).slice();
     }
-    // The order and the collapse state of the library live in one label on
-    // the root folder, so a reorder or a collapse is a single Drive write.
-    if (command.action === "reorder") {
-      var order = PastexLibrary.cloneIndex(session.index);
-      var groups = command.groups || [];
-      var parents = command.parents || [];
-      for (var j = 0; j < groups.length; j++) {
-        var parent = parents[j] || session.rootId;
-        order.order[parent] = (groups[j] || []).slice();
-      }
-      await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
-      return {};
-    }
-    if (command.action === "collapse") {
-      var folded = PastexLibrary.cloneIndex(session.index);
-      (command.ids || []).filter(Boolean).forEach(function (id) {
-        folded.collapsed[id] = command.collapsed ? "1" : "0";
-      });
-      await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
-      return {};
-    }
+    await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
+    return {};
+  }
+  if (command.action === "order") {
+    var merged = PastexLibrary.cloneIndex(session.index);
+    var next = command.index || {};
+    Object.keys(next.order || {}).forEach(function (parent) { merged.order[parent] = next.order[parent]; });
+    Object.keys(next.collapsed || {}).forEach(function (id) { merged.collapsed[id] = next.collapsed[id]; });
+    await PastexDrive.setIndex(token, session.rootId, merged, undefined, session.properties);
+    return {};
+  }
+  if (command.action === "collapse") {
+    var folded = PastexLibrary.cloneIndex(session.index);
+    (command.ids || []).filter(Boolean).forEach(function (id) {
+      folded.collapsed[id] = command.collapsed ? "1" : "0";
+    });
+    await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
+    return {};
+  }
+
+  throw new Error("Unknown Drive operation.");
+}
+
+// --- edits made while the user is on a site -------------------------------
+//
+// Nothing reaches Drive while a site is being used: the edit is applied to the
+// cached snapshot at once (so the panel and the launcher read the same list)
+// and its Drive write is queued. The queue lives in storage.local, so it
+// survives a browser restart, and flush() sends it when the tab is left.
+
+function localId() {
+  return "local-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2));
+}
+
+// The Drive name of a row, including the .txt suffix the library uses.
+function driveNameOf(command) {
+  var name = command.name || "";
+  var item = command.item || {};
+  if (command.kind === "create") {
+    if (item.kind === "folder") return name;
+    return name.replace(/\.txt$/i, "") + ".txt";
+  }
+  // An edit or a rename keeps whatever suffix the row already had.
+  return item.driveName || name;
+}
+
+// The queue entry for one edit, or null when it needs no Drive write.
+function queuedCommand(command, createdId) {
+  var item = command.item || {};
+  // A create gets the local id of the row that was just added to the cache,
+  // so the remap after the upload can find it.
+  if (!item.localId && createdId) item.localId = createdId;
+  if (command.kind === "collapse" || command.kind === "reorder") {
+    // Both live in the same root label, so the entry says which one this is.
+    // Neither carries an item, which is why the id check above comes later.
+    // A reorder carries the panel's groups/parents shape verbatim; a collapse
+    // carries the ids and the folded flag.
+    return { id: localId(), kind: "order", queuedAt: Date.now(), item: {},
+      // The panel sends groups/parents; an older caller sends ids. Both are
+      // one group of one parent here.
+      groups: command.kind === "reorder"
+        ? (command.groups && command.groups.length ? command.groups : [command.ids || []]).map(function (g) { return (g || []).slice(); })
+        : undefined,
+      parents: command.kind === "reorder" ? (command.parents && command.parents.length ? command.parents.slice() : [""]) : undefined,
+      collapse: command.kind === "collapse" ? { ids: (command.ids || []).slice(), collapsed: !!command.collapsed } : undefined };
+  }
+  // A delete names its targets in ids and carries no item, so the id check
+  // must look there first or the whole delete would be dropped.
+  var id = item.localId || item.id || command.id ||
+    (command.kind === "delete" ? ((command.ids || []).filter(Boolean)[0] || "") : "") ||
+    (command.kind === "create" ? localId() : "");
+  if (!id) return null;
+  // A row is new when it says so, when it only has a local id, or when it has
+  // no id at all (a create the panel has not named yet).
+  // A local id always means "not on Drive yet", whatever the caller believes.
+  var isNew = String(item.id || item.localId || "").indexOf("local-") === 0 ||
+    (item.isNew !== undefined ? !!item.isNew : !item.id);
+  return {
+    id: localId(),
+    kind: command.kind,
+    // A move lives in the same places as an edit; the parent travels in item.
+    move: command.kind === "move" ? true : undefined,
+    // A row that never reached Drive has nothing to delete there.
+    ids: (command.ids || []).filter(function (target) { return String(target).indexOf("local-") !== 0; }),
+    text: typeof command.text === "string" ? command.text : undefined,
+    name: command.name,
+    item: { id: item.id || id, localId: item.localId || "", kind: item.kind || "text",
+      parentId: item.parentId, driveName: item.driveName || driveNameOf(command), isNew: isNew },
+  };
+}
+
+// Validate an edit without reading Drive: the queue is applied to the cache
+// and this only rejects what can be checked locally.
+function validateLocalEdit(command) {
+  if (!command || typeof command !== "object") throw new Error("Invalid edit request.");
+  if (["create", "edit", "rename", "move", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
     throw new Error("Unknown Drive operation.");
+  if (command.kind === "create" || command.kind === "edit" || command.kind === "rename") {
+    if (typeof command.name !== "string" || !command.name.trim() || command.name.indexOf("/") !== -1)
+      throw new Error("Invalid name or parent folder.");
+  }
+  if (command.kind === "create" && !command.item) throw new Error("Invalid edit request.");
+  return command;
+}
+
+async function queueLocalEdit(command) {
+  validateLocalEdit(command);
+  var localId = "";
+  var result = await libraryCache.mutateLocal(async function (snapshot) {
+    var applied = PastexQueue.apply(snapshot, command);
+    // A create's new row is named here, so the upload can rename it in the
+    // cache to the Drive id it receives.
+    if (command.kind === "create" && applied && applied.length) localId = applied[0];
+    return applied;
   });
+  var entry = queuedCommand(command, localId);
+  if (!result.skipped && !entry) {
+    // Accepted by the cache but with nothing to send is a bug, not a no-op:
+    // the edit would look saved and never leave the machine.
+    throw new Error("The edit could not be queued for Drive.");
+  }
+  if (!result.skipped && entry) await deferredQueue.push([entry]);
+  // Nothing is scheduled here on purpose. The write waits until the tab this
+  // panel belongs to is closed or hidden, which the content script reports;
+  // an edit made on a site never sends a request to Drive by itself.
+  if (!result.skipped) notifyPanelsLocal(result.pending);
+  return { applied: result.applied, pending: result.pending, queued: !!entry, local: true };
+}
+
+// --- flush: send the queue once the user has left the site ----------------
+//
+// There is no timer behind this: the only triggers are a tab being hidden or
+// closed (reported by the content script) and the browser starting after a
+// quit, which is the retry path for a queue that never left.
+
+// Run the queue serially. A transient failure (offline, a rate limit) keeps
+// the entry for the next flush; a permanent one (the row is gone) drops it
+// from the cache and from the queue so it cannot be retried forever.
+async function flushSoon() {
+  if (flushRunning) return { sent: 0, failed: 0 };
+  var entries = await deferredQueue.all();
+  if (!entries.length) return { sent: 0, failed: 0 };
+  flushRunning = true;
+  try {
+    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i]);
+  } finally {
+    flushRunning = false;
+    // The writes are on Drive now; one full read turns every local id into the
+    // id Drive gave the row, so the cache matches Drive again.
+    try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+    // A flush that cannot report what it did leaves a silent gap, so the
+    // result says how many entries are still waiting.
+    reportFlush(await pendingCount());
+  }
+  return { sent: entries.length };
+}
+
+function reportFlush(pending) {
+  if (pending) console.warn("Pastex: " + pending + " queued write(s) still waiting.");
+}
+
+async function pendingCount() {
+  return (await deferredQueue.all()).length;
+}
+
+// A queued reorder or collapse, as the one index write it becomes. The order
+// comes from the cache the edit was applied to, so it is already what the
+// panel shows.
+function queuedIndex(entry, snapshot, rootId) {
+  if (entry.collapse) {
+    // The collapse is one flag per row, but the same label carries the order,
+    // so the whole index is sent with it or a pending order would be lost.
+    var folded = PastexQueue.indexOf(snapshot && snapshot.tree);
+    var rootOrder = folded.order[""] || [];
+    delete folded.order[""];
+    if (rootId) folded.order[rootId] = rootOrder;
+    (entry.collapse.ids || []).forEach(function (id) {
+      if (String(id).indexOf("local-") === 0) return;
+      folded.collapsed[id] = entry.collapse.collapsed ? "1" : "0";
+    });
+    return { action: "order", index: folded };
+  }
+  // The order is read from the cached tree, not from the entry: the edit was
+  // applied there already, so this is exactly what the panel shows and it
+  // needs no second copy that could disagree with it. indexOf keys the root
+  // rows under "", but the label keys them under rootId.
+  var index = PastexQueue.indexOf(snapshot && snapshot.tree);
+  var group = entry.groups && entry.groups.length ? (entry.groups[0] || []) : index.order[""];
+  var parent = (entry.parents && entry.parents[0]) || rootId;
+  if (group && parent) index.order[parent] = group.filter(function (id) { return String(id).indexOf("local-") !== 0; });
+  delete index.order[""];
+  return { action: "order", index: index };
+}
+
+// A queued edit, in Drive terms, with the ids already resolved.
+function driveCommandFor(entry, rootId, snapshot) {
+  var item = entry.item || {};
+  if (entry.kind === "order") {
+    // A reorder and a collapse share one label on the root folder, so both are
+    // written as that one index. The queue entry carries which one it was.
+    return queuedIndex(entry, snapshot, rootId);
+  }
+  if (entry.kind === "delete") {
+    var ids = (entry.ids || []).filter(Boolean);
+    return ids.length ? { action: "delete", ids: ids } : null;
+  }
+
+  // A row that never reached Drive is uploaded whatever the last edit called
+  // itself: editing a brand-new row must not become a rename of a file that
+  // does not exist yet.
+  if (entry.kind === "create" || item.isNew) {
+    return { action: "save", mode: item.kind === "folder" ? "new-folder" : "new-text",
+      name: entry.name, parentId: item.parentId || rootId, text: entry.text || "", rootId: rootId };
+  }
+  // An edit of a row that already exists on Drive. A text row always takes the
+  // body-writing mode: the body may have changed and the same call also
+  // applies a rename, while "rename-text" would silently drop the body.
+  return { action: "save", mode: item.kind === "folder" ? "rename-folder" : "edit-text",
+    name: entry.name, parentId: item.parentId || rootId, text: entry.text, rootId: rootId,
+    node: { id: item.id, kind: item.kind, name: item.driveName || entry.name,
+      driveName: item.driveName || entry.name } };
+}
+
+async function sendQueued(entry) {
+  var result;
+  // Read the tree before taking the write lock: a write invalidates the
+  // snapshot before it runs, so a read taken inside would always be empty.
+  var snapshot = await libraryCache.current();
+  try {
+    result = await libraryCache.mutate(async function () {
+      var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
+      var command = driveCommandFor(entry, session.rootId, snapshot);
+      if (!command) return { skipped: true };
+      var written = await applyDriveCommand(session, command);
+      // A created row now has its Drive id, and the cached snapshot follows at
+      // once: this runs while the write still holds the library lock, before
+      // the invalidation that drops the snapshot.
+      return written;
+    });
+  } catch (err) {
+    var failure = err && err.message ? err.message : String(err);
+    if (isPermanentFailure(failure)) {
+      await deferredQueue.remove([entry.id]);
+      await libraryCache.dropLocal(entry);
+      return { ok: false, retry: false, error: failure };
+    }
+    // Offline, a rate limit or a missing configuration: keep it for later.
+    return { ok: false, retry: true, error: failure };
+  }
+  await deferredQueue.remove([entry.id]);
+  return { ok: true, id: result && result.id };
+}
+
+// A write that Drive refuses for good is not worth retrying; a network or
+// quota failure is.
+function isPermanentFailure(message) {
+  if (/HTTP (400|403|404|410)\b/.test(message)) return true;
+  if (/already exists|Invalid edit request|Invalid name|not found|Unknown Drive operation/i.test(message)) return true;
+  return false;
 }
 
 // --- events ---
@@ -397,6 +689,22 @@ function initializeUserConfig() {
   // is instant. This still honours the idle gate: an active user is not
   // charged for a request, and the idle transition triggers the check.
   scheduleIdleSync(3000);
+  // A queue left behind by a browser that was quit before the flush is sent
+  // now, while nothing is on screen.
+  retryDeferredWrites();
+}
+
+// The retry path for a queue that never left. It runs on both install and
+// start, so a machine that was shut down with pending edits still lands them.
+async function retryDeferredWrites() {
+  try {
+    if (!(await pendingCount())) return;
+    // Never write while an allowed site is open: the queue waits for the tab
+    // to be left, which is the only moment the user asked for.
+    if (siteBusy()) return;
+    await flushSoon();
+    notifyPanelsChanged(Date.now());
+  } catch (ignored) { /* the next start, or the next left tab, tries again */ }
 }
 
 chrome.runtime.onInstalled.addListener(initializeUserConfig);
@@ -421,11 +729,18 @@ if (chrome.idle) {
 readBackoff().then(function () { ensureIdleAlarm(true, 1); });
 ensureIdleAlarm();
 
-chrome.action.onClicked.addListener(async function (tab) {
-  if (tab && tab.windowId !== undefined) {
-    await chrome.sidePanel.open({ windowId: tab.windowId });
-  }
-});
+// The toolbar icon toggles the panel instead of only opening it. Chrome owns
+// that behavior: with openPanelOnActionClick it opens the panel on click and
+// closes it again on the next click (Chrome 141+), with no action.onClicked
+// listener competing for the click.
+function enableToolbarToggle() {
+  if (!chrome.sidePanel || typeof chrome.sidePanel.setPanelBehavior !== "function") return;
+  try {
+    var result = chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    if (result && typeof result.catch === "function") result.catch(function () {});
+  } catch (ignored) { /* older Chrome keeps the toolbar click as it is */ }
+}
+enableToolbarToggle();
 
 // Content scripts must authenticate on an allowed site before opening or
 // closing a panel. Closing exists only from Chrome 141, so the sender is told
@@ -438,6 +753,10 @@ function panelToggleSupported() {
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    // New links mean a new library: the next read is a full sync. A queue
+    // that points at the old folder must not be replayed into the new one.
+    libraryCache.configurationChanged();
+    deferredQueue.clear().catch(function () {});
     var refreshed = PastexConfig.invalidate ? PastexConfig.invalidate() : Promise.resolve();
     Promise.resolve(refreshed).catch(function () {}).then(function () { return configureSites(); }).then(function () { sendResponse({ ok: true }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
@@ -500,6 +819,40 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       .catch(function () { sendResponse({ ok: true }); });
     return true;
   }
+  if (message && message.type === "pastex-panel-local-edit") {
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    // The edit never touches Drive here: it is applied to the cache and its
+    // write waits for the tab to be left.
+    queueLocalEdit(message.command || {}).then(function (result) { sendResponse({ ok: true, result: result }); })
+      .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
+    return true;
+  }
+  if (message && message.type === "pastex-panel-status") {
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    pendingCount().then(function (pending) { sendResponse({ ok: true, result: { pending: pending } }); })
+      .catch(function () { sendResponse({ ok: true, result: { pending: 0 } }); });
+    return true;
+  }
+  if (message && message.type === "pastex-site-visible") {
+    // Only a content script of this extension may report a tab's visibility.
+    if (!trustedStoppedSite(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    markSiteVisibility(sender, message.visible);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message && message.type === "pastex-flush-now") {
+    if (!trustedPanel(sender) && !trustedStoppedSite(sender)) {
+      sendResponse({ ok: false, error: "Unauthorized request." }); return false;
+    }
+    // The page that reports the leave is leaving, so its tab stops counting as
+    // in use even if the visibility message has not arrived yet. Another
+    // allowed site that is still visible keeps the queue waiting.
+    markSiteVisibility(sender, false);
+    if (siteBusy()) { sendResponse({ ok: true, result: { sent: 0, deferred: true } }); return false; }
+    flushSoon().then(function (result) { sendResponse({ ok: true, result: result }); })
+      .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
+    return true;
+  }
   if (message && message.type === "pastex-panel-fill") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     var filling = trackPanelOperation(libraryCache.fill());
@@ -507,12 +860,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }
-  if (message && (message.type === "pastex-panel-library" || message.type === "pastex-panel-mutate")) {
+  if (message && message.type === "pastex-panel-library") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     clearProgress();
-    var operation = trackPanelOperation(message.type === "pastex-panel-library" ?
-      libraryCache.get(!!message.force, broadcastProgress) : mutateDrive(message.command || {}));
-    operation.then(function (result) { clearProgress(); sendResponse({ ok: true, result: result }); })
+    trackPanelOperation(libraryCache.get(!!message.force, broadcastProgress))
+      .then(function (result) { clearProgress(); sendResponse({ ok: true, result: result }); })
       .catch(function (err) { clearProgress(); sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }

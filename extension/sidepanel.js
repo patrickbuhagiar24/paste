@@ -34,6 +34,11 @@
   var selecting = false;
   var selectedItems = new Set();
   var lastCheckedAt = 0;
+  // Edits made here are applied to the cache at once; their Drive write waits
+  // in the worker's queue until the tab is left, so nothing is fetched while
+  // the user works.
+  var pendingWrites = 0;
+  var savingLocal = false;
 
   function $(id) {
     return document.getElementById(id);
@@ -322,7 +327,8 @@
     var folders = index.folders.length;
     var state = busy ? "busy" : (ready ? "ready" : "error");
     var label = busy ? "Drive: loading…" :
-      (ready ? (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected") : "Google Drive unavailable");
+      (ready ? (pendingWrites ? "Saved here • " + pendingWrites + " change(s) go to Drive when you leave this site" :
+        (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected")) : "Google Drive unavailable");
     $("drive-status").textContent = label;
     $("drive-status").setAttribute("data-state", state);
     $("btn-sync").disabled = busy;
@@ -358,6 +364,7 @@
       // The background worker refreshed the cache while the user was away.
       if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
       if (message.filled) { applyBackgroundChange(); return; }
+      if (message.local) { if (typeof message.pending === "number") pendingWrites = message.pending; applyBackgroundChange(); return; }
       onProgress(message.tree, message.rootId);
     });
   } catch (ignored) { /* Loading still works without live progress. */ }
@@ -446,8 +453,9 @@
       if (result.cached && result.pending) scheduleFill();
       var warnings = result.warnings || [];
       if (!quiet) {
-        setStatus(warnings.length ? "Drive loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-          (fromCache ? "Ready." : "Google Drive loaded: " + index.texts.length + " snippets."), warnings.length ? "error" : "ok");
+        setStatus(warnings.length ? "Loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
+          (fromCache ? "Ready: " + index.texts.length + " snippets from the cache." :
+            "Google Drive synced: " + index.texts.length + " snippets."), warnings.length ? "error" : "ok");
       }
       return true;
     } catch (err) {
@@ -458,7 +466,7 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
-      if (!quiet) setStatus("Could not load Google Drive: " + (err.message || err) + (ready ? " (showing previous list)" : ""), "error");
+      if (!quiet) setStatus("Could not read the library: " + (err.message || err) + (ready ? " (showing previous list)" : ""), "error");
       return false;
     } finally {
       loading = false;
@@ -580,23 +588,69 @@
     return "";
   }
 
+  // The queue speaks one small vocabulary ("create", "edit", "rename", "move",
+  // "delete", "collapse", "reorder"); the panel still uses its editor actions.
+  // The row itself travels along, because the write needs its kind, the name it
+  // had and whether it already reached Drive.
+  function identifyCommand(command) {
+    if (command.action === "save") {
+      var live = command.node && command.node.id ? index.byId.get(command.node.id) : null;
+      if (command.mode === "new-folder" || command.mode === "new-text") {
+        command.kind = "create";
+        command.item = { kind: command.mode === "new-folder" ? "folder" : "text",
+          name: command.name, parentId: command.parentId, localId: "" };
+        return command;
+      }
+      if (!live) return null;
+      command.kind = command.mode === "rename-folder" || (command.mode === "rename-text" && !command.text)
+        ? "rename" : "edit";
+      // A snippet whose name alone changes is a rename; its body is kept.
+      if (command.mode === "rename-text") command.kind = "rename";
+      command.item = rowIdentity(live);
+      return command;
+    }
+    if (command.action === "delete") { command.kind = "delete"; return command; }
+    if (command.action === "collapse") { command.kind = "collapse"; return command; }
+    if (command.action === "reorder") { command.kind = "reorder"; return command; }
+    return command.kind ? command : null;
+  }
+
+  function rowIdentity(node) {
+    return {
+      id: node.id, localId: node.id.indexOf("local-") === 0 ? node.id : "",
+      kind: node.kind, name: node.name, driveName: node.driveName,
+      parentId: parentOf(tree, node.id, rootId) || "",
+      isNew: node.id.indexOf("local-") === 0,
+    };
+  }
+
+  // An edit never talks to Drive: the worker applies it to the cache and
+  // queues the write, and the panel repaints from the cache.
   async function runMutation(command) {
     if (busy || !ready) return null;
     busy = true;
+    savingLocal = true;
     renderDriveBar();
     render();
-    setStatus("Saving changes to Google Drive…");
+    setStatus("Saving to the cache…");
     var result = null, failure = "";
     try {
       command.rootId = rootId;
-      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-mutate", command: command });
-      if (!response || !response.ok) throw new Error((response && response.error) || "Drive operation failed.");
-      result = response.result;
+      var queued = identifyCommand(command);
+      if (!queued) throw new Error("That item or folder is no longer available.");
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-local-edit", command: queued });
+      if (!response || !response.ok) throw new Error((response && response.error) || "The change could not be saved.");
+      result = response.result || {};
+      if (typeof result.pending === "number") pendingWrites = result.pending;
     } catch (err) {
-      failure = "Drive operation failed (some changes may have succeeded): " + (err.message || err);
-    } finally { busy = false; }
-    await refresh(true);
+      failure = "Could not save: " + (err.message || err);
+    } finally { busy = false; savingLocal = false; }
+    // Apply the cached list locally: no Drive request, no loading state.
+    await applyBackgroundChange();
+    renderDriveBar();
     if (failure) setStatus(failure, "error");
+    else setStatus(pendingWrites ?
+      "Saved to the cache; " + pendingWrites + " change(s) go to Drive when you leave this site." : "Saved.", "ok");
     return result;
   }
 
@@ -709,13 +763,17 @@
   });
 
   $("btn-sync").addEventListener("click", function () { refresh(true); });
-  // Closing exists from Chrome 141; the button is only offered when it works.
-  if (chrome.sidePanel && typeof chrome.sidePanel.close === "function") {
-    $("btn-close-panel").hidden = false;
-    $("btn-close-panel").addEventListener("click", function () {
-      chrome.sidePanel.close({ windowId: chrome.windows && chrome.windows.WINDOW_ID_CURRENT })
-        .catch(function () { setStatus("Use the side panel's close button.", "error"); });
-    });
+
+  // The queue depth is shown in the drive bar, so it is read once on open and
+  // refreshed whenever a local change lands.
+  async function readPending() {
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-panel-status" });
+      if (response && response.ok && response.result && typeof response.result.pending === "number") {
+        pendingWrites = response.result.pending;
+        renderDriveBar();
+      }
+    } catch (ignored) { /* the bar falls back to the cache label */ }
   }
   $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
@@ -750,4 +808,5 @@
   if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
   announcePanelState(true);
   refresh(false);
+  readPending();
 })();

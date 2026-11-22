@@ -164,6 +164,27 @@ every folder and clears the search first. The drive bar shows a state dot and
 session or local cache; the label is kept for compatibility, and the moment of
 the last check with Drive is shown next to it.
 
+## Reading from the cache, writing when you leave
+
+Reading never touches Google Drive. The first time a configuration manifest is
+loaded, the library is downloaded once and stored whole — every folder, every
+snippet body — and every later open is served from that snapshot, so the list
+appears instantly even when Drive is slow. Later changes arrive from the
+background check, which runs only while the machine is idle or locked.
+
+While you are on an allowed site, an edit from the panel (create, rename, edit,
+delete, reorder, fold) is applied to the cached list at once and its Drive
+write waits in a durable queue (`chrome.storage.local`, so it survives a
+browser restart). Nothing is sent to Drive while you are still on the page.
+The queue is flushed when the tab is closed or hidden, and once more on the next
+browser start if the browser was quit first; the flush finishes with one full
+read so the cache matches Drive again, including the ids Drive gave new rows.
+One rule holds everywhere: while any allowed site still has a visible tab, the
+queue waits, and so does the background check.
+The drive bar shows how many changes are waiting. A write Drive refuses
+permanently (the row was deleted elsewhere) is dropped from both the queue and
+the cache instead of being retried forever.
+
 The panel is built to be readable at a glance. Every text pair reaches WCAG
 AA (body text and row labels reach AAA), buttons have a visible outline and
 the selected row is marked by a strong tint, a filled accent bar and a
@@ -175,6 +196,11 @@ row and on keyboard focus. A dark theme follows the system preference, and
 `prefers-contrast: more` and `prefers-reduced-motion: reduce` are honoured.
 The palette and these rules are checked numerically in
 `extension/test/appearance.test.js`.
+
+The toolbar icon itself is a toggle: click it to open the side panel, click it
+again to close it (Chrome 141+; the browser owns that behavior through
+`sidePanel.setPanelBehavior`). Older Chrome keeps opening the panel. The panel
+has no Close button of its own — the toolbar icon is the switch.
 
 On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. From Chrome 141 the same button

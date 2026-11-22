@@ -25,21 +25,28 @@ function setup() {
   return { data, localData, config, storage, native, library, make, get calls() { return calls; } };
 }
 
-test("cache is session-only, shared after worker restart and keyed by account and folder", async () => {
+test("the cache is read without Drive and survives a worker restart, keyed by account and folder", async () => {
   const x = setup();
   const a = x.make();
+  // The first read of a configuration is its one full sync.
   const first = await a.get(false);
   assert.equal(first.cached, false);
+  // Every later read is served from the cache, including an explicit one.
   assert.equal((await a.get(false)).cached, true);
+  assert.equal((await a.get(true)).cached, true);
+  assert.equal(x.calls, 1, "reading the cache never loads Drive");
   const b = x.make();
   assert.equal((await b.get(false)).tree[0].id, "1");
-  assert.equal(x.calls, 1);
+  assert.equal(x.calls, 1, "a new worker reads the stored snapshot");
   assert.ok(!JSON.stringify(x.data).includes("private-secret"));
-  assert.equal((await b.get(true)).tree[0].id, "2");
   x.config.drive.folderId = "other";
-  assert.equal((await b.get(false)).tree[0].id, "3");
+  // A different library has no stored snapshot: its first read syncs once,
+  // and then it is cached like the others.
+  assert.equal((await b.get(false)).tree[0].id, "2");
+  assert.equal((await b.get(false)).tree[0].id, "2");
   x.config.serviceAccount.private_key = "rotated-key";
-  assert.equal((await b.get(false)).tree[0].id, "4");
+  assert.equal((await b.get(false)).tree[0].id, "3");
+  assert.equal((await b.get(false)).tree[0].id, "3");
   x.config.serviceAccount = null;
   await assert.rejects(b.get(false), /service-account/);
   assert.equal(x.data[Cache.KEY], undefined);
@@ -50,10 +57,11 @@ test("partial or failed refresh does not overwrite an existing complete cache", 
   const cache = x.make();
   await cache.get(false);
   x.library.load = async () => ({ tree: [{ id: "broken", loadError: "403" }], session: { rootId: "root" }, warnings: ["403"] });
-  assert.equal((await cache.get(true)).tree[0].id, "broken");
-  assert.equal((await cache.get(false)).tree[0].id, "1");
+  // A background check is the only path that reads Drive again.
+  assert.equal((await cache.sync()).skipped, true);
+  assert.equal((await cache.get(false)).tree[0].id, "1", "a partial listing never replaces the stored one");
   x.library.load = async () => { throw new Error("offline"); };
-  await assert.rejects(cache.get(true), /offline/);
+  await assert.rejects(cache.sync(), /offline/);
   assert.equal((await cache.get(false)).tree[0].id, "1");
 });
 
@@ -75,20 +83,25 @@ test("mutations invalidate cache even on partial failure and block reads until f
   assert.equal((await pending).tree[0].id, "2");
 });
 
-test("simultaneous misses share a load; an explicit refresh fetches again", async () => {
+test("simultaneous misses share one load, and a background check reads again", async () => {
   const x = setup();
   let release;
+  let gate = true;
   const initial = x.library.load;
-  x.library.load = async (...args) => { await new Promise((resolve) => { release = resolve; }); return initial(...args); };
+  x.library.load = async (...args) => { if (gate) await new Promise((resolve) => { release = resolve; }); return initial(...args); };
   const cache = x.make();
   const first = cache.get(false), second = cache.get(false);
   while (!release) await new Promise(setImmediate);
   release();
   assert.equal((await first).tree[0].id, "1");
   assert.equal((await second).tree[0].id, "1");
-  assert.equal(x.calls, 1);
-  x.library.load = initial;
-  assert.equal((await cache.get(true)).tree[0].id, "2");
+  assert.equal(x.calls, 1, "two opens share the one sync");
+  gate = false;
+  // The background check is what reads Drive afterwards: a changed library
+  // replaces the snapshot, an unchanged one does not touch it.
+  await cache.sync();
+  assert.equal(x.calls, 2);
+  assert.equal((await cache.get(false)).tree[0].id, "2", "the check's result is served from the cache");
 });
 
 test("session storage quota failure falls back to memory without retaining old stored data", async () => {
@@ -96,7 +109,9 @@ test("session storage quota failure falls back to memory without retaining old s
   const cache = x.make();
   await cache.get(false);
   x.storage.set = async () => { throw new Error("quota"); };
-  assert.equal((await cache.get(true)).tree[0].id, "2");
+  // The background check writes the snapshot; when storage refuses it, the
+  // session copy still serves the new list and the stale blob is gone.
+  await cache.sync();
   assert.equal((await cache.get(false)).tree[0].id, "2");
   assert.equal(x.data[Cache.KEY], undefined);
 });
@@ -123,8 +138,8 @@ test("an explicit Drive permission denial clears an old snapshot", async () => {
   const cache = x.make();
   await cache.get(false);
   x.library.load = async () => { throw new Error("Drive API failed (HTTP 403)"); };
-  await assert.rejects(cache.get(true), /403/);
-  assert.equal(x.data[Cache.KEY], undefined);
+  await assert.rejects(cache.sync(), /403/);
+  assert.equal(x.data[Cache.KEY], undefined, "a revoked item is not served again");
 });
 
 test("verified text bodies survive mutation invalidation and are reused on refresh", async () => {
@@ -164,22 +179,25 @@ test("configuration identity is memoized while the config object is unchanged", 
   } finally { webcrypto.subtle.digest = original; }
 });
 
-test("a local snapshot survives a browser restart and a stale one silently refreshes", async () => {
+test("a local snapshot survives a worker restart without reading Drive", async () => {
   const x = setup();
   const first = x.make();
   await first.get(false);
   assert.ok(x.localData[Cache.LKEY], "a successful load must persist a derived local snapshot");
   const id = x.data[Cache.KEY].identity;
   const second = x.make();
-  await x.storage.remove(Cache.KEY); // simulate a fresh browser process
+  await x.storage.remove(Cache.KEY); // simulate a fresh worker process
   // The last Drive confirmation is older than the freshness window.
   x.localData[Cache.FKEY][id].savedAt = 0;
   const result = await second.get(false);
   assert.equal(result.cached, true);
   assert.equal(result.tree[0].id, "1");
-  assert.equal(x.calls, 1, "opening from local cache must not block on Drive");
+  assert.equal(x.calls, 1, "opening from the local cache must not read Drive");
   await new Promise((resolve) => setTimeout(resolve, 350));
-  assert.equal(x.calls, 2, "a stale local snapshot should refresh in the background");
+  assert.equal(x.calls, 1, "an open never schedules a Drive refresh in the background");
+  // The check that corrects a stale snapshot is the idle one.
+  await second.sync();
+  assert.equal(x.calls, 2, "the background check is what reads Drive again");
 });
 
 test("mutations clear derived local snapshots but keep verified bodies in memory", async () => {
