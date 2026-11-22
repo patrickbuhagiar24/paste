@@ -769,6 +769,27 @@ test("Sync sends the queue and then reads Drive", async () => {
   assert.equal(done.result.pending, 0, "the queue is empty after Sync");
 });
 
+test("Sync sends the queue without reading the library back", async () => {
+  const { browser, writes } = editScenario();
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "here", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "" },
+  } });
+  // Count every read the worker makes after this point.
+  let loads = 0;
+  const realLoad = browser.context.PastexLibrary.load;
+  browser.context.PastexLibrary.load = async (...args) => { loads++; return realLoad(...args); };
+  const answer = await send({ type: "pastex-sync-now" });
+  await settle();
+  assert.equal(answer.result.flushed.sent, 1, "the queued write was sent");
+  assert.deepEqual(writes[0], ["text", "Draft", "here"]);
+  assert.equal(loads, 0, "Sync must not read the library back from Drive");
+  assert.equal(answer.result.pending, 0);
+});
+
 test("only the panel may ask for a sync", async () => {
   const { browser } = editScenario();
   const page = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };

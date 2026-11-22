@@ -248,35 +248,28 @@
 
   // --- messages from the background worker ---
 
-  // Edits made on a site wait in the cache. Once the tab is left (closed or
-  // hidden) the worker may send them to Drive; nothing is fetched or written
-  // while the user is still on the page. The worker decides what to flush, so
-  // this only reports the leave and never touches Drive itself.
-  var flushSent = false;
-  function reportLeft() {
-    if (flushSent) return;
-    flushSent = true;
+  // Edits made on a site wait in the cache. The queue is sent only when the
+  // tab is closed, never while the page still exists in any state: hiding a
+  // tab by switching away is not leaving the site. The worker decides what to
+  // send, so this only reports the close and never touches Drive itself.
+  function reportClosed() {
     try {
       chrome.runtime.sendMessage({ type: "pastex-flush-now" }).catch(function () {});
     } catch (ignored) { /* the page is going away */ }
   }
-  // The worker also refuses to run a background check while a site is visible,
-  // so every visibility change is reported, not only the leave.
+  // The worker also refuses to run a background check while a site is open, so
+  // visibility is reported separately from the close.
   function reportVisible(visible) {
     try {
-      chrome.runtime.sendMessage({ type: "pastex-site-visible", visible: !!visible }).catch(function () {});
+      chrome.runtime.sendMessage({ type: "pastex-site-visible", visible: !!visible }).catch(function () {}); 
     } catch (ignored) { /* the page is going away */ }
   }
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "hidden") {
-      reportVisible(false);
-      reportLeft();
-    } else {
-      flushSent = false;
-      reportVisible(true);
-    }
+    reportVisible(document.visibilityState !== "hidden");
   });
-  window.addEventListener("pagehide", function () { reportVisible(false); reportLeft(); });
+  // pagehide is the last reliable event before a tab really goes away, and it
+  // also fires on a navigation away. Hiding a tab does not fire it.
+  window.addEventListener("pagehide", function () { reportVisible(false); reportClosed(); });
   reportVisible(document.visibilityState !== "hidden");
 
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {

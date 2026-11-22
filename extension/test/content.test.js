@@ -50,6 +50,7 @@ function setupContent(options = {}) {
     addEventListener: (name, fn) => { events[name] = fn; },
     contains(el) { while (el) { if (el === root) return true; el = el.parent; } return false; },
     hasFocus: () => true,
+    visibilityState: "visible",
     execCommand(command, ignored, text) { inserted = text; return true; },
   };
   const messages = [];
@@ -59,8 +60,9 @@ function setupContent(options = {}) {
       (options.allowed ? options.allowed() : { allowed: true, capability: "token" }) : { ok: true }; },
     onMessage: { addListener(fn) { events.message = fn; } },
   };
+  const windowEvents = {};
   const window = {
-    innerWidth: 1200, innerHeight: 800, addEventListener() {},
+    innerWidth: 1200, innerHeight: 800, addEventListener(name, fn) { windowEvents[name] = fn; },
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
@@ -70,7 +72,7 @@ function setupContent(options = {}) {
   function runTimers(ms) {
     for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); }
   }
-  return { root, target, events, runTimers, messages, get inserted() { return inserted; } };
+  return { root, target, events, windowEvents, document, runTimers, messages, get inserted() { return inserted; } };
 }
 async function tick() { await new Promise(setImmediate); }
 
@@ -125,4 +127,31 @@ test("multiline snippets are inserted into a textarea verbatim", async () => {
   assert.equal(result.ok, true);
   assert.equal(page.inserted, text);
   assert.equal(page.target.value, text);
+});
+
+test("hiding a tab reports visibility but never sends the queue", async () => {
+  const page = setupContent();
+  page.target.focus();
+  await tick();
+  page.messages.length = 0;
+  // Switching away from the tab is not closing it.
+  page.document.visibilityState = "hidden";
+  page.events.visibilitychange();
+  await tick();
+  assert.ok(page.messages.some((m) => m.type === "pastex-site-visible" && m.visible === false),
+    "the worker still learns the site is not on screen");
+  assert.equal(page.messages.some((m) => m.type === "pastex-flush-now"), false,
+    "a hidden tab must not send the queue");
+});
+
+test("closing the tab sends the queue", async () => {
+  const page = setupContent();
+  page.target.focus();
+  await tick();
+  page.messages.length = 0;
+  page.windowEvents.pagehide();
+  await tick();
+  assert.equal(page.messages.filter((m) => m.type === "pastex-flush-now").length, 1,
+    "the page going away is the one moment the queue is sent");
+  assert.ok(page.messages.some((m) => m.type === "pastex-site-visible" && m.visible === false));
 });

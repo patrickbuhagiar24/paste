@@ -764,20 +764,34 @@
     openEditor("new-text", null);
   });
 
-  // Sync also sends whatever is still waiting in the queue, so a user who
-  // wants their changes on Drive now does not have to close the tab first.
-  // The write is the same queued write the leave would send; the worker says
-  // when it chose to wait instead.
+  // Sync sends what is waiting and stops there: it never reads the library
+  // back from Drive, so the list on screen is not reloaded. The write is the
+  // same queued write the leave would send; the worker says when it chose to
+  // wait instead.
   $("btn-sync").addEventListener("click", async function () {
-    setStatus("Syncing with Google Drive…");
+    if (busy) { refreshRequested = false; return; }
+    setStatus("Sending changes to Google Drive…");
+    var response = null;
     try {
-      var response = await chrome.runtime.sendMessage({ type: "pastex-sync-now" });
-      if (response && response.ok && response.result && response.result.deferred) {
-        setStatus("Synced on the cache; " + response.result.pending +
-          " change(s) go to Drive when you leave this site.", "ok");
-      }
-    } catch (ignored) { /* the read below still happens */ }
-    refresh(true);
+      response = await chrome.runtime.sendMessage({ type: "pastex-sync-now" });
+    } catch (ignored) { response = null; }
+    if (!response || !response.ok || !response.result) {
+      setStatus("Sync failed: " + ((response && response.error) || "Drive is unavailable."), "error");
+      return;
+    }
+    var result = response.result;
+    pendingWrites = result.pending || 0;
+    renderDriveBar();
+    if (result.deferred) {
+      setStatus("Saved here; " + result.pending + " change(s) go to Drive when you close this tab.", "ok");
+      return;
+    }
+    if (result.pending) {
+      setStatus("Sent " + (result.flushed.sent || 0) + " change(s); " + result.pending + " are still waiting.", "error");
+      return;
+    }
+    setStatus((result.flushed.sent ? "Sent " + result.flushed.sent + " change(s) to Google Drive." : "Nothing to send.") +
+      " Use ↻ Sync after reopening the panel to read Drive's ids.", "ok");
   });
 
   // The queue depth is shown in the drive bar, so it is read once on open and

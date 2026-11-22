@@ -226,10 +226,10 @@ Sebelumnya `get()` bisa memicu listing Drive dari klik panel (jalur
 | Kejadian | Sebelum | Sesudah |
 | --- | --- | --- |
 | Buka panel | bisa listing bila snapshot basi | **selalu dari cache**, nol request |
-| Tombol **↻ Sync** | listing penuh | **kirim antrean, lalu baca Drive** (ditahan bila situs masih terbuka) |
+| Tombol **↻ Sync** | listing penuh | **kirim antrean saja, tanpa baca Drive** (ditahan bila situs masih terbuka) |
 | Konfigurasi baru dimuat | listing berikutnya | **satu full sync**, lalu cache |
 | Pemeriksaan latar | listing metadata saat idle | tetap, dan satu-satunya jalan ke Drive saat menganggur |
-| Edit di situs | tulis langsung ke Drive | **tulis ke cache + antrean**, flush saat tab ditutup/disembunyikan |
+| Edit di situs | tulis langsung ke Drive | **tulis ke cache + antrean**, flush saat tab **ditutup** (bukan disembunyikan) |
 
 ### Antrean tulis yang tahan restart
 
@@ -250,7 +250,9 @@ Antrean disimpan di `chrome.storage.local` (`extension/queue.js`), sehingga:
 
 Catatan jujur: karena Drive tetap sumber kebenaran, flush diakhiri satu
 pembacaan penuh. Artinya "sinkronkan semuanya saat tab ditutup" benar-benar
-terjadi, tetapi biayanya satu listing penuh per flush (bukan per edit).
+terjadi, tetapi biayanya satu listing penuh per flush (bukan per edit). Baris
+baru memegang id `local-` sampai pembacaan itu; tombol **↻ Sync** karena itu
+sengaja **tidak** ikut membaca, dan id Drive baru masuk saat panel dibuka lagi.
 
 ### Ringkasan pengujian ronde ketiga
 
