@@ -345,7 +345,12 @@
     (function walk(rows) {
       (rows || []).forEach(function (node) {
         if (node.kind === "folder") { walk(node.children); return; }
-        if (node.loadError || node.deferred) return;
+        // A deferred row is only waiting for its folder to be opened; a row
+        // with a loadError failed and is retried here, which is how a body
+        // that could not be read comes back on a later fill or sync.
+        if (node.deferred) return;
+        // Only the "still loading" placeholder is treated as in flight.
+        if (node.loadError && node.loadError === "Loading from Google Drive…") return;
         if (typeof node.hash === "string" && node.hash) return;
         var text = typeof node.text === "string" ? node.text : "";
         // An empty row is a row without a body, not an empty snippet: it is
@@ -365,6 +370,8 @@
         var hash = Hash.sha256Hex(text);
         item.node.text = text;
         item.node.hash = hash;
+        // The row is readable again, so the warning it used to show is gone.
+        delete item.node.loadError;
         texts[hash] = text;
         bodies[item.node.id] = { modifiedTime: item.node.modifiedTime || "", hash: hash, driveHash: "" };
         filled++;

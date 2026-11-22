@@ -1,3 +1,20 @@
+pastex (2.13.3-1) unstable; urgency=medium
+
+  * A browser start with an empty queue no longer reads Drive. The 3-second
+    cache warm-up is gone: the cache already holds the whole library, so a
+    start touches Drive only when a queued change has to be sent.
+  * One connection per flush. A queue of ten writes used to fetch ten OAuth
+    tokens and read the root folder ten times; the flush now connects once and
+    reuses the session, and the session follows the index label it writes so a
+    reorder and a fold in the same flush no longer overwrite each other.
+  * A body that failed to load is retried by the fill pass. It used to be
+    skipped forever because the failure was read as "in flight".
+  * Cleanup: the unused move command, remap, parentIdOf and the FRESH_MS /
+    MAX_LOCAL exports are gone, the duplicated LRU prune is one function, and
+    the comments that described removed machinery were corrected.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 14:00:00 +0000
+
 pastex (2.13.2-1) unstable; urgency=medium
 
   * Sync only sends. The panel button no longer reads the library back from

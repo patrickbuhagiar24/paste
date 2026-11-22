@@ -416,6 +416,7 @@ async function applyDriveCommand(session, command) {
       order.order[parent] = (groups[j] || []).slice();
     }
     await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
+    session.index = order;  // the next write in this flush builds on this one
     return {};
   }
   if (command.action === "order") {
@@ -424,6 +425,9 @@ async function applyDriveCommand(session, command) {
     Object.keys(next.order || {}).forEach(function (parent) { merged.order[parent] = next.order[parent]; });
     Object.keys(next.collapsed || {}).forEach(function (id) { merged.collapsed[id] = next.collapsed[id]; });
     await PastexDrive.setIndex(token, session.rootId, merged, undefined, session.properties);
+    // The session follows the label it just wrote, so a later write in the
+    // same flush builds on it instead of overwriting it.
+    session.index = merged;
     return {};
   }
   if (command.action === "collapse") {
@@ -432,6 +436,7 @@ async function applyDriveCommand(session, command) {
       folded.collapsed[id] = command.collapsed ? "1" : "0";
     });
     await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
+    session.index = folded;
     return {};
   }
 
@@ -465,7 +470,7 @@ function driveNameOf(command) {
 function queuedCommand(command, createdId) {
   var item = command.item || {};
   // A create gets the local id of the row that was just added to the cache,
-  // so the remap after the upload can find it.
+  // so the queued write can name the row it uploads.
   if (!item.localId && createdId) item.localId = createdId;
   if (command.kind === "collapse" || command.kind === "reorder") {
     // Both live in the same root label, so the entry says which one this is.
@@ -495,8 +500,6 @@ function queuedCommand(command, createdId) {
   return {
     id: localId(),
     kind: command.kind,
-    // A move lives in the same places as an edit; the parent travels in item.
-    move: command.kind === "move" ? true : undefined,
     // A row that never reached Drive has nothing to delete there.
     ids: (command.ids || []).filter(function (target) { return String(target).indexOf("local-") !== 0; }),
     text: typeof command.text === "string" ? command.text : undefined,
@@ -510,7 +513,7 @@ function queuedCommand(command, createdId) {
 // and this only rejects what can be checked locally.
 function validateLocalEdit(command) {
   if (!command || typeof command !== "object") throw new Error("Invalid edit request.");
-  if (["create", "edit", "rename", "move", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
+  if (["create", "edit", "rename", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
     throw new Error("Unknown Drive operation.");
   if (command.kind === "create" || command.kind === "edit" || command.kind === "rename") {
     if (typeof command.name !== "string" || !command.name.trim() || command.name.indexOf("/") !== -1)
@@ -563,7 +566,12 @@ async function flushSoon(options) {
   if (!entries.length) return { sent: 0, failed: 0 };
   flushRunning = true;
   try {
-    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i]);
+    // One session for the whole flush; the identity cannot change halfway
+    // through because a configuration change clears the queue.
+    var session = null;
+    try { session = await PastexLibrary.connect(PastexConfig, PastexDrive); }
+    catch (ignored) { /* each entry retries its own connect and reports why */ }
+    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session);
   } finally {
     flushRunning = false;
     // The writes are on Drive now; one full read turns every local id into the
@@ -595,39 +603,48 @@ async function pendingCount() {
 // A queued reorder or collapse, as the one index write it becomes. The order
 // comes from the cache the edit was applied to, so it is already what the
 // panel shows.
-function queuedIndex(entry, snapshot, rootId) {
+// The label on the root folder is the source of truth for the order and the
+// folded state, so these two writes start from it (session.index) rather than
+// from the cache: the cache is cleared by every write in the same flush, so a
+// cached tree would silently empty the order for the second write.
+function queuedIndex(entry, session, snapshot) {
+  var index = PastexLibrary.cloneIndex(session.index);
   if (entry.collapse) {
-    // The collapse is one flag per row, but the same label carries the order,
-    // so the whole index is sent with it or a pending order would be lost.
-    var folded = PastexQueue.indexOf(snapshot && snapshot.tree);
-    var rootOrder = folded.order[""] || [];
-    delete folded.order[""];
-    if (rootId) folded.order[rootId] = rootOrder;
+    // A fold is one flag per row, and it is added next to the order that is
+    // already stored, so a fold can never erase a pending reorder.
     (entry.collapse.ids || []).forEach(function (id) {
       if (String(id).indexOf("local-") === 0) return;
-      folded.collapsed[id] = entry.collapse.collapsed ? "1" : "0";
+      index.collapsed[id] = entry.collapse.collapsed ? "1" : "0";
     });
-    return { action: "order", index: folded };
+    return { action: "order", index: index };
   }
-  // The order is read from the cached tree, not from the entry: the edit was
-  // applied there already, so this is exactly what the panel shows and it
-  // needs no second copy that could disagree with it. indexOf keys the root
-  // rows under "", but the label keys them under rootId.
-  var index = PastexQueue.indexOf(snapshot && snapshot.tree);
-  var group = entry.groups && entry.groups.length ? (entry.groups[0] || []) : index.order[""];
-  var parent = (entry.parents && entry.parents[0]) || rootId;
-  if (group && parent) index.order[parent] = group.filter(function (id) { return String(id).indexOf("local-") !== 0; });
-  delete index.order[""];
+  // A reorder names the groups it changed. The tree in the cache is the best
+  // description of a folder the entry does not name (a stale group), so it is
+  // used only to fill in what the entry left out.
+  var cached = PastexQueue.indexOf(snapshot && snapshot.tree);
+  var groups = entry.groups && entry.groups.length ? entry.groups : null;
+  var parents = entry.parents && entry.parents.length ? entry.parents : null;
+  if (groups) {
+    groups.forEach(function (group, at) {
+      var parent = (parents && parents[at]) || session.rootId;
+      index.order[parent] = (group || []).filter(function (id) { return String(id).indexOf("local-") !== 0; });
+    });
+  } else {
+    Object.keys(cached.order).forEach(function (parent) {
+      index.order[parent === "" ? session.rootId : parent] = cached.order[parent];
+    });
+  }
   return { action: "order", index: index };
 }
 
 // A queued edit, in Drive terms, with the ids already resolved.
-function driveCommandFor(entry, rootId, snapshot) {
+function driveCommandFor(entry, session, snapshot) {
+  var rootId = session.rootId;
   var item = entry.item || {};
   if (entry.kind === "order") {
     // A reorder and a collapse share one label on the root folder, so both are
     // written as that one index. The queue entry carries which one it was.
-    return queuedIndex(entry, snapshot, rootId);
+    return queuedIndex(entry, session, snapshot);
   }
   if (entry.kind === "delete") {
     var ids = (entry.ids || []).filter(Boolean);
@@ -650,17 +667,21 @@ function driveCommandFor(entry, rootId, snapshot) {
       driveName: item.driveName || entry.name } };
 }
 
-async function sendQueued(entry) {
+// session may be passed in: a flush connects once and reuses it, because a
+// connect is an OAuth token plus a folder read and a queue of ten entries
+// would otherwise pay for twenty requests.
+async function sendQueued(entry, session) {
   var result;
-  // Read the tree before taking the write lock: a write invalidates the
-  // snapshot before it runs, so a read taken inside would always be empty.
-  var snapshot = await libraryCache.current();
   try {
+    var active = session || await PastexLibrary.connect(PastexConfig, PastexDrive);
+    // Read once per entry, before the write lock: mutate() invalidates the
+    // snapshot before it runs, so a read taken inside would always be empty,
+    // and a read taken once per flush would miss the previous entry's write.
+    var snapshot = await libraryCache.current();
     result = await libraryCache.mutate(async function () {
-      var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
-      var command = driveCommandFor(entry, session.rootId, snapshot);
+      var command = driveCommandFor(entry, active, snapshot);
       if (!command) return { skipped: true };
-      var written = await applyDriveCommand(session, command);
+      var written = await applyDriveCommand(active, command);
       // A created row now has its Drive id, and the cached snapshot follows at
       // once: this runs while the write still holds the library lock, before
       // the invalidation that drops the snapshot.
@@ -697,12 +718,9 @@ function initializeUserConfig() {
   // The learned interval is applied, but the first check still happens soon.
   readBackoff().then(function () { ensureIdleAlarm(true, 1); });
   ensureIdleAlarm();
-  // Warm the cache shortly after the browser starts, so the first panel open
-  // is instant. This still honours the idle gate: an active user is not
-  // charged for a request, and the idle transition triggers the check.
-  scheduleIdleSync(3000);
-  // A queue left behind by a browser that was quit before the flush is sent
-  // now, while nothing is on screen.
+  // A browser start touches Drive only when a queue is waiting: a start with
+  // nothing to send reads nothing, because the cache already holds the whole
+  // library and an ordinary open is served from it.
   retryDeferredWrites();
 }
 

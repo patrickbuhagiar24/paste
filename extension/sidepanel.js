@@ -590,7 +590,7 @@
     return "";
   }
 
-  // The queue speaks one small vocabulary ("create", "edit", "rename", "move",
+  // The queue speaks one small vocabulary ("create", "edit", "rename",
   // "delete", "collapse", "reorder"); the panel still uses its editor actions.
   // The row itself travels along, because the write needs its kind, the name it
   // had and whether it already reached Drive.

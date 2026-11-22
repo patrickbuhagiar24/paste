@@ -84,7 +84,9 @@ function harness(home, unavailable, shared, closeUnsupported) {
     // would use it, but the symbol must exist.
     fetch: async () => { throw new Error("the network is stubbed in this test"); },
     AbortController, AbortSignal, TextDecoder,
-    console: { warn() {}, log() {}, error() {} },
+    // Warnings are visible: a queued write that is kept for retry must not
+    // disappear silently, which is exactly how a flush bug hides.
+    console: { warn: (...args) => { if (process.env.PASTEX_TEST_WARN) console.warn(...args); }, log() {}, error() {} },
   });
   context.self = context;
   context.importScripts = (...names) => {
@@ -250,7 +252,11 @@ function queueScenario(stub) {
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
   browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
   let stored = { order: { root: [] }, collapsed: { folder: "1" } };
-  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", properties: { keep: "1" }, index: stored });
+  // connect() reads the folder, so it must hand back the label the previous
+  // write stored; returning a snapshot from before the writes would lose it.
+  browser.context.PastexLibrary.connect = async () => ({
+    token: "token", rootId: "root", properties: { keep: "1" }, index: structuredClone(stored),
+  });
   // A real tree: a reorder or a collapse applies to the cached rows, so the
   // fixture must have the rows the test reorders. The ids are opaque, like the
   // ones Drive hands out; a short key would look like a local id.
@@ -271,6 +277,27 @@ function queueScenario(stub) {
   const leave = () => new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
   return { browser, send, leave, stored: () => stored };
 }
+
+test("a flush reuses one session instead of reconnecting per entry", async () => {
+  let connects = 0;
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.createFolder = async () => "f";
+    drive.uploadNew = async (t, parent, name, text) => ({ id: "n" + name });
+  });
+  const realConnect = browser.context.PastexLibrary.connect;
+  browser.context.PastexLibrary.connect = async (...args) => { connects++; return realConnect(...args); };
+  await send({ type: "pastex-panel-library" });
+  for (const name of ["One", "Two", "Three"]) {
+    await send({ type: "pastex-panel-local-edit", command: {
+      kind: "create", name, text: "x", parentId: "root",
+      item: { kind: "text", parentId: "root", localId: "" },
+    } });
+  }
+  connects = 0;
+  await leave();
+  await settle(40);
+  assert.equal(connects, 1, "three queued writes must cost one token and one folder read");
+});
 
 test("the queue writes creates, renames, the index and bulk trash to Drive", async () => {
   const writes = [];
@@ -293,14 +320,41 @@ test("the queue writes creates, renames, the index and bulk trash to Drive", asy
   assert.deepEqual(writes.slice(0, 2), [["folder", "Folder", "root"], ["new", "root", "Note", "text"]]);
 });
 
+test("a reorder and a fold in one flush both survive, on one connection", async () => {
+  const calls = [];
+  let connects = 0;
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.setIndex = async (t, root, index) => { calls.push(JSON.parse(JSON.stringify(index))); };
+  });
+  const realConnect = browser.context.PastexLibrary.connect;
+  browser.context.PastexLibrary.connect = async (...args) => { connects++; return realConnect(...args); };
+  await send({ type: "pastex-panel-library" });
+  const ids = ["a", "b", "c", "d", "e", "f", "g"].map(driveId);
+  await send({ type: "pastex-panel-local-edit", command: { kind: "reorder", groups: [ids], parents: ["root"] } });
+  await send({ type: "pastex-panel-local-edit", command: { kind: "collapse", ids: [ids[0]], collapsed: true } });
+  connects = 0;
+  await leave();
+  await settle(40);
+  assert.equal(connects, 1, "both index writes share one connection");
+  assert.equal(calls.length, 2, "calls=" + JSON.stringify(calls) + " queue=" + JSON.stringify(await browser.context.deferredQueue.all()));
+  // The second write must build on the first: the order set by the reorder is
+  // still there, and the fold is added next to it.
+  assert.deepEqual(calls[1].order.root, ids, "the fold keeps the reorder that came before it: " + JSON.stringify(calls));
+  assert.equal(calls[1].collapsed[ids[0]], "1", "and it records the fold");
+});
+
 test("a reorder and a collapse each become one index write, and the stored order survives", async () => {
   const calls = [];
-  const { browser, send, leave, stored } = queueScenario((drive) => {
-    drive.setIndex = async (t, root, index) => { calls.push([root, index]); };
-  });
   // The label is read back from the folder before each write, so the stub must
-  // serve what the previous write stored, exactly like Drive does.
-  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", properties: { keep: "1" }, index: stored() });
+  // both record the write and store it, exactly like Drive does.
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.setIndex = async (t, root, index) => { calls.push([root, index]); drive.__stored = index; };
+  });
+  // The folder already carries an unrelated folded folder, which must survive.
+  browser.context.PastexDrive.__stored = { order: { root: [] }, collapsed: { folder: "1" } };
+  browser.context.PastexLibrary.connect = async () => ({
+    token: "token", rootId: "root", properties: { keep: "1" }, index: structuredClone(browser.context.PastexDrive.__stored),
+  });
   await send({ type: "pastex-panel-library" });
   const edit = (command) => send({ type: "pastex-panel-local-edit", command });
   const ids = ["a", "b", "c", "d", "e", "f", "g"].map(driveId);
@@ -432,6 +486,41 @@ test("the startup warm-up never syncs while the user is active", async () => {
   browser.listenersForApis.idle("idle");
   await settle();
   assert.equal(loads, 1, "an idle transition triggers exactly one background sync");
+});
+
+test("a browser start with nothing queued reads nothing from Drive", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-start-quiet-"));
+  try {
+    const browser = harness(home, false);
+    fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
+    fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"),
+      JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
+    browser.context.PastexConfig.readConfig = async () => ({
+      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    });
+    const drive = browser.context.PastexDrive;
+    let remote = 0;
+    // Every path to Drive goes through one of these.
+    drive.fetchAccessToken = async () => { remote++; return "token"; };
+    drive.getFolder = async () => { remote++; return { mimeType: drive.FOLDER_MIME, properties: {} }; };
+    drive.listChildren = async () => { remote++; return []; };
+    let loads = 0;
+    browser.context.PastexLibrary.load = async () => {
+      loads++;
+      return { tree: [], session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {} };
+    };
+    // The machine is idle, so the idle gate would have allowed a check before.
+    browser.idle = "idle";
+    browser.listeners.startup();
+    await settle(60);
+    assert.equal(loads, 0, "a start with an empty queue must not read the library");
+    assert.equal(remote, 0, "and it must not make any request to Drive");
+    // Idle is a separate trigger and still works, on the alarm path.
+    browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+    await settle(20);
+    assert.ok(loads + remote > 0, "an idle alarm still reaches Drive");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test("a running panel operation suppresses the background sync", async () => {  const browser = harness(os.tmpdir(), true);

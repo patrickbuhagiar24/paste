@@ -194,8 +194,10 @@ a fold never loses a pending reorder — the whole index is sent together.
 
 The queue is flushed when the tab is **closed**, and not when it is merely
 hidden: switching to another tab is not closing the site. It is sent once more
-on the next browser start if the browser was quit first; the flush finishes with one full
-read so the cache matches Drive again, including the ids Drive gave new rows.
+on the next browser start if the browser was quit first. A browser start with
+an empty queue touches Drive not at all — there is nothing to send and the
+cache already holds the whole library. The flush finishes with one full read
+so the cache matches Drive again, including the ids Drive gave new rows.
 One rule holds everywhere: while any allowed site still has a visible tab, the
 queue waits, and so does the background check.
 The drive bar shows how many changes are waiting. A write Drive refuses

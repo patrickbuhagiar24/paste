@@ -46,17 +46,6 @@
     return null;
   }
 
-  function parentIdOf(nodes, id, parent) {
-    for (var i = 0; i < (nodes || []).length; i++) {
-      if (nodes[i].id === id) return parent || "";
-      if (nodes[i].kind === "folder") {
-        var found = parentIdOf(nodes[i].children, id, nodes[i].id);
-        if (found !== null) return found;
-      }
-    }
-    return null;
-  }
-
   function remove(nodes, id) {
     var siblings = siblingsOf(nodes, id);
     if (!siblings) return null;
@@ -99,8 +88,8 @@
   }
 
   // Apply a queued command to a snapshot. Returns the ids that were touched,
-  // so the caller knows what to remap after the flush. A command that no
-  // longer has a target (an item deleted in the meantime) is a no-op.
+  // so the caller knows which row a create added. A command that no longer has
+  // a target (an item deleted in the meantime) is a no-op.
   function apply(snapshot, command, newId) {
     var tree = snapshot.tree || (snapshot.tree = []);
     var item = command.item || {};
@@ -108,7 +97,7 @@
     // stores it on the item because the write needs it later.
     if (item.parentId === undefined && command.parentId !== undefined) item.parentId = command.parentId;
     // A row created before it reached Drive has neither id; the caller names it.
-    // An edit, a rename or a move always names the row it changes.
+    // An edit or a rename always names the row it changes.
     var id = item.localId || item.id || newId ||
       ("local-" + Date.now() + "-" + Math.random().toString(16).slice(2));
     if (command.kind === "delete") {
@@ -118,19 +107,15 @@
       });
       return command.ids || [];
     }
-    if (command.kind === "move" || command.kind === "rename" || command.kind === "edit") {
+    if (command.kind === "rename" || command.kind === "edit") {
       var target = find(tree, id);
       if (!target) return [];
+      target.name = command.name;
       if (command.kind === "edit") {
-        target.name = command.name;
         if (typeof command.text === "string") target.text = command.text;
         // An edited body is no longer the stored one.
         target.hash = "";
         if (snapshot.bodies) delete snapshot.bodies[target.id];
-      } else if (command.kind === "rename") {
-        target.name = command.name;
-      } else if (item.parentId !== undefined && parentIdOf(tree, id, "") !== item.parentId) {
-        if (remove(tree, id)) insertInto(tree, item.parentId, target);
       }
       return [id];
     }
@@ -177,30 +162,6 @@
       return command.ids || [];
     }
     return [];
-  }
-
-  // Replace a local id everywhere a snapshot may refer to it: the rows, the
-  // bodies and the ordering/collapse index.
-  function remap(snapshot, from, to) {
-    walk(snapshot.tree, function (node) {
-      if (node.parentId === from) node.parentId = to;
-      if (node.id === from) node.id = to;
-    });
-    if (snapshot.bodies && snapshot.bodies[from]) {
-      snapshot.bodies[to] = snapshot.bodies[from];
-      delete snapshot.bodies[from];
-    }
-    var index = snapshot.index;
-    if (index && index.order) {
-      Object.keys(index.order).forEach(function (parent) {
-        if (parent === from) { index.order[to] = index.order[parent]; delete index.order[parent]; }
-        index.order[parent] = (index.order[parent] || []).map(function (id) { return id === from ? to : id; });
-      });
-    }
-    if (index && index.collapsed && index.collapsed[from] !== undefined) {
-      index.collapsed[to] = index.collapsed[from];
-      delete index.collapsed[from];
-    }
   }
 
   // The ordering and collapse state of every folder, as the centralized index
@@ -293,7 +254,6 @@
   }
 
   return {
-    create: create, apply: apply, remap: remap, find: find, KEY: KEY, indexOf: indexOf,
-    walk: walk, parentIdOf: parentIdOf, siblingsOf: siblingsOf,
+    create: create, apply: apply, find: find, KEY: KEY, indexOf: indexOf,
   };
 });
