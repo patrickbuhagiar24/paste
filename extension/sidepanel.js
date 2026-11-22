@@ -330,13 +330,15 @@
       (ready ? (pendingWrites ? "Saved here • " + pendingWrites + " change(s) go to Drive when you leave this site" :
         (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected")) : "Google Drive unavailable");
     $("drive-status").textContent = label;
-    $("drive-status").setAttribute("data-state", state);
+    // The dot is a sibling of the label now, so the state lives on the bar.
+    $("drive-bar").setAttribute("data-state", state);
+    $("drive-dot").setAttribute("data-state", state);
     $("btn-sync").disabled = busy;
     $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
     $("btn-empty-text").disabled = busy || !ready;
-    // While Drive is unusable, Refresh is the action that helps; the create
+    // While Drive is unusable, Sync is the action that helps; the create
     // buttons keep their primary look only when a click can succeed.
     $("btn-sync").className = ready ? "" : "primary";
   }
@@ -432,7 +434,7 @@
     loadConfigVersion = configVersion;
     renderDriveBar();
     render();
-    if (!quiet) setStatus(force ? "Refreshing snippets from Google Drive…" : "Loading snippets…");
+    if (!quiet) setStatus(force ? "Syncing with Google Drive…" : "Loading snippets…");
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library", force: !!force });
       if (loadConfigVersion !== configVersion) return false;
@@ -762,7 +764,21 @@
     openEditor("new-text", null);
   });
 
-  $("btn-sync").addEventListener("click", function () { refresh(true); });
+  // Sync also sends whatever is still waiting in the queue, so a user who
+  // wants their changes on Drive now does not have to close the tab first.
+  // The write is the same queued write the leave would send; the worker says
+  // when it chose to wait instead.
+  $("btn-sync").addEventListener("click", async function () {
+    setStatus("Syncing with Google Drive…");
+    try {
+      var response = await chrome.runtime.sendMessage({ type: "pastex-sync-now" });
+      if (response && response.ok && response.result && response.result.deferred) {
+        setStatus("Synced on the cache; " + response.result.pending +
+          " change(s) go to Drive when you leave this site.", "ok");
+      }
+    } catch (ignored) { /* the read below still happens */ }
+    refresh(true);
+  });
 
   // The queue depth is shown in the drive bar, so it is read once on open and
   // refreshed whenever a local change lands.

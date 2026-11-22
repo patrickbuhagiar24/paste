@@ -410,6 +410,13 @@
         saved = null;
       }
       var stamp = await freshStamp(key, saved);
+      // The Sync button asks for a real read. Without this, "force" would be
+      // accepted and ignored, and the button would do nothing visible.
+      if (force) {
+        // Sync is also a body refresh: an item that failed to load before is
+        // fetched again, instead of being skipped as "unchanged".
+        return loadFromDrive(key, onUpdate, Object.assign({}, options, { fillBodies: true }));
+      }
       if (saved) {
         var storedTexts = saved.texts || texts || {};
         return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true,

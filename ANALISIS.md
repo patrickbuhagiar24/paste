@@ -27,7 +27,7 @@ yang saya hitung dari nilai lama:
 | Ikon aksi baris (opasitas 0,5) | **2,48:1** | sulit dibaca |
 | Teks status ok/error | sama saja | tanpa warna hasil |
 
-Semua tombol — Collapse all, Select, Refresh, Config, Text, Folder, Save,
+Semua tombol — Collapse all, Select, Sync, Config, Text, Folder, Save,
 Cancel, Delete — juga memakai satu gaya yang sama, sehingga **tidak ada
 hierarki**: "Save" dan "Delete" terlihat identik.
 
@@ -60,12 +60,12 @@ mencapai WCAG AA, sebagian besar AAA:
 - **Primer** (gradien indigo, teks putih): `＋ Text`, `＋ Folder`,
   `＋ New snippet`, `Save` — aksi yang aman dan menjadi langkah berikutnya;
 - **Bahaya** (gradien merah): `🗑 Delete` dan `🗑 Delete` di bilah seleksi;
-- **Sekunder** (garis tepi kuat 3,9:1): Collapse all, Select, Refresh, Config,
+- **Sekunder** (garis tepi kuat 3,9:1): Collapse all, Select, Sync, Config,
   Cancel dan aksi baris (rename/edit/delete);
 - tombol primer/bahaya yang **nonaktif** kehilangan isian mencolok dan
   kembali menjadi garis tepi biasa, jadi aksi yang tak bisa diklik tidak
   "berteriak" lebih keras daripada yang bisa;
-- `Refresh` otomatis menjadi primer saat Drive tidak tersedia, karena itulah
+- `Sync` otomatis menjadi primer saat Drive tidak tersedia, karena itulah
   satu-satunya aksi yang menolong pada keadaan itu.
 
 **Sorotan di tempat lain:**
@@ -226,7 +226,7 @@ Sebelumnya `get()` bisa memicu listing Drive dari klik panel (jalur
 | Kejadian | Sebelum | Sesudah |
 | --- | --- | --- |
 | Buka panel | bisa listing bila snapshot basi | **selalu dari cache**, nol request |
-| Refresh manual | listing penuh | **baca ulang cache** (penulisan antrean tetap sinkron) |
+| Tombol **↻ Sync** | listing penuh | **kirim antrean, lalu baca Drive** (ditahan bila situs masih terbuka) |
 | Konfigurasi baru dimuat | listing berikutnya | **satu full sync**, lalu cache |
 | Pemeriksaan latar | listing metadata saat idle | tetap, dan satu-satunya jalan ke Drive saat menganggur |
 | Edit di situs | tulis langsung ke Drive | **tulis ke cache + antrean**, flush saat tab ditutup/disembunyikan |
@@ -362,7 +362,7 @@ dari halaman yang bukan situs diizinkan/bukan frame utama.
 | --- | --- |
 | `extension/sidepanel.css` | ditulis ulang: variabel tema, tombol primer/bahaya/sekunder, baris idle/hover/terpilih, titik status, chip seleksi, tema gelap, prefers-contrast, reduced-motion |
 | `extension/sidepanel.html` | kelas `primary`/`danger` pada tombol yang tepat |
-| `extension/sidepanel.js` | `setStatus(text, tone)`, `data-kind` baris, state Drive, chip seleksi, delete berwarna saat hover, Refresh primer saat Drive mati |
+| `extension/sidepanel.js` | `setStatus(text, tone)`, `data-kind` baris, state Drive (titik di bilah), chip seleksi, delete berwarna saat hover, Sync primer saat Drive mati |
 | `extension/content.js`, `assets/launcher-preview.html` | peluncur ⚡ diselaraskan ke indigo panel |
 | `extension/test/appearance.test.js` | **baru** — uji kontras & keadaan |
 | `extension/test/run.js`, `extension/test/sidepanel.test.js` | daftarkan uji baru; stub DOM mengenal `removeAttribute` |

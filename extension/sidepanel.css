@@ -278,8 +278,39 @@ header {
   align-items: center;
   gap: 6px;
   margin-top: 7px;
+  /* The bar sits inside the header, whose own padding is 7px. The dot's halo
+   * is 3px wide, so this inset puts its left edge 8px from the panel edge and
+   * keeps it from sitting flush against it, which is how it looked clipped. */
+  padding-left: 4px;
   color: var(--muted);
   font-size: 11.5px;
+}
+
+/* The dot is its own flex item rather than a ::before of the label: painting
+ * it inside the truncated label put it flush against the edge, with its halo
+ * clipped. It never shrinks, so the label ellipsises instead. */
+#drive-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--muted);
+}
+
+#drive-bar[data-state="ready"] #drive-dot {
+  background: #15803d;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #15803d;
+}
+
+#drive-bar[data-state="busy"] #drive-dot {
+  background: #1d4ed8;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #1d4ed8;
+}
+
+#drive-bar[data-state="error"] #drive-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--danger);
 }
 
 #drive-status {
@@ -290,43 +321,13 @@ header {
   white-space: nowrap;
 }
 
-/* The dot repeats the Drive label in colour, so the panel state is readable
- * without reading the sentence. The text always says the same, so colour is
- * never the only signal. */
-#drive-status::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  vertical-align: 0.05em;
-  border-radius: 50%;
-  background: var(--muted);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--muted);
-}
-
-#drive-status[data-state="ready"]::before {
-  background: #15803d;
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #15803d;
-}
-
-#drive-status[data-state="busy"]::before {
-  background: #1d4ed8;
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #1d4ed8;
-}
-
-#drive-status[data-state="error"]::before {
-  background: var(--danger);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--danger);
-}
-
 @media (prefers-color-scheme: dark) {
-  #drive-status[data-state="ready"]::before {
+  #drive-bar[data-state="ready"] #drive-dot {
     background: #4ade80;
     box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #4ade80;
   }
 
-  #drive-status[data-state="busy"]::before {
+  #drive-bar[data-state="busy"] #drive-dot {
     background: #93b4ff;
     box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #93b4ff;
   }

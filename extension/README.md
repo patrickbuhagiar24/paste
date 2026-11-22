@@ -117,10 +117,10 @@ them across a rebuild of the tree and recognizes an unchanged body even when
 its timestamp moved.
 
 The panel shows when the library was last confirmed with Google Drive, next to
-the drive status. Use **↻ Refresh** to check Drive right away.
+the drive status. Use **↻ Sync** to check Drive right away.
 
 Cached content can be stale, including after a folder is changed or access is
-revoked elsewhere. Use **↻ Refresh** to fetch current Drive contents; explicit
+revoked elsewhere. Use **↻ Sync** to fetch current Drive contents; explicit
 Drive permission errors clear the cached snapshot. An internet connection is
 required for the initial load and all changes. Account or configuration changes
 invalidate the snapshot. No snippet changes are queued for offline sync.
@@ -155,9 +155,9 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Refresh**,
+snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Sync**,
 **Config**, **＋ Text** and **＋ Folder**. **＋ Text** and **＋ Folder** are
-filled primary buttons; **Refresh** takes that role while Drive is
+filled primary buttons; **Sync** takes that role while Drive is
 unavailable, because it is the action that helps then. **Collapse all** folds
 every folder and clears the search first. The drive bar shows a state dot and
 `Google Drive • session cache · N snippets` when the list came from the
@@ -172,10 +172,24 @@ snippet body — and every later open is served from that snapshot, so the list
 appears instantly even when Drive is slow. Later changes arrive from the
 background check, which runs only while the machine is idle or locked.
 
-While you are on an allowed site, an edit from the panel (create, rename, edit,
-delete, reorder, fold) is applied to the cached list at once and its Drive
-write waits in a durable queue (`chrome.storage.local`, so it survives a
-browser restart). Nothing is sent to Drive while you are still on the page.
+While you are on an allowed site, an edit from the panel is applied to the
+cached list at once and its Drive write waits in a durable queue
+(`chrome.storage.local`, so it survives a browser restart). Nothing is sent to
+Drive while you are still on the page.
+
+Every edit is treated the same way, including the two that are easy to forget:
+
+| Edit | What the cache holds at once | What the Drive write is |
+| --- | --- | --- |
+| create text / folder | the new row, with a `local-` id | one upload |
+| edit body, rename | the new name and text | one `edit-text` write |
+| delete | the row is gone | trash, in batches of 6 |
+| **reorder** | the new order of every folder | **one** write to the root folder's index label |
+| **fold / unfold** | the new collapsed flags | **one** write to the same label |
+
+Reorder and fold share that single label, so neither costs a write per row, and
+a fold never loses a pending reorder — the whole index is sent together.
+
 The queue is flushed when the tab is closed or hidden, and once more on the next
 browser start if the browser was quit first; the flush finishes with one full
 read so the cache matches Drive again, including the ids Drive gave new rows.
@@ -184,6 +198,13 @@ queue waits, and so does the background check.
 The drive bar shows how many changes are waiting. A write Drive refuses
 permanently (the row was deleted elsewhere) is dropped from both the queue and
 the cache instead of being retried forever.
+
+**↻ Sync** is the one button that reaches Drive on purpose. It sends whatever
+the queue holds and then reads the library again, in that order, so the read
+includes this machine's own writes. If an allowed site is still open it holds
+the queue back — the status line says how many changes are waiting — and the
+read still happens. That keeps the promise intact: the button never writes to
+Drive while you are on a site.
 
 The panel is built to be readable at a glance. Every text pair reaches WCAG
 AA (body text and row labels reach AAA), buttons have a visible outline and
@@ -245,7 +266,7 @@ not listed in `pastex-sites.json` are not injected or targeted.
   errors can indicate a malformed key or a disabled Drive API. Snippets appear
   progressively while loading; a stalled Google request times out and reports
   an error. Check network access, the folder ID, permissions, and Drive API,
-  then use **↻ Refresh**. Individual unreadable files display a warning.
+  then use **↻ Sync**. Individual unreadable files display a warning.
 - The built-in Chrome Web Store, `chrome://` pages and other browser-protected
   pages cannot run extensions, even if listed.
 
