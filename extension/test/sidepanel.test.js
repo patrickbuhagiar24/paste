@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const Store = require("../store.js");
 const Library = require("../library.js");
+const Queue = require("../queue.js");
 const ConfigImport = require("../config-import.js");
 
 class Element {
@@ -29,7 +30,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected", "btn-close-panel"];
+  const ids = ["search", "tree", "empty", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -78,6 +79,15 @@ function panelHarness(fail, options = {}) {
     addEventListener() {}};
   let progress = () => {};
   let cache;
+  const queue = [];
+  // Apply an edit to the cached snapshot, the way the worker does: the real
+  // queue module does the edit, and the test worker keeps the queue.
+  function applyLocalEdit(c) {
+    if (!cache) throw new Error("The library has not loaded yet.");
+    const applied = Queue.apply(cache, c);
+    queue.push({ id: "q" + queue.length, kind: c.kind, command: c });
+    return { applied, pending: queue.length, queued: true, local: true };
+  }
   const runtime = {
     connect: () => ({ onMessage: { addListener(fn) { progress = fn; } } }),
     sendMessage: async (message) => {
@@ -91,31 +101,17 @@ function panelHarness(fail, options = {}) {
           return { ok: true, result: { ...cache, cached: false } };
         } catch (err) { return { ok: false, error: err.message }; }
       }
-      if (message.type === "pastex-panel-mutate") {
+      // An edit is applied to the cached snapshot and queued; the test worker
+      // keeps the queue itself, exactly like the real one.
+      if (message.type === "pastex-panel-local-edit") {
         const c = message.command;
         try {
-          let result = {};
-          if (c.action === "save") {
-            if (c.mode === "new-folder") result.id = await drive.createFolder("token", c.name, c.parentId);
-            else if (c.mode === "new-text") result.id = (await drive.uploadNew("token", c.parentId, c.name, c.text)).id;
-            else {
-              result.id = c.node.id;
-              if (c.mode === "edit-text" && c.text !== c.node.text) await drive.updateText("token", c.node.id, c.text);
-              if (c.name !== c.node.name) await drive.renameFile("token", c.node.id, c.name + (c.node.driveName.endsWith(".txt") ? ".txt" : ""));
-            }
-          } else if (c.action === "delete") {
-            for (const id of c.ids) await drive.trashFile("token", id);
-          } else if (c.action === "collapse") {
-            for (const id of c.ids) {
-              const folder = records.find((r) => r.id === id);
-              if (folder) folder.properties = { ...(folder.properties || {}), pastex_collapsed: c.collapsed ? "1" : "0" };
-            }
-          } else if (c.action === "reorder") {
-            for (const group of c.groups) for (let i = 0; i < group.length; i++) records.find((r) => r.id === group[i]).properties = { pastex_order: String(i) };
-          }
-          cache = null;
+          const result = applyLocalEdit(c);
           return { ok: true, result };
-        } catch (err) { cache = null; return { ok: false, error: err.message }; }
+        } catch (err) { return { ok: false, error: err.message }; }
+      }
+      if (message.type === "pastex-panel-status") {
+        return { ok: true, result: { pending: queue.length } };
       }
       if (message.type === "pastex-sidepanel-insert" && options.insertResponse) return options.insertResponse;
       return { ok: true };
@@ -160,26 +156,33 @@ test("side panel keeps unreadable Drive items visible and reports the error", as
   assert.match(elements.status.textContent, /403 denied/);
 });
 
-test("side panel creates, edits and trashes files directly in Drive", async () => {
-  const { elements, records } = panelHarness(false);
+test("side panel edits the cache and queues the Drive write instead of calling Drive", async () => {
+  const { elements, records, messages } = panelHarness(false);
   await settled();
   elements["btn-text"].listeners.click();
   elements["editor-name"].value = "New";
   elements["editor-text"].value = "written remotely";
   await elements["editor-save"].listeners.click();
-  assert.equal(records.find((r) => r.name === "New.txt").text, "written remotely");
+  await settled();
+  // The row is on screen at once, from the cache, and Drive was not touched.
   assert.match(allText(elements.tree), /New/);
+  assert.equal(records.some((r) => r.name === "New.txt"), false, "creating must not write Drive while on a site");
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   row.children.find((child) => child.title === "Edit").listeners.click({ stopPropagation() {} });
   elements["editor-text"].value = "updated remotely";
   await elements["editor-save"].listeners.click();
-  assert.equal(records.find((r) => r.id === "item1").text, "updated remotely");
+  await settled();
+  assert.match(allText(elements.tree), /Synced/);
+  assert.equal(records.find((r) => r.id === "item1").text, "from Google Drive", "an edit waits in the cache");
   const updatedRow = elements.tree.children.find((r) => allText(r).includes("Synced"));
   const deleteButton = updatedRow.children.find((child) => child.title === "Delete");
   await deleteButton.listeners.click({ stopPropagation() {} });
   await settled();
-  assert.equal(records.find((r) => r.id === "item1").trashed, true);
   assert.doesNotMatch(allText(elements.tree), /Synced/);
+  assert.equal(records.find((r) => r.id === "item1").trashed, undefined, "a delete waits in the queue too");
+  // The panel never asks the worker for a Drive write.
+  assert.equal(messages.some((m) => m.type === "pastex-panel-mutate"), false);
+  assert.ok(messages.some((m) => m.type === "pastex-panel-local-edit"));
 });
 
 test("Config opens the JSON file picker immediately", async () => {
@@ -222,15 +225,19 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   elements["btn-up"].listeners.click();
   await settled();
   await settled();
-  assert.deepEqual(elements.tree.children.map((row) => row.children.find((c) => c.className === "label").textContent.replace(/^[☑☐] /, "")), ["B", "C", "A", "D"]);
-  assert.deepEqual(messages.find((m) => m.type === "pastex-panel-mutate" && m.command.action === "reorder").command.groups[0].join(","), "B,C,A,D");
-  assert.equal(messages.find((m) => m.type === "pastex-panel-mutate" && m.command.action === "reorder").command.parents[0], "root");
-  assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
+  const labelOf = (row) => row.children.find((c) => c.className === "label").textContent.replace(/^[☑☐] /, "");
+  assert.deepEqual(elements.tree.children.map(labelOf), ["B", "C", "A", "D"]);
+  // The order is applied to the cache and queued; nothing is written to Drive
+  // while the panel is open on a site.
+  const reorder = messages.find((m) => m.type === "pastex-panel-local-edit" && m.command.kind === "reorder");
+  assert.equal(reorder.command.groups[0].join(","), "B,C,A,D");
+  assert.equal(reorder.command.parents[0], "root");
+  assert.equal(records.map((r) => r.name).join(","), "A.txt,B.txt,C.txt,D.txt", "Drive keeps its own order until the flush");
   elements["btn-delete-selected"].listeners.click();
   await settled(); await settled();
-  assert.equal(records.find((r) => r.id === "B").trashed, true);
-  assert.equal(records.find((r) => r.id === "C").trashed, true);
-  assert.equal(records.find((r) => r.id === "A").trashed, undefined);
+  assert.equal(records.find((r) => r.id === "B").trashed, undefined, "a delete waits in the queue");
+  assert.equal(records.find((r) => r.id === "C").trashed, undefined);
+  assert.doesNotMatch(allText(elements.tree), /B C/, "the rows are gone from the cache at once");
   assert.equal(elements["selection-count"].textContent, "0 selected");
   elements["btn-select"].listeners.click();
   assert.equal(elements["selection-actions"].hidden, true);
@@ -304,7 +311,8 @@ test("collapse all folds every folder and clears an active search", async () => 
   await elements["btn-collapse-all"].listeners.click();
   await settled(); await settled();
   assert.equal(elements.search.value, "");
-  assert.match(elements.status.textContent, /Google Drive loaded/);
+  // The fold is applied to the cache and queued like any other edit.
+  assert.match(elements.status.textContent, /Saved to the cache/);
   const folderRow = elements.tree.children.find((row) => allText(row).includes("Empty Folder"));
   assert.equal(folderRow.children[0].textContent, "▸");
 });
@@ -322,8 +330,7 @@ test("session cache count is shown in the drive bar, not the footer", async () =
   const { elements } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
   await settled();
   assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
-  assert.doesNotMatch(elements.status.textContent, /session cache/i);
-  assert.match(elements.status.textContent, /Ready\./);
+  assert.match(elements.status.textContent, /Ready: 2 snippets from the cache/);
 });
 
 test("a background sync notification repaints the panel from the cache", async () => {
@@ -344,8 +351,7 @@ test("a background sync notification repaints the panel from the cache", async (
 test("the toolbar moves the create buttons to the end", () => {
   const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
   const toolbar = html.split('<div class="toolbar"')[1].split("</div>")[0];
-  const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1])
-    .filter((id) => id !== "btn-close-panel");
+  const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1]);
   assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]);
 });
 
@@ -408,11 +414,17 @@ test("a complete cached open does not ask for a fill", async () => {
   assert.equal(messages.filter((m) => m.type === "pastex-panel-fill").length, 0);
 });
 
-test("the panel offers Close only when the browser can close a side panel", async () => {
-  const script = fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8");
-  assert.match(script, /typeof chrome\.sidePanel\.close === "function"/,
-    "closing is feature-detected, because sidePanel.close() is Chrome 141+");
+test("the toolbar icon toggles the panel and the panel no longer offers a Close button", async () => {
+  const background = fs.readFileSync(path.join(__dirname, "../background.js"), "utf8");
+  // Chrome owns the toolbar toggle: openPanelOnActionClick closes the panel on
+  // the next click, and no action.onClicked listener competes for the click.
+  assert.match(background, /setPanelBehavior\(\{ openPanelOnActionClick: true \}\)/,
+    "the toolbar icon must use the panel behavior that toggles");
+  assert.doesNotMatch(background, /chrome\.action\.onClicked\.addListener/,
+    "an onClicked listener would take the click back from the toggle");
   const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
-  assert.ok(/<button id="btn-close-panel"[^>]*hidden/.test(html),
-    "the button starts hidden and is revealed only when usable");
+  assert.doesNotMatch(html, /btn-close-panel/, "the panel's own Close button is gone");
+  const script = fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8");
+  assert.doesNotMatch(script, /sidePanel\.close/, "the panel does not close the side panel itself");
 });
+

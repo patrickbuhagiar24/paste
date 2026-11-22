@@ -6,13 +6,18 @@
  * keyed by a SHA-256 identity and silently refreshed when it is stale, while
  * mutations invalidate both copies before and after the write.
  *
- * The stored snapshot is the whole library (folders and every body), so an
- * open panel never waits for Drive. storage.local is bounded, so the write
- * degrades in stages instead of failing silently: the complete snapshot of
- * this library first, then the same snapshot with each body kept once, then
- * only the newest snapshot. The panel counts the rows that still need a body
- * so they can be filled while the machine is idle. A library that does not
- * fit at all falls back to the worker's session memory, as before.
+ * Reading never touches Drive. The stored snapshot is the whole library
+ * (folders and every body), so an open panel is served from memory or
+ * storage.local and never waits for the network: the only full sync happens
+ * when the configuration is first loaded, and later changes come from the
+ * background checks while the user is away.
+ *
+ * storage.local is bounded, so the write degrades in stages instead of failing
+ * silently: the complete snapshot of this library first, then the same
+ * snapshot with each body kept once, then only the newest snapshot. The panel
+ * counts the rows that still need a body so they can be filled while the
+ * machine is idle. A library that does not fit at all falls back to the
+ * worker's session memory, as before.
  *
  * Verified text bodies are addressed by the SHA-256 of their content and
  * survive tree invalidations, so an explicit refresh does not re-download
@@ -20,9 +25,15 @@
  * reported for it, so a refresh only rebuilds the branch that changed, and a
  * cached snapshot can be confirmed with metadata alone (verify).
  *
- * The background (idle) sync loads Drive once and compares the result with the
+ * The background (idle) check loads Drive once and compares the result with the
  * stored snapshot. The snapshot is only rewritten when Drive really reports a
  * difference; an unchanged library only moves a small freshness stamp.
+ *
+ * An edit made while the user is on an allowed site is applied to the cached
+ * snapshot at once (mutateLocal); the worker keeps the matching Drive write in
+ * the queue (extension/queue.js) and sends it when the tab is left. A row
+ * created that way carries a local id until that write lands, and a second
+ * edit on it is queued behind the first one.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
@@ -48,6 +59,7 @@
     var mutations = Promise.resolve();
     var mutating = 0;
     var silentTimer = 0;
+    var fullSyncStale = true;
 
     async function identity() {
       var config = await native.readConfig();
@@ -145,6 +157,9 @@
     // other accounts stay usable.
     async function invalidate() {
       revision++;
+      // A write changed Drive, so the derived snapshot is no longer the
+      // library: the next read syncs once and caches the result again.
+      fullSyncStale = true;
       // Keep verified bodies in memory; drop every derived snapshot because a
       // write may have changed the tree or its Drive properties.
       await clearSnapshot();
@@ -153,9 +168,25 @@
       await clearFresh(key || undefined);
     }
 
+    // Write an already edited snapshot back. The caller (mutateLocal) owns the
+    // edit; this only makes it durable in the same staged way as any write.
+    async function persistTree(key, snap) {
+      memory = snap;
+      try { if (storage) await storage.set({ [KEY]: snap }); } catch (ignored) { /* memory keeps it */ }
+      await writeLocal(key, snap);
+    }
+
     async function readStored() {
       if (!memory && storage) {
         try { memory = (await storage.get(KEY))[KEY] || null; } catch (ignored) {}
+      }
+      if (!memory) {
+        // The derived snapshot is the source of truth when the session copy was
+        // dropped (a worker restart): editing it in a copy would be lost.
+        var key;
+        try { key = await identity(); } catch (ignored) { key = ""; }
+        var stored = key ? (await localAll())[key] : null;
+        if (stored && stored.tree) memory = stored;
       }
       if (memory && memory.bodies) bodies = memory.bodies;
       if (memory && memory.texts) texts = memory.texts;
@@ -212,6 +243,9 @@
     }
 
     async function writeSnapshot(key, rootId, tree, metadata) {
+      // This is a full read of Drive: nothing else needs to be fetched until
+      // a write or a new configuration makes it stale again.
+      fullSyncStale = false;
       var snap = snapshot(key, rootId, tree, metadata);
       memory = snap;
       try { if (storage) await storage.set({ [KEY]: snap }); }
@@ -273,19 +307,9 @@
       return { filled: result.filled, skipped: false, pending: pendingCount(saved.tree, texts) };
     }
 
-    function forceRefreshPending(stamp) {
-      return Date.now() - (stamp || 0) >= FRESH_MS;
-    }
-
-    function scheduleStaleRefresh(stamp, onUpdate) {
-      if (forceRefreshPending(stamp) && !inflight && !silentTimer) {
-        silentTimer = setTimeout(function () {
-          silentTimer = 0;
-          if (inflight) return;
-          get(true, onUpdate).catch(function () {});
-        }, 250);
-      }
-    }
+    // Reads no longer schedule a refresh: a stale snapshot is corrected by the
+    // background check, which runs while the user is away, or by the explicit
+    // Refresh button (force), which is a full sync.
 
     // The bodies, the node signatures and the centralized index of a load
     // replace the stored ones. A body is addressed by the SHA-256 of its
@@ -386,8 +410,7 @@
         saved = null;
       }
       var stamp = await freshStamp(key, saved);
-      if (!force && saved) {
-        scheduleStaleRefresh(stamp, onUpdate);
+      if (saved) {
         var storedTexts = saved.texts || texts || {};
         return { tree: saved.tree, rootId: saved.rootId, warnings: [], cached: true,
           lastCheckedAt: stamp, pending: pendingCount(saved.tree, storedTexts) };
@@ -401,17 +424,28 @@
         signatures = local.signatures || {};
         index = local.index || null;
       }
-      if (!force && local) {
+      if (local) {
         try { if (storage) await storage.set({ [KEY]: local }); } catch (ignored) {}
         var localStamp = await freshStamp(key, local);
-        scheduleStaleRefresh(localStamp, onUpdate);
         return { tree: local.tree, rootId: local.rootId, warnings: [], cached: true,
           lastCheckedAt: localStamp, pending: pendingCount(local.tree, texts) };
       }
+      // A configuration was just read and nothing has been stored for it yet;
+      // only then is a full sync of the library part of loading it.
+      var firstLoad = fullSyncStale;
+      var response = await loadFromDrive(key, onUpdate, options);
+      if (firstLoad) fullSyncStale = false;
+      return response;
+    }
+
+    // The one full read of Drive, used when the configuration is first loaded
+    // and by the background checks. An ordinary open never reaches it.
+    async function loadFromDrive(key, onUpdate, options) {
+      options = options || {};
       if (inflight) {
-        if (!force && inflight.identity === key) return inflight.promise;
+        if (inflight.identity === key) return inflight.promise;
         try { await inflight.promise; } catch (ignored) {}
-        return get(force, onUpdate, options);
+        return loadFromDrive(key, onUpdate, options);
       }
       var started = revision;
       var flight = { identity: key };
@@ -425,7 +459,7 @@
         mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [],
-          cached: false, pending: pendingCount(result.tree, texts) };
+          cached: false, lastCheckedAt: Date.now(), pending: pendingCount(result.tree, texts) };
         // Never replace a complete snapshot with a partial/error listing.
         // Explicit revocation of an item also invalidates the older snapshot.
         if (response.warnings.some(function (warning) { return /HTTP (401|403|404)\b|invalid_grant/i.test(warning); })) await discardAll();
@@ -456,14 +490,24 @@
         // the next opening. A mere offline/timeout failure may keep it.
         if (/HTTP (401|403|404)\b|invalid_grant/i.test(err.message || "")) await discardAll();
         throw err;
-      } finally { if (inflight === flight) inflight = null; }
+      } finally {
+        if (inflight === flight) inflight = null;
+        // A failed first sync is retried on the next configuration read
+        // rather than on every open.
+        if (options.firstLoad) fullSyncStale = true;
+      }
     }
 
     // Called by the background idle alarm. It never reports progress to the
     // panel and it only rewrites the cache when Drive reports a difference.
     async function sync() {
+      // A write in flight wins: it is about to invalidate the snapshot, so a
+      // read taken now would be stale before it landed. The flush calls this
+      // after its last write finished, which is why it gets a real answer.
       if (inflight || silentTimer || mutating > 0) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
-      var response = await get(true, null, { onlyIfChanged: true });
+      var key;
+      try { key = await identity(); } catch (err) { throw err; }
+      var response = await loadFromDrive(key, null, { onlyIfChanged: true });
       if ((response.warnings || []).length) return { changed: false, skipped: true, tree: null, rootId: "", lastCheckedAt: 0 };
       return { changed: response.unchanged === false, skipped: false,
         tree: response.tree, rootId: response.rootId,
@@ -498,7 +542,7 @@
           indexSignature(listings.index) !== indexSignature(saved.index);
         if (changed) {
           // The panel should reload from Drive: same shape as sync().
-          var full = await get(true, null, { onlyIfChanged: true });
+          var full = await loadFromDrive(key, null, { onlyIfChanged: true });
           return { checked: true, changed: full.unchanged === false, skipped: false,
             lastCheckedAt: full.lastCheckedAt || Date.now(), pending: full.pending || 0 };
         }
@@ -528,8 +572,87 @@
       mutations = operation.catch(function () {});
       return operation;
     }
+    // The user picked a configuration manifest: the next read is a full sync.
+    function configurationChanged() { fullSyncStale = true; }
+
+    // A read-only view of the cached snapshot, for a queued index write.
+    async function current() {
+      // The in-memory copy is cleared by an invalidation, and a caller that
+      // reads just before taking the write lock would see nothing. Read the
+      // persisted snapshot directly, which is what the panel is showing.
+      var saved = null;
+      var key;
+      try { key = await identity(); } catch (ignored) { key = ""; }
+      if (key) { try { saved = (await localAll())[key] || null; } catch (ignored) { saved = null; } }
+      if (!saved || !saved.tree) {
+        if (memory && memory.tree) saved = memory;
+        else { try { saved = (await storage.get(KEY))[KEY] || null; } catch (ignored) { saved = null; } }
+      }
+      // A copy, not the stored object: a write clears the snapshot in place,
+      // so a caller holding the stored tree would see it emptied underneath.
+      return saved && saved.tree ? { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId } : null;
+    }
+
+    // --- edits made while the user is on a site ----------------------------
+    //
+    // The change is applied to the cached snapshot at once, so every read
+    // serves it, and the Drive write waits in the queue. Nothing here talks to
+    // Drive: that is flush()'s job, when the tab is left.
+    async function mutateLocal(apply) {
+      // The same lock as a Drive write: a full load that is still running
+      // would otherwise overwrite the edit with the listing it read before it.
+      var operation = mutations.then(async function () {
+        mutating++;
+        try {
+          var key;
+          try { key = await identity(); } catch (ignored) { key = ""; }
+          var saved = await readStored();
+          if (!saved || !saved.tree || (key && saved.identity !== key)) {
+            return { applied: [], pending: 0, skipped: true };
+          }
+          var applied = await apply(saved);
+          saved.savedAt = Date.now();
+          if (key) await persistTree(key, saved);
+          return { applied: applied || [], pending: pendingCount(saved.tree, texts), skipped: false };
+        } finally { mutating--; }
+      });
+      mutations = operation.catch(function () {});
+      return operation;
+    }
+
+    // Rename a just-created row to its Drive id, inside a write that already
+    // holds the library lock. The snapshot is in memory there, so this does
+    // not take the lock again (which would deadlock) and does not race the
+    // invalidation that follows the write.
+    // A queued write failed permanently (the row was deleted on another
+    // machine, the folder moved): drop it from the cache so the next read does
+    // not offer a row Drive does not have.
+    async function dropLocal(command) {
+      if (!command || !command.item || !command.item.localId) return 0;
+      var saved = await readStored();
+      if (!saved || !saved.tree) return 0;
+      var localId = command.item.localId;
+      var removed = 0;
+      (function prune(nodes) {
+        (nodes || []).forEach(function (node, at) {
+          if (node.id === localId) { nodes.splice(at, 1); removed++; return; }
+          if (node.kind === "folder") prune(node.children);
+        });
+      })(saved.tree);
+      if (saved.bodies) delete saved.bodies[localId];
+      if (removed) {
+        saved.savedAt = Date.now();
+        var key;
+        try { key = await identity(); } catch (ignored) { key = ""; }
+        if (key) await persistTree(key, saved);
+      }
+      return removed;
+    }
+
     return { get: get, sync: sync, verify: verify, fill: fill,
-      pending: pendingCount, invalidate: invalidate, mutate: mutate };
+      pending: pendingCount, invalidate: invalidate, mutate: mutate,
+      configurationChanged: configurationChanged, mutateLocal: mutateLocal,
+      dropLocal: dropLocal, current: current };
   }
   return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY, FRESH_MS: FRESH_MS, MAX_LOCAL: MAX_LOCAL };
 });

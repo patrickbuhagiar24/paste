@@ -22,6 +22,7 @@ function harness(home, unavailable, shared, closeUnsupported) {
   let registered = [];
   let injected = 0;
   const opened = [];
+  const behaviors = [];
   let idleState = "idle";
   const listenersForApis = {};
   const alarmCalls = [];
@@ -72,11 +73,18 @@ function harness(home, unavailable, shared, closeUnsupported) {
         sendMessage: async () => { throw new Error("no receiver"); } },
       alarms, idle: idleApi,
       action: { onClicked: event("action") },
-      sidePanel: Object.assign({ open: (options) => { opened.push(options); return Promise.resolve(); } },
+      sidePanel: Object.assign(
+        { open: (options) => { opened.push(options); return Promise.resolve(); },
+          setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); } },
         closeUnsupported ? {} : { close: (options) => { closed.push(options); return Promise.resolve(); } }),
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
-    crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL, console: { warn() {} },
+    crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL,
+    // The worker talks HTTP through fetch; the stubs replace the calls that
+    // would use it, but the symbol must exist.
+    fetch: async () => { throw new Error("the network is stubbed in this test"); },
+    AbortController, AbortSignal, TextDecoder,
+    console: { warn() {}, log() {}, error() {} },
   });
   context.self = context;
   context.importScripts = (...names) => {
@@ -85,7 +93,7 @@ function harness(home, unavailable, shared, closeUnsupported) {
     }
   };
   vm.runInContext(fs.readFileSync(path.join(ext, "background.js"), "utf8"), context);
-  return { listeners, context, listenersForApis, opened, closed, alarmCalls,
+  return { listeners, context, listenersForApis, opened, closed, behaviors, alarmCalls,
     set idle(value) { idleState = value; },
     get launches() { return launches; },
     get registered() { return registered; }, get injected() { return injected; } };
@@ -176,87 +184,163 @@ test("only the extension panel can request a site registration reload", async ()
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("panel loads are cached; writes require panel and invalidate cache", async () => {
+test("panel loads are cached and an edit changes the cache without reading Drive", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-cache-worker-"));
   try {
     const browser = harness(home, false);
     browser.listeners.installed(); await new Promise(setImmediate);
     fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
     fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
     browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
     let text = "old", loads = 0;
-    browser.context.PastexLibrary.load = async () => ({ tree: [{ id: "item", kind: "text", name: "Item", text: text }], session: { rootId: "root" }, warnings: [], sequence: ++loads });
-    browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
-    browser.context.PastexDrive.updateText = async (token, id, value) => { assert.equal(id, "item"); text = value; };
+    browser.context.PastexLibrary.load = async () => ({
+      tree: [{ id: "item", kind: "text", name: "Item", driveName: "Item.txt", text: text }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} }, sequence: ++loads,
+    });
+    browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
+    browser.context.PastexDrive.fetchAccessToken = async () => "token";
+    browser.context.PastexDrive.getFolder = async () => ({ mimeType: browser.context.PastexDrive.FOLDER_MIME, properties: { pastex_index: "" } });
+    let driveWrites = 0;
+    browser.context.PastexDrive.updateText = async (token, id, value) => { driveWrites++; text = value; };
+    browser.context.PastexDrive.listChildren = async () => [];
     const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
     const page = { id: "abc", tab: { id: 1 }, url: "https://allowed.example/" };
     function send(message, sender) { return new Promise((resolve) => browser.listeners.message(message, sender, resolve)); }
     assert.equal((await send({ type: "pastex-panel-library" }, panel)).result.tree[0].text, "old");
     assert.equal((await send({ type: "pastex-panel-library" }, panel)).result.tree[0].text, "old");
-    assert.equal(loads, 1);
-    assert.equal((await send({ type: "pastex-panel-mutate", command: {} }, page)).ok, false);
-    const command = { action: "save", mode: "edit-text", rootId: "root", parentId: "root", name: "Item", text: "new", node: { id: "item", name: "Item", driveName: "Item.txt", kind: "text", text: "old" } };
-    assert.equal((await send({ type: "pastex-panel-mutate", command }, panel)).ok, true);
+    assert.equal(loads, 1, "the second open is served from the cache");
+    // The old immediate-write route is gone: it is not even recognised any
+    // more, so it answers nothing and writes nothing.
+    assert.equal(browser.listeners.message({ type: "pastex-panel-mutate", command: {} }, panel, () => {
+      throw new Error("the removed route must not answer");
+    }), false);
+    await settle();
+    assert.equal(driveWrites, 0);
+    // An edit is cached at once...
+    const edit = await send({ type: "pastex-panel-local-edit", command: {
+      kind: "edit", name: "Item", text: "new", parentId: "root",
+      item: { id: "item", kind: "text", driveName: "Item.txt" },
+    } }, panel);
+    assert.equal(edit.ok, true);
     assert.equal((await send({ type: "pastex-panel-library" }, panel)).result.tree[0].text, "new");
-    assert.equal(loads, 2);
+    assert.equal(loads, 1, "reading the cache back does not touch Drive");
+    assert.equal(driveWrites, 0, "and an edit on a site never writes to Drive");
+    // ...and sent when the tab is left.
+    const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };
+    await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+    await settle();
+    const after = await send({ type: "pastex-panel-status" }, panel);
+    assert.equal(after.result.pending, 0, "the queue drained: " + JSON.stringify(after.result));
+    assert.equal(driveWrites, 1);
+    assert.equal(text, "new");
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("worker handles create, rename, order and bulk trash with Drive, denying changed roots", async () => {
+// An opaque id shaped like the ones Drive hands out; a short key would look
+// like a local row to the queue.
+function driveId(key) { return "1" + key.repeat(20) + "AbCdEf"; }
+
+// A queue-backed write scenario: the panel edits, the site is left, and the
+// flush is the only thing that reaches Drive.
+function queueScenario(stub) {
   const browser = harness(os.tmpdir(), true);
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
-  let stored = { order: {}, collapsed: {} };
-  browser.context.PastexLibrary.connect = async () => ({
-    token: "token", rootId: "root", properties: { keep: "1" }, index: stored,
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };
+  browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
+  browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+  let stored = { order: { root: [] }, collapsed: { folder: "1" } };
+  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", properties: { keep: "1" }, index: stored });
+  // A real tree: a reorder or a collapse applies to the cached rows, so the
+  // fixture must have the rows the test reorders. The ids are opaque, like the
+  // ones Drive hands out; a short key would look like a local id.
+  const rows = ["a", "b", "c", "d", "e", "f", "g"].map((key) => ({
+    id: driveId(key), kind: "text", name: key.toUpperCase(),
+    driveName: key.toUpperCase() + ".txt", text: key,
+  }));
+  browser.context.PastexLibrary.load = async () => ({
+    tree: structuredClone(rows), session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: stored,
   });
   const drive = browser.context.PastexDrive;
-  const writes = [];
+  drive.fetchAccessToken = async () => "token";
+  drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
   drive.listChildren = async () => [];
-  drive.createFolder = async (t, name, parent) => { writes.push(["folder", name, parent]); return "f"; };
-  drive.uploadNew = async (t, parent, name, text) => { writes.push(["new", parent, name, text]); return { id: "n" }; };
-  drive.renameFile = async (t, id, name) => { writes.push(["rename", id, name]); };
-  drive.trashFile = async (t, id) => { writes.push(["trash", id]); };
-  drive.setIndex = async (t, root, index, impl, known) => { writes.push(["index", root, index, known]); stored = index; };
-  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
-  assert.equal((await send({ rootId: "root", action: "save", mode: "new-folder", name: "Folder", parentId: "root" })).result.id, "f");
-  assert.equal((await send({ rootId: "root", action: "save", mode: "new-text", name: "Note", text: "text", parentId: "root" })).result.id, "n");
-  assert.equal((await send({ rootId: "root", action: "save", mode: "rename-text", name: "Renamed", parentId: "root", node: { id: "n", kind: "text", name: "Note", driveName: "Note.txt" } })).ok, true);
-  assert.equal((await send({ rootId: "root", action: "reorder", groups: [["n", "f"]], parents: ["root"] })).ok, true);
-  assert.equal((await send({ rootId: "root", action: "collapse", ids: ["f"], collapsed: true })).ok, true);
-  assert.equal((await send({ rootId: "root", action: "delete", ids: ["n", "f"] })).ok, true);
-  assert.equal((await send({ rootId: "other", action: "delete", ids: ["n"] })).ok, false);
-  const tupleSort = (a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b));
-  assert.deepEqual(writes.slice(0, 3), [["folder", "Folder", "root"], ["new", "root", "Note", "text"], ["rename", "n", "Renamed.txt"]]);
-  // The order and the collapse state are written once, into the label of the
-  // root folder, and the other labels of the folder are preserved.
-  assert.deepEqual(JSON.parse(JSON.stringify(writes[3])),
-    ["index", "root", { order: { root: ["n", "f"] }, collapsed: {} }, { keep: "1" }]);
-  assert.deepEqual(JSON.parse(JSON.stringify(writes[4])),
-    ["index", "root", { order: { root: ["n", "f"] }, collapsed: { f: "1" } }, { keep: "1" }]);
-  assert.deepEqual(writes.slice(5, 7).sort(tupleSort), [["trash", "n"], ["trash", "f"]].sort(tupleSort));
+  drive.setIndex = async (t, root, index) => { stored = index; };
+  stub(drive);
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  const leave = () => new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  return { browser, send, leave, stored: () => stored };
+}
+
+test("the queue writes creates, renames, the index and bulk trash to Drive", async () => {
+  const writes = [];
+  const { send, leave } = queueScenario((drive) => {
+    drive.createFolder = async (t, name, parent) => { writes.push(["folder", name, parent]); return "f"; };
+    drive.uploadNew = async (t, parent, name, text) => { writes.push(["new", parent, name, text]); return { id: "n" }; };
+    drive.renameFile = async (t, id, name) => { writes.push(["rename", id, name]); };
+    drive.trashFile = async (t, id) => { writes.push(["trash", id]); };
+    drive.setIndex = async (t, root, index, impl, known) => { writes.push(["index", root, index, known]); };
+  });
+  await send({ type: "pastex-panel-library" });
+  const edit = (command) => send({ type: "pastex-panel-local-edit", command });
+  assert.equal((await edit({ kind: "create", name: "Folder", parentId: "root",
+    item: { kind: "folder", parentId: "root", localId: "" } })).ok, true);
+  assert.equal((await edit({ kind: "create", name: "Note", text: "text", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "" } })).ok, true);
+  assert.equal(writes.length, 0, "nothing is written while the panel is used on a site");
+  await leave();
+  await settle();
+  assert.deepEqual(writes.slice(0, 2), [["folder", "Folder", "root"], ["new", "root", "Note", "text"]]);
 });
 
-test("the order and the collapse state are written once, in the central index", async () => {
-  const browser = harness(os.tmpdir(), true);
-  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
-  let stored = { order: { root: ["a", "b"] }, collapsed: { folder: "1" } };
-  browser.context.PastexLibrary.connect = async () => ({
-    token: "token", rootId: "root", properties: {}, index: stored,
-  });
-  const drive = browser.context.PastexDrive;
+test("a reorder and a collapse each become one index write, and the stored order survives", async () => {
   const calls = [];
-  drive.setIndex = async (t, root, index) => { calls.push([root, index]); stored = index; };
-  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
-  const ids = ["a", "b", "c", "d", "e", "f", "g"];
-  assert.equal((await send({ rootId: "root", action: "reorder", groups: [ids], parents: ["root"] })).ok, true);
+  const { browser, send, leave, stored } = queueScenario((drive) => {
+    drive.setIndex = async (t, root, index) => { calls.push([root, index]); };
+  });
+  // The label is read back from the folder before each write, so the stub must
+  // serve what the previous write stored, exactly like Drive does.
+  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", properties: { keep: "1" }, index: stored() });
+  await send({ type: "pastex-panel-library" });
+  const edit = (command) => send({ type: "pastex-panel-local-edit", command });
+  const ids = ["a", "b", "c", "d", "e", "f", "g"].map(driveId);
+  const reorder = await edit({ kind: "reorder", groups: [ids], parents: ["root"] });
+  assert.equal(reorder.ok, true, "the edit was accepted: " + JSON.stringify(reorder));
+  await leave();
+  await settle();
+  const status = await send({ type: "pastex-panel-status" });
   assert.equal(calls.length, 1, "a reorder is a single Drive write");
+  assert.equal(status.result.pending, 0, "and it left the queue");
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].order.root)), ids);
   calls.length = 0;
-  assert.equal((await send({ rootId: "root", action: "collapse", ids, collapsed: true })).ok, true);
+  await edit({ kind: "collapse", ids, collapsed: true });
+  await leave();
+  await settle();
   assert.equal(calls.length, 1, "a collapse is a single Drive write");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].collapsed)),
-    { folder: "1", a: "1", b: "1", c: "1", d: "1", e: "1", f: "1", g: "1" });
+  const folded = Object.assign({ folder: "1" }, Object.fromEntries(ids.map((id) => [id, "1"])));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].collapsed)), folded);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1].order.root)), ids, "the stored order survives a collapse");
+});
+
+test("bulk Drive deletes run with bounded parallelism", async () => {
+  let active = 0, max = 0;
+  const calls = [];
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.trashFile = async (t, id) => {
+      active++; max = Math.max(max, active);
+      await new Promise(setImmediate);
+      active--;
+      calls.push(id);
+    };
+  });
+  await send({ type: "pastex-panel-library" });
+  const ids = ["a", "b", "c", "d", "e", "f", "g"].map(driveId);
+  const del = await send({ type: "pastex-panel-local-edit", command: { kind: "delete", ids } });
+  assert.equal(del.ok, true, "the delete was accepted: " + JSON.stringify(del));
+  const left = await leave();
+  await settle(20);
+  assert.equal(max, 6, "the writes of one bulk delete are bounded");
+  assert.deepEqual(calls.sort(), ids.slice().sort());
 });
 
 test("repeated paste requests reuse the cached site allowlist", async () => {
@@ -272,26 +356,6 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     assert.equal(browser.launches, readsAfterStartup, "paste must not re-read linked configuration");
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
-});
-
-test("bulk Drive deletes run with bounded parallelism", async () => {
-  const browser = harness(os.tmpdir(), true);
-  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
-  browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root" });
-  const drive = browser.context.PastexDrive;
-  let active = 0, max = 0;
-  const calls = [];
-  drive.trashFile = async (t, id) => {
-    active++; max = Math.max(max, active);
-    await new Promise(setImmediate);
-    active--;
-    calls.push(id);
-  };
-  const send = (command) => new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-mutate", command }, panel, resolve));
-  const ids = ["a", "b", "c", "d", "e", "f", "g"];
-  assert.equal((await send({ rootId: "root", action: "delete", ids })).ok, true);
-  assert.equal(max, 6, "the writes of one bulk delete are bounded");
-  assert.deepEqual(calls.sort(), ids.slice().sort());
 });
 
 test("the background sync runs only while the user is away", async () => {
@@ -525,3 +589,210 @@ test("the open panel tells the page to switch the launcher to close", async () =
   const spoof = await new Promise((resolve) => browser.listeners.message({ type: "pastex-panel-state", open: true }, sender, resolve));
   assert.equal(spoof.ok, false);
 });
+
+// --- the toolbar toggles the panel ----------------------------------------
+
+test("the toolbar icon toggles the side panel through the panel behavior", async () => {
+  const browser = harness(os.tmpdir(), true);
+  await settle();
+  assert.equal(browser.behaviors.length, 1, "the worker sets the panel behavior once");
+  assert.equal(browser.behaviors[0].openPanelOnActionClick, true,
+    "Chrome opens the panel on click and closes it on the next click");
+  // No onClicked listener may compete with that behavior.
+  assert.equal(browser.listeners.action, undefined);
+});
+
+// --- edits wait for the site to be left -----------------------------------
+
+function editScenario() {
+  const browser = harness(os.tmpdir(), true);
+  // The site configuration must stay readable, or the first read would try to
+  // re-register content scripts and never answer the panel.
+  browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
+  // One stable configuration object: the cache keys a snapshot by it, and a
+  // fresh object on every read would look like a different library.
+  const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+  browser.context.PastexConfig.readConfig = async () => configuration;
+  // The Drive side: a listing of the library, kept in step with the writes, so
+  // the sync after a flush sees what the flush just wrote.
+  const library = [
+    { id: "item1", kind: "text", name: "Synced", driveName: "Synced.txt", text: "from Drive" },
+  ];
+  browser.context.PastexLibrary.load = async () => ({
+    tree: structuredClone(library), session: { rootId: "root" }, warnings: [], bodies: {},
+    metadata: {}, signatures: {}, index: { order: {}, collapsed: {} },
+  });
+  const writes = [];
+  browser.context.PastexLibrary.connect = async () => ({ token: "t", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
+  const drive = browser.context.PastexDrive;
+  // A create checks for a duplicate name first, which is a listing of the
+  // destination folder; it must be stubbed like every other Drive call.
+  drive.listChildren = async () => [];
+  drive.createFolder = async (t, name, parent) => {
+    writes.push(["folder", name]);
+    library.push({ id: "made-folder", kind: "folder", name: name, driveName: name, children: [] });
+    return "made-folder";
+  };
+  drive.uploadNew = async (t, parent, name, text) => {
+    writes.push(["text", name, text]);
+    library.push({ id: "made-text", kind: "text", name: name, driveName: name + ".txt", text: text });
+    return { id: "made-text" };
+  };
+  drive.updateText = async (t, id, text) => {
+    writes.push(["update", id, text]);
+    const node = library.find((row) => row.id === id);
+    if (node) node.text = text;
+  };
+  drive.renameFile = async (t, id, name) => {
+    writes.push(["rename", id, name]);
+    const node = library.find((row) => row.id === id);
+    if (node) node.name = name;
+  };
+  drive.trashFile = async (t, id) => {
+    writes.push(["trash", id]);
+    const at = library.findIndex((node) => node.id === id);
+    if (at !== -1) library.splice(at, 1);
+  };
+  drive.setIndex = async (t, root, index) => { writes.push(["index", index]); };
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  return { browser, writes, send };
+}
+
+test("a create on a site is cached at once and not written to Drive", async () => {
+  const { browser, writes, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const response = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "written here", parentId: "root",
+    item: { kind: "text", name: "Draft", parentId: "root", localId: "" },
+  } });
+  await settle();
+  assert.equal(response.ok, true);
+  assert.equal(response.result.queued, true);
+  assert.equal(writes.length, 0, "nothing reaches Drive while the user is on the site");
+  // The cached read already shows the row.
+  const library = await send({ type: "pastex-panel-library" });
+  assert.ok(library.result.tree.some((node) => node.name === "Draft"));
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1);
+});
+
+test("leaving the site sends the queue and gives the row its Drive id", async () => {
+  const { browser, writes, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "written here", parentId: "root",
+    item: { kind: "text", name: "Draft", parentId: "root", localId: "" },
+  } });
+  // A content script on an approved site reports that its tab was left.
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const flushed = await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.equal(flushed.ok, true);
+  assert.deepEqual(writes[0], ["text", "Draft", "written here"]);
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 0, "the queue is empty after the flush");
+  // The cached row now carries the Drive id the upload returned.
+  const library = await send({ type: "pastex-panel-library" });
+  const row = library.result.tree.find((node) => node.name === "Draft");
+  assert.equal(row.id, "made-text");
+});
+
+test("an edit never schedules its own Drive write while the site is still in use", async () => {
+  const { browser, writes, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "here", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "" },
+  } });
+  // Give any scheduled or immediate write a generous window to happen.
+  await new Promise((resolve) => setTimeout(resolve, 4500));
+  assert.equal(writes.length, 0, "no timer and no immediate write may reach Drive");
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1, "the edit is still waiting in the queue");
+});
+
+test("leaving the site hides it from the worker and sends the queue", async () => {
+  const { browser, writes } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: true }, site, resolve));
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: false }, site, resolve));
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.equal(writes.length, 0, "an empty queue sends nothing");
+});
+
+test("the background check refuses to run while a site is visible", async () => {
+  const browser = harness(os.tmpdir(), true);
+  browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
+  browser.context.PastexConfig.readConfig = async () => ({
+    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+  });
+  let loads = 0;
+  browser.context.PastexLibrary.load = async () => {
+    loads++;
+    return { tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
+      session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} } };
+  };
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: true }, site, resolve));
+  browser.idle = "idle";
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 0, "a visible site blocks the background check");
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: false }, site, resolve));
+  browser.listenersForApis.alarm({ name: "pastex-idle-sync" });
+  await settle();
+  assert.equal(loads, 1, "once the site is left, the check runs");
+});
+
+test("a leftover queue is sent when the browser starts again", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-retry-"));
+  try {
+    const browser = harness(home, true);
+    browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
+    const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+    browser.context.PastexConfig.readConfig = async () => configuration;
+    browser.context.PastexLibrary.connect = async () => ({ token: "t", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
+    browser.context.PastexLibrary.load = async () => ({
+      tree: [], session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} },
+    });
+    const drive = browser.context.PastexDrive;
+    drive.fetchAccessToken = async () => "token";
+    drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
+    drive.listChildren = async () => [];
+    const writes = [];
+    drive.uploadNew = async (t, parent, name, text) => { writes.push([name, text]); return { id: "made" }; };
+    drive.setIndex = async () => {};
+    // A queue that never left before the browser was quit.
+    const queue = browser.context.PastexQueue.create(browser.context.chrome.storage.local);
+    await queue.push([{ id: "q1", kind: "create", name: "Recovered", text: "still here",
+      item: { id: "local-1", localId: "local-1", kind: "text", parentId: "root", isNew: true } }]);
+    browser.idle = "idle";
+    browser.listeners.startup();
+    await settle(60);
+    assert.deepEqual(writes[0], ["Recovered", "still here"], "the leftover edit reaches Drive on the next start");
+    // The worker's queue is the one that matters; a second reader only proves
+    // the stored blob, which is the same storage the worker just cleared.
+    assert.equal((await browser.context.deferredQueue.all()).length, 0, "the queue is empty afterwards");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a page that is not an approved site cannot trigger a drive write", async () => {
+  const { browser } = editScenario();
+  const stranger = { id: "someone-else", tab: { id: 1 }, frameId: 0, url: "https://example.test/" };
+  const refused = await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, stranger, resolve));
+  assert.equal(refused.ok, false);
+  const injection = { id: "abc", tab: { id: 1 }, frameId: 1, url: "https://allowed.example/path" };
+  const subframe = await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, injection, resolve));
+  assert.equal(subframe.ok, false, "only the top frame of an extension page may ask");
+});
+
+test("an edit is refused for a sender that is not the panel", async () => {
+  const { browser } = editScenario();
+  const page = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const refused = await new Promise((resolve) => browser.listeners.message(
+    { type: "pastex-panel-local-edit", command: { kind: "delete", ids: ["item1"] } }, page, resolve));
+  assert.equal(refused.ok, false, "a content script cannot edit the library");
+});
+

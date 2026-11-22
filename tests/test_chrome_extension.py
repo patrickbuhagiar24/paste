@@ -132,8 +132,7 @@ def test_the_panel_shows_the_last_check_and_keeps_the_manual_refresh():
     assert 'id="btn-sync"' in panel, "the manual refresh stays the fallback"
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
-    order = [name for name in re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
-             if name != "btn-close-panel"]
+    order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
     assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]
 
 

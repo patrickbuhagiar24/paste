@@ -248,6 +248,37 @@
 
   // --- messages from the background worker ---
 
+  // Edits made on a site wait in the cache. Once the tab is left (closed or
+  // hidden) the worker may send them to Drive; nothing is fetched or written
+  // while the user is still on the page. The worker decides what to flush, so
+  // this only reports the leave and never touches Drive itself.
+  var flushSent = false;
+  function reportLeft() {
+    if (flushSent) return;
+    flushSent = true;
+    try {
+      chrome.runtime.sendMessage({ type: "pastex-flush-now" }).catch(function () {});
+    } catch (ignored) { /* the page is going away */ }
+  }
+  // The worker also refuses to run a background check while a site is visible,
+  // so every visibility change is reported, not only the leave.
+  function reportVisible(visible) {
+    try {
+      chrome.runtime.sendMessage({ type: "pastex-site-visible", visible: !!visible }).catch(function () {});
+    } catch (ignored) { /* the page is going away */ }
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") {
+      reportVisible(false);
+      reportLeft();
+    } else {
+      flushSent = false;
+      reportVisible(true);
+    }
+  });
+  window.addEventListener("pagehide", function () { reportVisible(false); reportLeft(); });
+  reportVisible(document.visibilityState !== "hidden");
+
   chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || typeof message.type !== "string" || message.type.indexOf("pastex-") !== 0) {
       return false;

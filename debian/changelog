@@ -1,3 +1,23 @@
+pastex (2.13.0-1) unstable; urgency=medium
+
+  * Read everything from the cache. The library is downloaded once, when the
+    configuration is first loaded, and stored whole; an open panel never asks
+    Drive for a listing, so the list appears instantly.
+  * Write when the site is left. An edit made on an allowed site is applied to
+    the cached list at once and kept in a durable queue; the Drive write waits
+    until the tab is closed or hidden, then one full read brings the cache back
+    in step. No timer writes anything earlier. A queue left by a browser that
+    was quit is sent on the next start, unless an allowed site is still open;
+    a write Drive refuses permanently is dropped from the queue.
+  * Never sync while a site is open. The background check and the queue both
+    stand down while any allowed site has a visible tab.
+  * Make the toolbar icon a toggle. It now opens the side panel and closes it
+    again (Chrome 141+), through sidePanel.setPanelBehavior, the same approach
+    as the user's Yousub extension.
+  * Remove the panel's own Close button: the toolbar icon is the switch.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 21 Nov 2026 23:59:00 +0000
+
 pastex (2.12.0-1) unstable; urgency=medium
 
   * Turn the in-page launcher into a toggle: on Chrome 141+ the same button
