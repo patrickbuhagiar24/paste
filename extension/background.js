@@ -538,13 +538,13 @@ async function queueLocalEdit(command) {
   }
   if (!result.skipped && entry) await deferredQueue.push([entry]);
   // Nothing is scheduled here on purpose. The write waits until the tab this
-  // panel belongs to is closed or hidden, which the content script reports;
-  // an edit made on a site never sends a request to Drive by itself.
+  // panel belongs to is closed, which the content script reports as the page
+  // goes away; an edit on a site never sends a request to Drive by itself.
   if (!result.skipped) notifyPanelsLocal(result.pending);
   return { applied: result.applied, pending: result.pending, queued: !!entry, local: true };
 }
 
-// --- flush: send the queue once the user has left the site ----------------
+// --- flush: send the queue once the tab is closed -------------------------
 //
 // There is no timer behind this: the only triggers are a tab being hidden or
 // closed (reported by the content script) and the browser starting after a
@@ -553,7 +553,11 @@ async function queueLocalEdit(command) {
 // Run the queue serially. A transient failure (offline, a rate limit) keeps
 // the entry for the next flush; a permanent one (the row is gone) drops it
 // from the cache and from the queue so it cannot be retried forever.
-async function flushSoon() {
+// options.readBack: false sends the queue and stops there. A new row keeps
+// its local id until the next read; the panel already shows it and the next
+// open (or the next flush) assigns the Drive id.
+async function flushSoon(options) {
+  var readBack = !(options && options.readBack === false);
   if (flushRunning) return { sent: 0, failed: 0 };
   var entries = await deferredQueue.all();
   if (!entries.length) return { sent: 0, failed: 0 };
@@ -564,7 +568,7 @@ async function flushSoon() {
     flushRunning = false;
     // The writes are on Drive now; one full read turns every local id into the
     // id Drive gave the row, so the cache matches Drive again.
-    try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+    if (readBack) { try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ } }
     // A flush that cannot report what it did leaves a silent gap, so the
     // result says how many entries are still waiting.
     reportFlush(await pendingCount());
@@ -576,13 +580,12 @@ function reportFlush(pending) {
   if (pending) console.warn("Pastex: " + pending + " queued write(s) still waiting.");
 }
 
-// One explicit sync, for the panel's button: the queue first (so the read
-// sees this machine's writes), then the library from Drive.
+// One explicit sync, for the panel's button: send what the queue holds and
+// nothing else. It never reads the library back from Drive.
 async function syncNow() {
-  var deferred = siteBusy();
-  var flushed = { sent: 0, failed: 0 };
-  if (!deferred) flushed = await flushSoon();
-  return { flushed: flushed, deferred: deferred, pending: await pendingCount() };
+  if (siteBusy()) return { flushed: { sent: 0, failed: 0 }, deferred: true, pending: await pendingCount() };
+  var flushed = await flushSoon({ readBack: false });
+  return { flushed: flushed, deferred: false, pending: await pendingCount() };
 }
 
 async function pendingCount() {

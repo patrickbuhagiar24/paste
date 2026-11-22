@@ -117,11 +117,13 @@ them across a rebuild of the tree and recognizes an unchanged body even when
 its timestamp moved.
 
 The panel shows when the library was last confirmed with Google Drive, next to
-the drive status. Use **↻ Sync** to check Drive right away.
+the drive status. **↻ Sync** sends the waiting changes; it does not read
+Drive, so the list on screen is never reloaded by it.
 
 Cached content can be stale, including after a folder is changed or access is
-revoked elsewhere. Use **↻ Sync** to fetch current Drive contents; explicit
-Drive permission errors clear the cached snapshot. An internet connection is
+revoked elsewhere. Reopening the panel reads the cached list; a configuration
+change or a fresh install performs the full sync. Explicit Drive permission
+errors clear the cached snapshot. An internet connection is
 required for the initial load and all changes. Account or configuration changes
 invalidate the snapshot. No snippet changes are queued for offline sync.
 
@@ -190,8 +192,9 @@ Every edit is treated the same way, including the two that are easy to forget:
 Reorder and fold share that single label, so neither costs a write per row, and
 a fold never loses a pending reorder — the whole index is sent together.
 
-The queue is flushed when the tab is closed or hidden, and once more on the next
-browser start if the browser was quit first; the flush finishes with one full
+The queue is flushed when the tab is **closed**, and not when it is merely
+hidden: switching to another tab is not closing the site. It is sent once more
+on the next browser start if the browser was quit first; the flush finishes with one full
 read so the cache matches Drive again, including the ids Drive gave new rows.
 One rule holds everywhere: while any allowed site still has a visible tab, the
 queue waits, and so does the background check.
@@ -199,12 +202,13 @@ The drive bar shows how many changes are waiting. A write Drive refuses
 permanently (the row was deleted elsewhere) is dropped from both the queue and
 the cache instead of being retried forever.
 
-**↻ Sync** is the one button that reaches Drive on purpose. It sends whatever
-the queue holds and then reads the library again, in that order, so the read
-includes this machine's own writes. If an allowed site is still open it holds
-the queue back — the status line says how many changes are waiting — and the
-read still happens. That keeps the promise intact: the button never writes to
-Drive while you are on a site.
+**↻ Sync** is the one button that reaches Drive on purpose, and it only writes:
+it sends whatever the queue holds and stops there, so the list on screen is not
+reloaded and nothing is fetched. A row created locally keeps its `local-` id in
+the cache until the next read (the next panel open) turns it into the id Drive
+assigned. If an allowed site is still open the button holds the queue back and
+the status line says how many changes are waiting: it never writes to Drive
+while you are on a site.
 
 The panel is built to be readable at a glance. Every text pair reaches WCAG
 AA (body text and row labels reach AAA), buttons have a visible outline and

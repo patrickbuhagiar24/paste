@@ -1,3 +1,16 @@
+pastex (2.13.2-1) unstable; urgency=medium
+
+  * Sync only sends. The panel button no longer reads the library back from
+    Drive: it flushes the queue and stops there, so the list on screen is not
+    reloaded and no listing is paid for. A row created locally keeps its
+    local- id until the next panel open reads it back.
+  * The queue is sent when a tab is closed, not when it is hidden. Switching
+    to another tab leaves the queue waiting; closing the tab (or navigating
+    away) sends it. Visibility is still reported, because the background
+    check must stay quiet while a site is open.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 13:00:00 +0000
+
 pastex (2.13.1-1) unstable; urgency=medium
 
   * Rename the panel's refresh button to Sync, and make it do what the name

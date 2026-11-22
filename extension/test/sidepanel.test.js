@@ -92,6 +92,14 @@ function panelHarness(fail, options = {}) {
     connect: () => ({ onMessage: { addListener(fn) { progress = fn; } } }),
     sendMessage: async (message) => {
       messages.push(message);
+      // The worker sends the queue and answers with what it did; it never
+      // reads the library for this route.
+      if (message.type === "pastex-sync-now") {
+        if (options.syncResult) return options.syncResult;
+        const sent = queue.length;
+        queue.length = 0;
+        return { ok: true, result: { flushed: { sent }, deferred: false, pending: 0 } };
+      }
       if (message.type === "pastex-panel-library") {
         if (options.libraryResult) return options.libraryResult;
         if (!message.force && cache) return { ok: true, result: { ...cache, cached: true } };
@@ -381,15 +389,36 @@ test("a background update reports the moment of the check", async () => {
   assert.match(elements["last-checked"].textContent, /Checked: 5 min ago/);
 });
 
-test("the manual refresh button is still the fallback for a stale library", async () => {
+test("Sync sends the queue and never reads the library back", async () => {
   const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
   const { elements, messages } = panelHarness(false, {
     libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], lastCheckedAt: Date.now() } },
+    syncResult: { ok: true, result: { flushed: { sent: 2 }, deferred: false, pending: 0 } },
   });
   await settled();
+  messages.length = 0;
   elements["btn-sync"].listeners.click();
   await settled();
-  assert.ok(messages.some((message) => message.type === "pastex-panel-library" && message.force === true));
+  assert.ok(messages.some((message) => message.type === "pastex-sync-now"), "Sync asks the worker to send the queue");
+  assert.equal(messages.some((message) => message.type === "pastex-panel-library"), false,
+    "Sync must not ask for a library read");
+  assert.equal(messages.some((message) => message.type === "pastex-panel-library" && message.force === true), false,
+    "and it must not force a Drive read");
+  assert.match(elements.status.textContent, /Sent 2 change\(s\) to Google Drive\./);
+});
+
+test("Sync says how many changes are held back while a site is open", async () => {
+  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
+  const { elements, messages } = panelHarness(false, {
+    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], lastCheckedAt: Date.now() } },
+    syncResult: { ok: true, result: { flushed: { sent: 0 }, deferred: true, pending: 3 } },
+  });
+  await settled();
+  messages.length = 0;
+  elements["btn-sync"].listeners.click();
+  await settled();
+  assert.equal(messages.some((message) => message.type === "pastex-panel-library"), false);
+  assert.match(elements.status.textContent, /3 change\(s\) go to Drive when you close this tab/);
 });
 
 test("a cached open with a row missing its body asks the worker to fill it", async () => {
