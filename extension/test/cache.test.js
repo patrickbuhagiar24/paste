@@ -31,22 +31,27 @@ test("the cache is read without Drive and survives a worker restart, keyed by ac
   // The first read of a configuration is its one full sync.
   const first = await a.get(false);
   assert.equal(first.cached, false);
-  // Every later read is served from the cache, including an explicit one.
+  // Every ordinary read is served from the cache.
   assert.equal((await a.get(false)).cached, true);
-  assert.equal((await a.get(true)).cached, true);
   assert.equal(x.calls, 1, "reading the cache never loads Drive");
+  // Sync is the one explicit request for a fresh read, so it must reach Drive
+  // and answer from it rather than from the snapshot.
+  assert.equal((await a.get(true)).cached, false);
+  assert.equal(x.calls, 2, "Sync reads Drive again");
+  assert.equal((await a.get(false)).cached, true);
   const b = x.make();
-  assert.equal((await b.get(false)).tree[0].id, "1");
-  assert.equal(x.calls, 1, "a new worker reads the stored snapshot");
+  // The Sync above rewrote the snapshot from the second read.
+  assert.equal((await b.get(false)).tree[0].id, "2");
+  assert.equal(x.calls, 2, "a new worker reads the stored snapshot");
   assert.ok(!JSON.stringify(x.data).includes("private-secret"));
   x.config.drive.folderId = "other";
   // A different library has no stored snapshot: its first read syncs once,
   // and then it is cached like the others.
-  assert.equal((await b.get(false)).tree[0].id, "2");
-  assert.equal((await b.get(false)).tree[0].id, "2");
+  assert.equal((await b.get(false)).tree[0].id, "3");
+  assert.equal((await b.get(false)).tree[0].id, "3");
   x.config.serviceAccount.private_key = "rotated-key";
-  assert.equal((await b.get(false)).tree[0].id, "3");
-  assert.equal((await b.get(false)).tree[0].id, "3");
+  assert.equal((await b.get(false)).tree[0].id, "4");
+  assert.equal((await b.get(false)).tree[0].id, "4");
   x.config.serviceAccount = null;
   await assert.rejects(b.get(false), /service-account/);
   assert.equal(x.data[Cache.KEY], undefined);

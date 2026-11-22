@@ -576,6 +576,15 @@ function reportFlush(pending) {
   if (pending) console.warn("Pastex: " + pending + " queued write(s) still waiting.");
 }
 
+// One explicit sync, for the panel's button: the queue first (so the read
+// sees this machine's writes), then the library from Drive.
+async function syncNow() {
+  var deferred = siteBusy();
+  var flushed = { sent: 0, failed: 0 };
+  if (!deferred) flushed = await flushSoon();
+  return { flushed: flushed, deferred: deferred, pending: await pendingCount() };
+}
+
 async function pendingCount() {
   return (await deferredQueue.all()).length;
 }
@@ -824,6 +833,15 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     // The edit never touches Drive here: it is applied to the cache and its
     // write waits for the tab to be left.
     queueLocalEdit(message.command || {}).then(function (result) { sendResponse({ ok: true, result: result }); })
+      .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
+    return true;
+  }
+  if (message && message.type === "pastex-sync-now") {
+    if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
+    // The Sync button: send what the queue holds, then answer with a fresh
+    // read. A site that is still open keeps its queue waiting, exactly as a
+    // leave would; the answer says so instead of writing behind its back.
+    syncNow().then(function (result) { sendResponse({ ok: true, result: result }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }

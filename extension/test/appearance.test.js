@@ -161,9 +161,16 @@ test("the stylesheet styles every state the side panel sets", () => {
   // Drive states and status tones come from sidepanel.js. A state without a
   // rule is a state the user cannot see.
   for (const state of ["ready", "busy", "error"]) {
-    assert.ok(css.includes('#drive-status[data-state="' + state + '"]'), "missing Drive state " + state);
+    assert.ok(css.includes('#drive-bar[data-state="' + state + '"] #drive-dot'), "missing Drive state " + state);
     assert.ok(script.includes('"' + state + '"'), "sidepanel.js never sets the Drive state " + state);
   }
+  // The dot is a flex item of its own. Painted inside the label it sat flush
+  // against the panel edge and its halo was clipped, which is what the fix
+  // this test accompanies was about.
+  assert.ok(!/#drive-status::before/.test(css), "the dot must not be a ::before of the truncated label");
+  const dotRule = css.slice(css.indexOf("#drive-dot {"), css.indexOf("#drive-dot {") + 220);
+  assert.ok(dotRule.includes("flex: 0 0 auto"), "the dot must not shrink, or the halo is clipped");
+  assert.ok(/id="drive-dot"[^>]*aria-hidden="true"/.test(html), "the dot is decorative and must be hidden from a screen reader");
   for (const tone of ["ok", "error"]) {
     assert.ok(css.includes('#status[data-state="' + tone + '"]'), "missing status tone " + tone);
     assert.ok(script.includes('", "' + tone + '")'), "sidepanel.js never passes the " + tone + " tone");

@@ -1,3 +1,17 @@
+pastex (2.13.1-1) unstable; urgency=medium
+
+  * Rename the panel's refresh button to Sync, and make it do what the name
+    says: send the queue, then read the library from Drive again. The old
+    button accepted a "force" flag that was ignored, so it answered from the
+    cache and never re-read Drive.
+  * Move the drive state dot out of the label. Painted inside the truncated
+    label it sat flush against the panel edge and its halo was clipped.
+  * Document that a reorder and a fold are cached and queued exactly like an
+    edit, a rename, a delete or a create, and that they share the root
+    folder's single index label.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 12:00:00 +0000
+
 pastex (2.13.0-1) unstable; urgency=medium
 
   * Read everything from the cache. The library is downloaded once, when the

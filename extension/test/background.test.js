@@ -746,6 +746,36 @@ test("the background check refuses to run while a site is visible", async () => 
   assert.equal(loads, 1, "once the site is left, the check runs");
 });
 
+test("Sync sends the queue and then reads Drive", async () => {
+  const { browser, send, leave } = editScenario();
+  const site = { id: "abc", tab: { id: 2 }, frameId: 0, url: "https://allowed.example/other" };
+  // Another allowed site is open, so the worker must wait rather than write.
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: true }, site, resolve));
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "here", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "" },
+  } });
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const held = await new Promise((resolve) => browser.listeners.message({ type: "pastex-sync-now" }, panel, resolve));
+  assert.equal(held.ok, true);
+  assert.equal(held.result.deferred, true, "a visible site keeps the queue waiting");
+  assert.equal(held.result.pending, 1);
+  // Once that site is left, Sync is what sends it.
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-site-visible", visible: false }, site, resolve));
+  const done = await new Promise((resolve) => browser.listeners.message({ type: "pastex-sync-now" }, panel, resolve));
+  await settle();
+  assert.equal(done.result.deferred, false);
+  assert.equal(done.result.pending, 0, "the queue is empty after Sync");
+});
+
+test("only the panel may ask for a sync", async () => {
+  const { browser } = editScenario();
+  const page = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };
+  const answer = await new Promise((resolve) => browser.listeners.message({ type: "pastex-sync-now" }, page, resolve));
+  assert.equal(answer.ok, false);
+});
+
 test("a leftover queue is sent when the browser starts again", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-retry-"));
   try {

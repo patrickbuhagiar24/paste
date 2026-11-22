@@ -124,12 +124,19 @@ def test_the_background_interval_grows_while_nothing_changes():
     assert "chrome.alarms.onAlarm.addListener" in background
 
 
-def test_the_panel_shows_the_last_check_and_keeps_the_manual_refresh():
+def test_the_panel_shows_the_last_check_and_keeps_the_sync_button():
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
     assert 'id="last-checked"' in panel
     assert "lastCheckedAt" in script
-    assert 'id="btn-sync"' in panel, "the manual refresh stays the fallback"
+    assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
+    assert "↻ Sync" in panel, "the button is labelled Sync"
+    assert "Refresh" not in panel, "the old label is gone"
+    # The state dot is its own flex item before the label: painted inside the
+    # truncated label it sat flush against the edge. Markup order matters.
+    bar = panel.split('id="drive-bar"')[1].split("</div>")[0]
+    assert bar.index('id="drive-dot"') < bar.index('id="drive-status"'), "the dot precedes the label"
+    assert panel.index('id="drive-dot"') > panel.index('id="drive-bar"')
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
     order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
