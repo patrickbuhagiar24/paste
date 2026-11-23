@@ -28,7 +28,7 @@ Linux Mint is the only supported target. The project ships a Debian package, a d
 https://patrickbuhagiar24.github.io/paste/
 ```
 
-Linux Mint uses the repository suite **`mint`**. The suite is a fixed label for this archive (it is not a Mint codename), so one architecture-independent package serves Cinnamon, MATE and Xfce and every Mint release.
+Linux Mint uses the repository suite **`stable`**. The suite is a fixed label for this archive (it is not a Mint codename), so one architecture-independent package serves Cinnamon, MATE and Xfce and every Mint release.
 
 **Availability:** the archive is published automatically to GitHub Pages on pushes to `main` and by manual workflow dispatch; see [APT repository publishing](apt-repo/README.md). The workflow refuses to deploy when the signing secret is missing, so the public archive is always signed.
 
@@ -64,7 +64,27 @@ Obtain the **full 40-character signing-key fingerprint** from a trusted maintain
 
 The published source explicitly scopes the verified key to this repository. No unsigned fallback, `Trusted: yes`, or `apt-key` is used. If a command fails, the subshell stops and removes its temporary directory. The keyring belongs in `/etc/apt/keyrings` because that is local administrator configuration; `/usr/share/keyrings` is for keyrings shipped by packages (dpkg overwrites it). APT reads keyrings as the unprivileged `_apt` user, so `ls -l /etc/apt/keyrings/pastex.gpg` must show `-rw-r--r--`.
 
-That is the whole installation. `apt update` reports `Hit:… https://patrickbuhagiar24.github.io/paste mint InRelease`, which proves the metadata is signed and verified.
+That is the whole installation. `apt update` reports `Hit:… https://patrickbuhagiar24.github.io/paste stable InRelease`, which proves the metadata is signed and verified.
+
+### If you installed before 2.18.0 (suite `mint`)
+
+Older instructions registered the archive under the suite **`mint`**. The
+archive now publishes **`stable`**, and `dists/mint/` is no longer written, so
+`apt update` on an old machine reports:
+
+```text
+E: The repository '…/paste mint Release' does not have a Release file.
+```
+
+Replace the suite in the installed source file once; the signing key and the
+fingerprint do not change:
+
+```bash
+sudo sed -i 's/^Suites: mint$/Suites: stable/' /etc/apt/sources.list.d/pastex.sources
+sudo apt update && apt-cache policy pastex
+```
+
+See [APT repository publishing](apt-repo/README.md) for the full migration note.
 
 ## Verifying an installed package
 

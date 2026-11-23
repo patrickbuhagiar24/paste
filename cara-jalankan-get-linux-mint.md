@@ -113,7 +113,7 @@ kemungkinan besar di tabel "Kalau gagal" di bawah.
 
 ### Cara yang dianjurkan: repositori APT (bertanda tangan)
 
-Archive-nya memakai suite bernama **`mint`** (itu nama tetap arsip proyek, bukan nama rilis Linux Mint), dan mendukung semua arsitektur karena paketnya `Architecture: all`.
+Archive-nya memakai suite bernama **`stable`** (itu nama tetap arsip proyek, bukan nama rilis Linux Mint), dan mendukung semua arsitektur karena paketnya `Architecture: all`.
 
 Langkah lengkap beserta verifikasi fingerprint ada di [`apt-repo/README.md`](../apt-repo/README.md). Ringkasnya, setelah key dan sumber dipasang:
 

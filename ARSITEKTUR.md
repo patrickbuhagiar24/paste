@@ -130,6 +130,7 @@ Ini bagian yang paling berguna saat meminta perbaikan.
 | Daftar situs | `extension/sites.js` | Aturan ketat, gagal-tertutup |
 | Paket instalasi Linux | `debian/`, `scripts/`, `.github/workflows/build-deb.yml` | Rilis lewat APT, bukan Chrome Web Store |
 | Isi paket `.deb` (berkas apa yang diletakkan di mana) | `scripts/build-deb.sh` | Satu-satunya pembuat paket yang dipakai CI |
+| Nama "laci" arsip APT | `packaging/pastex.sources` (`Suites: stable`) | Nilai sama juga ada di 3 skrip + workflow; ada tes yang memaksa semuanya sepakat |
 | Pemeriksaan mutu paket sebelum rilis | `tests/test_chrome_extension.py` (bagian "built .deb") + langkah *Lint the package* di workflow | Membangun paket lalu memeriksa isinya |
 | Teks bantuan pengguna | `README.md`, `extension/README.md`, `cara-jalankan-get-linux-mint.md` | |
 
@@ -169,6 +170,7 @@ ada penulis urutan/lipat per-item yang kembali.
 | Daftar muncul tapi isi catatan kosong | salinan menyusut karena penyimpanan penuh; baris diisi saat menganggur | `cache.js` (degradasi bertahap) |
 | Perubahan belum ada di komputer lain | pesanan masih menunggu karena tab situs masih terbuka | bilah Drive menunjukkan jumlah menunggu; `↻ Sync` |
 | ⚡ tidak muncul | situs tidak ada di `pastex-sites.json` | `sites.js`, lalu pilih folder lagi |
+| `apt update`: *"…mint Release … does not have a Release file"* | mesin lama masih menunjuk suite `mint` yang sudah dihapus | ganti `Suites: mint` → `Suites: stable` di `/etc/apt/sources.list.d/pastex.sources`, lalu `apt update` |
 | Panel lama setelah pembaruan paket | Chrome membaca pendaftaran ekstensi saat start | keluar penuh dari Chrome, bandingkan versi |
 
 ## 10. Yang sudah dihapus dan tidak boleh dikembalikan

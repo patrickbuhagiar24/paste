@@ -15,7 +15,7 @@ trusted only after checking it on **two independent channels**.
 3. Only then install `pastex.sources` and `/etc/apt/keyrings/pastex.gpg` as
    shown in [README.md](README.md). Never use `[trusted=yes]`,
    `--allow-unauthenticated`, or `apt-key` for this archive.
-4. Confirm that `apt update` reports `InRelease` for `mint` and that
+4. Confirm that `apt update` reports `InRelease` for `stable` and that
    `/etc/apt/keyrings/pastex.gpg` is readable by `_apt` (`0644`).
 
 If the fingerprint changes, stop the upgrade and ask the maintainer to confirm

@@ -1,3 +1,28 @@
+pastex (2.18.0-1) unstable; urgency=medium
+
+  * Rename the APT archive suite from "mint" to "stable". The suite is the
+    directory APT reads (dists/<suite>/), and "mint" read like a Linux Mint
+    release codename, which it never was: this archive is one fixed label for
+    an architecture-independent package.
+  * The old dists/mint/ is no longer written. scripts/build-apt-repository.sh,
+    scripts/sign-apt-repository.sh and scripts/setup-apt-repo.sh default to
+    "stable"; packaging/pastex.sources and pastex-unsigned.sources ship
+    Suites: stable; the Pages index documents dists/stable/; and the CI
+    variable APT_SUITE is "stable".
+  * Machines configured for "mint" will not see updates until the installed
+    source file is updated. apt reports exactly one symptom:
+        E: The repository '…/paste mint Release' does not have a Release file.
+    Fix, with no change to the signing key:
+        sudo sed -i 's/^Suites: mint$/Suites: stable/' \
+          /etc/apt/sources.list.d/pastex.sources
+        sudo apt update
+    README.md and apt-repo/README.md both document this, including the check
+    that tells the user whether migration is needed.
+  * Tests follow the rename, so the suite name cannot silently disagree
+    between the source file, the Release metadata and the archive path.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
+
 pastex (2.17.2-1) unstable; urgency=medium
 
   * Drop "Conflicts" and "Replaces" for the retired paste-teks package. With

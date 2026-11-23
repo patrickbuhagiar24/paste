@@ -17,7 +17,7 @@ concurrency:
 
 env:
   # Suite name of the published archive (Linux Mint; see apt-repo/README.md).
-  APT_SUITE: mint
+  APT_SUITE: stable
 
 jobs:
   build:
