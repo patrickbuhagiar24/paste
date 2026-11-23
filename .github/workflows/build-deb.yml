@@ -154,11 +154,19 @@ jobs:
         run: |
           set -euo pipefail
           cp dist/pastex-id.txt site/extension-id.txt
+          # Paths relative to the site root: checksums.txt is served from there,
+          # and scripts/verify-site.py compares every line with the file it names.
           {
             (cd dist && sha256sum ./*.deb)
             (cd build/deb/usr/share/pastex && sha256sum pastex.crx)
-          } >site/checksums.txt
+          } | sed 's#  \./#  pool/main/p/pastex/#' >site/checksums.txt
           chmod 0644 site/extension-id.txt site/checksums.txt
+
+      - name: Verify what will be published
+        env:
+          # The Pages archive is always signed, so the signature is checked too.
+          PASSTEX_SIGNED: '1'
+        run: python3 scripts/verify-site.py site "$APT_SUITE" --signed
 
       - name: Remove the temporary GPG keyring
         if: always()

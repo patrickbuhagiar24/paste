@@ -33,6 +33,15 @@ from any directory, so a rebuild does not depend on remembering to export it.
 The test suite checks that two builds of one checkout produce the same `Release`
 file.
 
+Before anything is uploaded, `scripts/verify-site.py` checks the directory that
+will be published: the index names a package that exists, `Packages.gz` matches
+`Packages`, the pool holds exactly one version, only the current suite is
+published, `Release` digests match the files they describe, `checksums.txt`
+matches the files it lists, every local link on `index.html` resolves, and a
+signed archive really verifies with `gpgv` against the published keyring. CI runs
+it as its own step, so a deploy that would publish a broken archive fails
+instead of going live.
+
 The suite is **`stable`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
 
 ```text

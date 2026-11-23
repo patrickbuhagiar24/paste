@@ -7,6 +7,8 @@ instead of fetching a flat ``./ Packages`` index from a trusted host.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import re
 import shutil
 import subprocess
@@ -583,3 +585,112 @@ def test_security_docs_require_two_channels() -> None:
         assert "independent" in text.lower()
         assert "GitHub Release" in text
     assert "sha256sum -c" in security
+
+
+# --- verifying the site before it is published ----------------------------
+
+VERIFIER = SCRIPTS / "verify-site.py"
+
+
+def _verify(site: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(VERIFIER), str(site), "stable", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@NEEDS_DPKG
+def test_verifier_accepts_a_well_formed_site(tmp_path: Path) -> None:
+    packages = _build_test_package(tmp_path)
+    site = tmp_path / "site"
+    _run_builder(packages, site, signed=False)
+    (site / "checksums.txt").write_text(
+        f"{hashlib.sha256((site / 'pool/main/p/pastex/pastex_1.6.8-1_all.deb').read_bytes()).hexdigest()}"
+        "  pool/main/p/pastex/pastex_1.6.8-1_all.deb\n",
+        encoding="utf-8",
+    )
+    (site / "extension-id.txt").write_text("a" * 32, encoding="utf-8")
+
+    result = _verify(site)
+    assert result.returncode == 0, result.stderr
+    assert "ok (stable" in result.stdout
+
+
+@NEEDS_DPKG
+@pytest.mark.parametrize(
+    "damage, expected",
+    [
+        ("gzip", "Packages.gz does not match Packages"),
+        ("second-deb", "must publish exactly one"),
+        ("stale-suite", "only 'stable' may be published"),
+        ("stale-checksum", "checksums.txt is stale"),
+        ("dead-link", "which the site does not publish"),
+        ("bad-digest", "Release checksum for"),
+        ("missing-deb", "which the site does not contain"),
+    ],
+)
+def test_verifier_rejects_each_way_a_publish_can_go_wrong(
+    tmp_path: Path, damage: str, expected: str
+) -> None:
+    """A deploy can succeed and still publish the wrong archive."""
+    packages = _build_test_package(tmp_path)
+    site = tmp_path / "site"
+    _run_builder(packages, site, signed=False)
+    deb = site / "pool/main/p/pastex/pastex_1.6.8-1_all.deb"
+    digest = hashlib.sha256(deb.read_bytes()).hexdigest()
+    (site / "checksums.txt").write_text(
+        f"{digest}  pool/main/p/pastex/pastex_1.6.8-1_all.deb\n", encoding="utf-8"
+    )
+    (site / "extension-id.txt").write_text("a" * 32, encoding="utf-8")
+
+    if damage == "gzip":
+        (site / "dists/stable/main/binary-all/Packages.gz").write_bytes(gzip.compress(b"other\n"))
+    elif damage == "second-deb":
+        shutil.copy(deb, site / "pool/main/p/pastex/pastex_1.6.9-1_all.deb")
+    elif damage == "stale-suite":
+        (site / "dists/mint/main/binary-all").mkdir(parents=True)
+    elif damage == "stale-checksum":
+        (site / "checksums.txt").write_text(
+            "0" * 64 + "  pool/main/p/pastex/pastex_1.6.8-1_all.deb\n", encoding="utf-8"
+        )
+    elif damage == "dead-link":
+        page = site / "index.html"
+        page.write_text(page.read_text() + '<a href="dists/mint/InRelease">old</a>')
+    elif damage == "bad-digest":
+        release = site / "dists/stable/Release"
+        text = release.read_text()
+        release.write_text(
+            text.replace(
+                f"{hashlib.sha256((site / 'dists/stable/main/binary-all/Packages').read_bytes()).hexdigest()}",
+                "0" * 64,
+                1,
+            )
+        )
+    elif damage == "missing-deb":
+        index = site / "dists/stable/main/binary-all/Packages"
+        index.write_text(index.read_text().replace("pastex_1.6.8-1_all.deb", "pastex_9.9.9-1_all.deb"))
+        (site / "dists/stable/main/binary-all/Packages.gz").write_bytes(
+            gzip.compress(index.read_bytes())
+        )
+
+    result = _verify(site)
+    assert result.returncode == 1, f"{damage} was accepted"
+    assert expected in result.stderr, result.stderr
+
+
+def test_ci_verifies_the_site_before_publishing_it() -> None:
+    """The last check between a mistake and the public archive."""
+    workflow = _text(ROOT / ".github" / "workflows" / "build-deb.yml")
+    assert "verify-site.py" in workflow
+    assert workflow.index("verify-site.py") < workflow.index("Upload Pages artifact")
+    assert "--signed" in workflow
+
+
+def test_checksums_use_paths_the_site_actually_serves() -> None:
+    """checksums.txt is fetched from the site root, so its paths must resolve
+    there; ./pastex_1.2.3.deb resolves to nothing."""
+    workflow = _text(ROOT / ".github" / "workflows" / "build-deb.yml")
+    assert "pool/main/p/pastex/" in workflow
+    assert "./*.deb" in workflow, "the source list is gone; check how paths are built"

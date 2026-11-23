@@ -48,6 +48,17 @@ pastex (2.19.0-1) unstable; urgency=medium
   * The pool publishes exactly one version. scripts/build-apt-repository.sh
     refuses an input directory holding two versions instead of uploading the
     older one alongside, and the test suite checks that refusal.
+  * New scripts/verify-site.py checks the directory that is about to be
+    published, and CI runs it as its own step before the Pages upload: the
+    index names a package that exists, Packages.gz matches Packages, the pool
+    holds one version, only the current suite is published, Release digests
+    match their files, checksums.txt matches the files it lists, every local
+    link on index.html resolves, and a signed archive verifies with gpgv. Before
+    this, a deploy could succeed while publishing a stale or incomplete site.
+    Each of the seven failure modes has a test.
+  * checksums.txt now lists paths the site actually serves
+    (pool/main/p/pastex/<file>.deb) instead of ./<file>.deb, which resolved to
+    nothing when compared against a download.
   * debian/changelog passes lintian again. Every entry carried 00:00:00 on the
     same day, so the newest entry was not newer than the one below it
     (latest-changelog-entry-without-new-date), and many weekdays did not match

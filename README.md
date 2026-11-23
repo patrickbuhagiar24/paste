@@ -110,8 +110,10 @@ PASTEX_CRX_KEY=/path/to/release-key.pem ./scripts/build-deb.sh
 sha256sum dist/pastex_*_all.deb      # must equal the published checksum
 ```
 
-CI also runs `lintian --fail-on error` on the package before publishing, so
-packaging errors stop the build instead of reaching the archive.
+CI also runs `lintian --fail-on error` on the package, and
+`scripts/verify-site.py` on the directory that will be published (index,
+checksums, digests, links and signature), so a broken archive stops the build
+instead of reaching users.
 
 ## Releases and verification
 
