@@ -8,7 +8,7 @@ Google Drive and a working internet connection are required.
 
 ## Install
 
-Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 116 or newer is required.
+Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 141 or newer is required.
 
 ## Set up the configuration folder
 
@@ -157,8 +157,10 @@ reorder or one **Collapse all** is therefore a single Drive write instead of
 one write per item, and the structure survives a panel reload, a browser
 restart and a move to another computer using the same Drive folder. Libraries
 that were ordered with earlier versions keep their per-item `pastex_order` and
-`pastex_collapsed` labels: they are still read, and the central label wins
-as soon as Pastex writes it. Unranked new files follow ranked items in Drive's
+`pastex_collapsed` labels, but those labels are **ignored**: the central label
+is the only source of order and collapse state, and a library without one is
+shown in Drive's own order with every folder open. Nothing in the snippets
+themselves changes. Unranked new files follow ranked items in Drive's
 normal order. Concurrent reordering on different devices can overwrite the
 same metadata; refresh before editing shared lists.
 
@@ -246,13 +248,13 @@ The palette and these rules are checked numerically in
 `extension/test/appearance.test.js`.
 
 The toolbar icon itself is a toggle: click it to open the side panel, click it
-again to close it (Chrome 141+; the browser owns that behavior through
+again to close it (the browser owns that behavior through
 `sidePanel.setPanelBehavior`). Older Chrome keeps opening the panel. The panel
 has no Close button of its own — the toolbar icon is the switch.
 
 On an allowed site, focus an editable field and click the floating
-**⚡** button to open the Pastex side panel. From Chrome 141 the same button
-is a toggle: while the panel is open it reads **×** and closes it again.
+**⚡** button to open the Pastex side panel. The same button is a toggle:
+while the panel is open it reads **×** and closes it again.
 Older Chrome keeps the open-only behavior, and the soundness of the click is
 unchanged (the same short-lived capability authorizes either action). The launcher is a deep indigo
 disc with a near-black rim, a white inner ring and a soft halo, so it reads

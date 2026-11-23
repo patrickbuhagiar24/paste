@@ -67,23 +67,54 @@ test("Drive tree is reported progressively with bounded parallel downloads", asy
   assert.equal(max, 6);
 });
 
-test("Drive tree respects persistent item properties, then Drive order for unranked items", async () => {
+test("the folder's index label decides order, then Drive order for unnamed rows", async () => {
   const drive = fakeDrive();
+  // The root folder carries the centralized index; the rows themselves carry
+  // nothing. No per-item label is read any more.
+  drive.getFolder = async () => ({
+    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
+    properties: { pastex_index: JSON.stringify({ v: 2, order: { root: ["second", "first"] }, collapsed: {} }) },
+  });
   drive.listChildren = async () => [
     { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
-    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
-    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
+    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
+    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME },
   ];
   drive.downloadText = async (token, id) => id;
   const result = await Library.load(native, drive);
-  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
+  assert.deepEqual(result.tree.map((node) => node.id), ["second", "first", "unranked"]);
 });
 
-test("folder collapse state is loaded from Drive metadata", async () => {
+test("an index with another version is discarded, not decoded", async () => {
   const drive = fakeDrive();
+  drive.getFolder = async () => ({
+    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
+    properties: {
+      // v1 and an unversioned shape both mean "unknown": Drive's order wins.
+      pastex_index: JSON.stringify({ order: { root: ["b", "a"] }, collapsed: { a: "1" } }),
+    },
+  });
+  drive.listChildren = async () => [
+    { id: "a", name: "A.txt", mimeType: drive.TEXT_MIME },
+    { id: "b", name: "B.txt", mimeType: drive.TEXT_MIME },
+    { id: "f", name: "F", mimeType: drive.FOLDER_MIME },
+  ];
+  drive.downloadText = async (token, id) => id;
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => node.id), ["a", "b", "f"]);
+  assert.equal(result.tree[2].collapsed, false, "an unknown index must not fold anything");
+});
+
+test("folder collapse state comes from the index label, never from the folder", async () => {
+  const drive = fakeDrive();
+  drive.getFolder = async () => ({
+    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
+    properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed: { closed: "1" } }) },
+  });
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
-    { id: "open", name: "Open", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+    // A per-item label is ignored even when it is present.
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
+    { id: "open", name: "Open", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
     { id: "unset", name: "Unset", mimeType: drive.FOLDER_MIME },
   ] : [];
   const result = await Library.load(native, drive);
@@ -96,7 +127,7 @@ test("cached text is reused by modifiedTime and stale bodies are refreshed", asy
   const drive = fakeDrive();
   const downloads = [];
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "folder", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "folder", name: "Closed", mimeType: drive.FOLDER_MIME },
     { id: "top", name: "Top.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" },
   ] : [{ id: "nested", name: "Nested.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" }];
   drive.downloadText = async (token, id) => { downloads.push(id); return "fresh " + id; };
@@ -174,6 +205,7 @@ test("the centralized index on the root folder orders and folds the library", as
     id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1",
     properties: {
       pastex_index: JSON.stringify({
+        v: 2,
         order: { root: ["second", "first"] },
         collapsed: { folder: "1" },
       }),
@@ -191,32 +223,25 @@ test("the centralized index on the root folder orders and folds the library", as
   assert.deepEqual(result.index.order.root, ["second", "first"]);
 });
 
-test("the legacy per-item labels still order a library without a central index", async () => {
-  const drive = fakeDrive();
-  drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
-    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
-    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
-  ] : [];
-  drive.downloadText = async (token, id) => id;
-  const result = await Library.load(native, drive);
-  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
-  assert.deepEqual(result.index, { order: {}, collapsed: {} });
-});
-
 test("text inside a collapsed folder is deferred until the folder is opened", async () => {
   const drive = fakeDrive();
   let downloads = 0;
+  const folderWith = (collapsed) => async () => ({
+    id: "root", mimeType: drive.FOLDER_MIME,
+    properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed: { closed: collapsed } }) },
+  });
+  drive.getFolder = folderWith("1");
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
   drive.downloadText = async () => { downloads++; return "loaded"; };
   const closed = await Library.load(native, drive);
   assert.equal(closed.tree[0].children[0].deferred, true);
   assert.equal(closed.tree[0].children[0].loadError, undefined);
   assert.equal(downloads, 0);
+  drive.getFolder = folderWith("0");
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
   const opened = await Library.load(native, drive, undefined, { bodies: closed.bodies });
   assert.equal(opened.tree[0].children[0].text, "loaded");

@@ -65,7 +65,7 @@ test("a second load lists and downloads only the branch that changed", async () 
     if (target.pathname === "/drive/v3/files/root") {
       return json({
         id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME, modifiedTime: "r1",
-        properties: { pastex_index: JSON.stringify({ order: { root: ["top", "folder"] }, collapsed: {} }) },
+        properties: { pastex_index: JSON.stringify({ v: 2, order: { root: ["top", "folder"] }, collapsed: {} }) },
       });
     }
     if (target.pathname === "/drive/v3/files" && target.searchParams.get("q")) {

@@ -166,8 +166,10 @@
 
   // The ordering and collapse state of every folder, as the centralized index
   // stores it. A row that never reached Drive has no place in it yet.
+  var INDEX_VERSION = 2;
+
   function indexOf(tree) {
-    var index = { order: {}, collapsed: {} };
+    var index = { order: {}, collapsed: {}, v: INDEX_VERSION };
     (function walkFolders(nodes, parentId) {
       var ids = [];
       (nodes || []).forEach(function (node) {

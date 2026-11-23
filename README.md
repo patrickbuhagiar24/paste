@@ -121,6 +121,15 @@ the version in `extension/manifest.json` and `debian/changelog`. The release
 notes repeat the signing fingerprint so it can be cross-checked independently
 of the repository website; see [SECURITY.md](SECURITY.md).
 
+## Development policy
+
+Pastex is in development: it moves forward, it does not carry two
+implementations of the same thing and it does not adapt new code to old state.
+[DEVELOPMENT.md](DEVELOPMENT.md) states the rule and the one thing it never
+touches — the snippet files in Drive. In short: content is out of bounds,
+presentation metadata may be dropped, caches are always disposable, and
+anything a user will notice is a `BREAKING:` entry in the changelog.
+
 ## Architecture in plain language
 
 [ARSITEKTUR.md](ARSITEKTUR.md) explains how Pastex works without code: the four

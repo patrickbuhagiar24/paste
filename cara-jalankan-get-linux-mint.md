@@ -57,7 +57,7 @@ pastex_index (dirapikan):
 }
 ```
 
-Kalau Anda ingin tahu label **satu berkas** (bukan folder utama), sebutkan ID berkasnya — skrip akan menampilkan `pastex_order` / `pastex_collapsed` bila masih memakai format lama.
+Kalau Anda ingin tahu label **satu berkas** (bukan folder utama), sebutkan ID berkasnya. Pastex sendiri hanya memakai satu label, `pastex_index`, di folder utama.
 
 ### Cara manual (tanpa skrip)
 

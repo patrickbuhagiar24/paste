@@ -270,14 +270,14 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   const x = setup();
   const cache = x.make();
   // The state is mutated step by step, so every check sees the previous one.
+  // Order and collapse live in the root label, so the signature sees them
+  // through the rows the library returns, not through per-item properties.
   const state = {
     tree: [
       { id: "folder", kind: "folder", name: "Folder", collapsed: false,
-        properties: { pastex_order: "0", pastex_collapsed: "0" },
         children: [{ id: "a", kind: "text", name: "A", driveName: "A.txt", text: "a",
-          modifiedTime: "t1", properties: { pastex_order: "0" } }] },
-      { id: "b", kind: "text", name: "B", driveName: "B.txt", text: "b",
-        modifiedTime: "t2", properties: { pastex_order: "1" } },
+          modifiedTime: "t1" }] },
+      { id: "b", kind: "text", name: "B", driveName: "B.txt", text: "b", modifiedTime: "t2" },
     ],
     metadata: { root: "m1" },
   };
@@ -289,14 +289,15 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   await cache.get(false);
   assert.equal((await cache.sync()).changed, false, "an identical library reports no change");
 
-  // A reordered item.
-  state.tree[1].properties = { pastex_order: "0" };
-  state.tree[0].properties = { pastex_order: "1" };
+  // A reordered item: the library returns the rows in the index's order.
+  state.tree = [state.tree[1], state.tree[0]];
   assert.equal((await cache.sync()).changed, true, "a new order must be detected");
+  assert.deepEqual((await cache.get(false)).tree.map((node) => node.id), ["b", "folder"]);
 
-  // A collapsed folder.
-  state.tree[0].collapsed = true;
-  state.tree[0].properties = { pastex_order: "1", pastex_collapsed: "1" };
+  // A collapsed folder: the index folds it. The tree is re-read from the
+  // snapshot, so the folder is the node the cache hands back.
+  const folderAt = (tree) => tree.find((node) => node.id === "folder");
+  folderAt(state.tree).collapsed = true;
   assert.equal((await cache.sync()).changed, true, "a collapsed folder must be detected");
 
   // A renamed item.

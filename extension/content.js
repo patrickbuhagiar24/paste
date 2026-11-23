@@ -22,15 +22,14 @@
   var capability = "";
   var authTimer = 0;
   var focusGeneration = 0;
-  // Whether this page may also close the panel again (Chrome 141+) and
-  // whether the launcher currently opens or closes it.
-  var canToggle = false;
+  // Whether the launcher currently opens or closes the panel. Closing is part
+  // of the minimum Chrome version, so the button is always a toggle.
   var panelOpen = false;
 
   function setLauncherLabel(button) {
     if (!button) return;
-    button.textContent = canToggle && panelOpen ? "×" : "⚡";
-    button.title = canToggle && panelOpen ? "Close Pastex side panel" : "Open Pastex side panel";
+    button.textContent = panelOpen ? "×" : "⚡";
+    button.title = panelOpen ? "Close Pastex side panel" : "Open Pastex side panel";
   }
 
   function isEditable(el) {
@@ -143,7 +142,7 @@
       // and move the button away before the click lands.
       if (!event.isTrusted || !capability) return;
       event.preventDefault();
-      var closing = canToggle && panelOpen;
+      var closing = panelOpen;
       chrome.runtime.sendMessage({
         type: "pastex-open-panel", capability: capability, action: closing ? "close" : "open",
       }).then(function (response) {
@@ -211,7 +210,6 @@
         return;
       }
       capability = response.capability;
-      canToggle = !!response.toggle;
       cancelHideButton();
       if (buttonHost) setLauncherLabel(buttonHost.__pastexButton);
       positionButton(el);

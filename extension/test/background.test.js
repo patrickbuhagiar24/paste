@@ -14,7 +14,7 @@ function settle(ms) {
 }
 
 
-function harness(home, unavailable, shared, closeUnsupported, options) {
+function harness(home, unavailable, shared, options) {
   const opts = options || {};
   const listeners = {};
   const closed = [];
@@ -86,10 +86,11 @@ function harness(home, unavailable, shared, closeUnsupported, options) {
         sendMessage: async () => { throw new Error("no receiver"); } },
       alarms, idle: idleApi,
       action: { onClicked: event("action") },
-      sidePanel: Object.assign(
-        { open: (options) => { opened.push(options); return Promise.resolve(); },
-          setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); } },
-        closeUnsupported ? {} : { close: (options) => { closed.push(options); return Promise.resolve(); } }),
+      sidePanel: {
+        open: (options) => { opened.push(options); return Promise.resolve(); },
+        close: (options) => { closed.push(options); return Promise.resolve(); },
+        setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); },
+      },
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
     crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL,
@@ -137,7 +138,7 @@ test("extension startup never creates a configuration directory", async () => {
 test("site registration and on-demand injection are limited to configured sites", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-allow-"));
   try {
-    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
+    const browser = harness(home, false, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "no allowlist means no registration");
@@ -189,7 +190,7 @@ test("an unavailable configuration does not prevent extension startup", async ()
 test("only the extension panel can request a site registration reload", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-reload-"));
   try {
-    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
+    const browser = harness(home, false, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "nothing registered without an allowlist");
@@ -639,8 +640,8 @@ test("the growing interval is kept when the worker restarts", async () => {
 
 // --- the in-page launcher toggles the panel -------------------------------
 
-function panelScenario(closeUnsupported) {
-  const browser = harness(os.tmpdir(), true, undefined, closeUnsupported);
+function panelScenario() {
+  const browser = harness(os.tmpdir(), true, undefined);
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked pastex-sites.json" });
   browser.context.PastexConfig.readConfig = async () => ({
     drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
@@ -650,30 +651,21 @@ function panelScenario(closeUnsupported) {
   return { browser, sender, ask };
 }
 
-test("the launcher receives a capability that can close the panel when Chrome supports it", async () => {
-  const { browser, ask } = panelScenario(false);
+test("the launcher's capability opens and closes the panel", async () => {
+  const { browser, ask } = panelScenario();
   await browser.listeners.startup();
   await settle();
   const authorization = await ask({ type: "pastex-site-allowed" });
   assert.equal(authorization.allowed, true);
-  assert.equal(authorization.toggle, true, "Chrome 141+ gets the toggle");
+  assert.equal(authorization.toggle, undefined, "there is no capability flag to check");
   const closed = await ask({ type: "pastex-open-panel", action: "close", capability: authorization.capability });
   assert.equal(closed.ok, true);
   assert.equal(browser.closed.length, 1, "the same button closes the panel again");
   assert.equal(browser.closed[0].windowId, 8);
-
-  const older = panelScenario(true);
-  await older.browser.listeners.startup();
-  await settle();
-  const oldAuthorization = await older.ask({ type: "pastex-site-allowed" });
-  assert.equal(oldAuthorization.toggle, false, "older Chrome is told there is no close()");
-  const refused = await older.ask({ type: "pastex-open-panel", action: "close", capability: oldAuthorization.capability });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, "unsupported");
 });
 
 test("closing needs the same capability as opening", async () => {
-  const { browser, ask } = panelScenario(false);
+  const { browser, ask } = panelScenario();
   await browser.listeners.startup();
   await settle();
   const authorization = await ask({ type: "pastex-site-allowed" });
@@ -688,7 +680,7 @@ test("closing needs the same capability as opening", async () => {
 });
 
 test("the open panel tells the page to switch the launcher to close", async () => {
-  const { browser, sender } = panelScenario(false);
+  const { browser, sender } = panelScenario();
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const sent = [];
   browser.context.chrome.tabs.sendMessage = async (tabId, message) => { sent.push({ tabId, message }); };

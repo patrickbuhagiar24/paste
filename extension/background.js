@@ -763,23 +763,10 @@ ensureIdleAlarm();
 
 // The toolbar icon toggles the panel instead of only opening it. Chrome owns
 // that behavior: with openPanelOnActionClick it opens the panel on click and
-// closes it again on the next click (Chrome 141+), with no action.onClicked
-// listener competing for the click.
-function enableToolbarToggle() {
-  if (!chrome.sidePanel || typeof chrome.sidePanel.setPanelBehavior !== "function") return;
-  try {
-    var result = chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-    if (result && typeof result.catch === "function") result.catch(function () {});
-  } catch (ignored) { /* older Chrome keeps the toolbar click as it is */ }
-}
-enableToolbarToggle();
-
-// Content scripts must authenticate on an allowed site before opening or
-// closing a panel. Closing exists only from Chrome 141, so the sender is told
-// whether a toggle is possible instead of guessing.
-function panelToggleSupported() {
-  return !!(chrome.sidePanel && typeof chrome.sidePanel.close === "function");
-}
+// closes it again on the next click, with no action.onClicked listener
+// competing for the click. The manifest's minimum_chrome_version guarantees
+// the API exists, so there is no feature test here.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(function () {});
 
 // Content scripts must authenticate on an allowed site before opening a panel.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
@@ -808,7 +795,6 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
           closing.expires < Date.now() || closing.revision !== siteRevision) {
         sendResponse({ ok: false }); return false;
       }
-      if (!panelToggleSupported()) { sendResponse({ ok: false, reason: "unsupported" }); return false; }
       chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true, closed: true }); })
         .catch(function () { sendResponse({ ok: false }); });
       return true;
@@ -837,7 +823,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!allowed) { panelGrants.delete(key); sendResponse({ allowed: false }); return; }
       var token = crypto.randomUUID();
       panelGrants.set(key, { token: token, url: sender.url, tabUrl: sender.tab.url, expires: Date.now() + 30000, revision: revision });
-      sendResponse({ allowed: true, capability: token, toggle: panelToggleSupported() });
+      sendResponse({ allowed: true, capability: token });
     }).catch(function () { panelGrants.delete(key); sendResponse({ allowed: false }); });
     return true;
   }

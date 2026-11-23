@@ -42,7 +42,13 @@ function panelHarness(fail, options = {}) {
   const drive = {
     FOLDER_MIME: "folder", TEXT_MIME: "text/plain",
     parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
-    getFolder: async () => { if (fail === true) throw new Error("403 denied"); return { mimeType: "folder" }; },
+    getFolder: async () => {
+      if (fail === true) throw new Error("403 denied");
+      // A test can fold folders through the root label, exactly like Drive.
+      const collapsed = {};
+      (options.collapsed || []).forEach((id) => { collapsed[id] = "1"; });
+      return { mimeType: "folder", properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed }) } };
+    },
     listChildren: async (token, parent) => records.filter((r) => r.parent === parent && !r.trashed),
     downloadText: async (token, id) => {
       if (options.beforeDownload) await options.beforeDownload(id);
@@ -326,9 +332,11 @@ test("collapse all folds every folder and clears an active search", async () => 
   assert.equal(folderRow.children[0].textContent, "▸");
 });
 
-test("collapsed folders loaded from Drive stay collapsed in a new panel", async () => {
-  const records = [{ id: "f", name: "Saved Folder", mimeType: "folder", parent: "root", properties: { pastex_collapsed: "1" } }];
-  const { elements } = panelHarness(false, { records });
+test("collapsed folders recorded in the index stay collapsed in a new panel", async () => {
+  // The fold lives in the root label, so the library folds the folder while
+  // reading it; the panel just renders what it is given.
+  const records = [{ id: "f", name: "Saved Folder", mimeType: "folder", parent: "root" }];
+  const { elements } = panelHarness(false, { records, collapsed: ["f"] });
   await settled();
   const row = elements.tree.children[0];
   assert.equal(row.children[0].textContent, "▸");

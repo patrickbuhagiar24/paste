@@ -115,10 +115,13 @@ test("only the surface is scanned: subfolders are skipped, not opened", async ()
   assert.equal((await source.readConfig()).drive.folderId, "rootfolder");
 });
 
-test("the three files are identified by content, so names do not matter", async () => {
+test("the two named files are required by name; only the key is found by content", async () => {
+  // Google downloads the key under a project-specific name, so that one is
+  // recognised by its content. The other two carry their canonical names:
+  // renaming them is a one-time fix, not a supported alias.
   const files = {
-    "my-drive.json": JSON.stringify({ folder_id: "fromid" }),
-    "my-sites.json": JSON.stringify({ allowed_sites: ["https://a.example"] }),
+    "pastex-google-drive.json": JSON.stringify({ folder_id: "fromid" }),
+    "pastex-sites.json": JSON.stringify({ allowed_sites: ["https://a.example"] }),
     "project-1a2b3c.json": JSON.stringify(account),
   };
   const store = memoryStore();
@@ -126,6 +129,22 @@ test("the three files are identified by content, so names do not matter", async 
   await source.chooseFolder(dirHandle("config", files));
   assert.equal((await source.readConfig()).drive.folderId, "fromid");
   assert.deepEqual((await source.readSites()).allowedSites, ["https://a.example"]);
+  const saved = store.peek()["pastex-config-cache"];
+  assert.equal(saved.files["service-account.json"].client_email, account.client_email,
+    "the key is stored under its canonical name whatever Google called the file");
+});
+
+test("a renamed drive or sites file is reported as missing, not guessed", async () => {
+  const store = memoryStore();
+  const source = create(Sites, store);
+  await assert.rejects(
+    source.chooseFolder(dirHandle("config", {
+      "my-drive.json": JSON.stringify({ folder_id: "fromid" }),
+      "my-sites.json": JSON.stringify({ allowed_sites: [] }),
+      "service-account.json": JSON.stringify(account),
+    })),
+    /pastex-google-drive\.json is missing; pastex-sites\.json is missing/
+  );
 });
 
 test("a broken folder never replaces a working configuration", async () => {

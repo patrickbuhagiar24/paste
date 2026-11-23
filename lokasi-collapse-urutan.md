@@ -11,15 +11,16 @@ Jadi bukan `.json`, bukan `.txt`, bukan berkas tersembunyi. Label itu menempel p
 | Label | Menempel pada | Isi |
 | --- | --- | --- |
 | `pastex_index` | **folder utama** | Satu string JSON berisi **seluruh** urutan + status lipat |
-| `pastex_order` | tiap berkas (cara lama) | Angka urutan, mis. `"3"` |
-| `pastex_collapsed` | tiap folder (cara lama) | `"1"` atau `"0"` |
 
-Kode: `extension/drive.js` → `setIndex()`, `setOrder()`, `setCollapsed()`.
+Kode: `extension/drive.js` → `setIndex()`. Itu **satu-satunya** penulis urutan
+dan status lipat. Label lama `pastex_order` / `pastex_collapsed` (satu per
+berkas/folder) tidak lagi ditulis **maupun** dibaca.
 
 ## Bentuk isi `pastex_index`
 
 ```json
 {
+  "v": 2,
   "order": {
     "17Xk...rootId": ["idB", "idC", "idA"]
   },
@@ -30,6 +31,7 @@ Kode: `extension/drive.js` → `setIndex()`, `setOrder()`, `setCollapsed()`.
 }
 ```
 
+- `v` adalah versi bentuk data. Versi lain **dibuang**, bukan ditebak.
 - `order` dipetakan per **id folder induk**. Kunci `rootId` berarti isi folder utama. Folder lain memakai id folder itu sendiri.
 - `collapsed` dipetakan per **id folder** dengan nilai `"1"` (terlipat) atau `"0"` (terbuka).
 
@@ -43,7 +45,14 @@ Reorder dan fold berbagi satu label, sehingga:
 
 ## Kalau ini perpustakaan lama
 
-Versi lama menyimpan urutan dan status lipat **per item** (`pastex_order` pada tiap berkas, `pastex_collapsed` pada tiap folder). Label-label itu **masih dibaca** saat perpustakaan dimuat, tetapi **label `pastex_index` di folder utama yang menang** bila keduanya ada. Kode: `extension/library.js` → `parseIndex()`.
+Versi lama menyimpan urutan dan status lipat **per item**. Label itu sekarang
+**diabaikan**: `parseIndex()` hanya membaca `pastex_index` di folder utama, dan
+bila label itu tidak ada atau versinya tidak dikenal, perpustakaan ditampilkan
+dalam urutan Drive dengan semua folder terbuka. Tidak ada migrasi dan tidak ada
+pembacaan per item — lihat `DEVELOPMENT.md` ("state carries a version").
+
+Akibatnya, untuk perpustakaan yang diatur sebelum 2.19: urutan manual dan
+lipatan kembali ke default, sedangkan **isi snippet tidak berubah sama sekali**.
 
 ## Di mana melihatnya sendiri di Drive
 

@@ -1,3 +1,34 @@
+pastex (2.19.0-1) unstable; urgency=medium
+
+  * DEVELOPMENT.md states the project's rule: it is in development, it moves
+    forward, and it does not keep two ways to do one thing. The three classes
+    of state are written down: content (the snippet files in Drive) is never
+    touched, presentation metadata may be dropped, caches are always
+    disposable.
+  * BREAKING: the per-item Drive labels pastex_order and pastex_collapsed are
+    ignored completely. pastex_index on the root folder is the only source of
+    order and collapse state. A library without a current index is shown in
+    Drive's order with every folder open. Snippet files are untouched.
+  * BREAKING: pastex_index now carries "v": 2. A label with another version is
+    discarded and rebuilt, not decoded field by field. The configuration cache
+    likewise stores version 2 and treats any other version as absent, which
+    asks the user to pick the folder again instead of reading an unknown shape.
+  * BREAKING: minimum_chrome_version is 141, and the capability branches for
+    older browsers are gone: sidePanel.close, setPanelBehavior and the panel
+    toggle are assumed to exist, so the launcher is always a toggle and no
+    "toggle" flag travels with the capability.
+  * BREAKING: pastex-google-drive.json and pastex-sites.json are recognised by
+    their canonical names only. A renamed file is reported as missing. The
+    service-account key keeps content detection, because Google downloads it
+    under a project-specific name.
+  * New scripts/reset-pastex-state.sh clears the extension's local storage and
+    says so: Drive is never touched.
+  * New tests/test_development_policy.py fails when shipped code keeps a
+    compatibility path, when a persisted shape loses its version, or when the
+    policy document stops describing the three classes.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
+
 pastex (2.18.0-1) unstable; urgency=medium
 
   * Rename the APT archive suite from "mint" to "stable". The suite is the

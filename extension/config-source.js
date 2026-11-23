@@ -14,6 +14,10 @@
   "use strict";
   var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", ACCOUNT = "service-account.json";
   var FOLDER = "folder ", CACHE = "pastex-config-cache";
+  // The cached configuration shape is versioned. A record with another version
+  // is treated as absent, which asks the user to pick the folder again instead
+  // of decoding an unknown shape. See DEVELOPMENT.md.
+  var CACHE_VERSION = 2;
   var MAX_BYTES = 256 * 1024;
 
   function create(sites, cacheStore) {
@@ -32,12 +36,13 @@
       // `files` undefined on every later open.
       var result = await storage().get(CACHE);
       var record = result && typeof result === "object" ? result[CACHE] : null;
-      return record && typeof record === "object" ? record : null;
+      if (!record || typeof record !== "object" || record.version !== CACHE_VERSION) return null;
+      return record;
     }
 
     async function writeCache(files, name) {
       await storage().set({ [CACHE]: {
-        version: 1,
+        version: CACHE_VERSION,
         savedAt: new Date().toISOString(),
         folder: name || "",
         files: files,
@@ -67,29 +72,37 @@
       return raw;
     }
 
-    /* Identify the three files by their contents, so names do not matter and
-     * a key downloaded under a project-specific name still works. */
+    /* Identify the three files. The Drive and sites files must carry their
+     * canonical names: a rename is not supported, it is a configuration the
+     * user fixes once (DEVELOPMENT.md: no compatibility layer for names).
+     * The service-account key is the exception, because Google downloads it
+     * under a project-specific name, so it is recognised by its content. */
     function identify(raw) {
       var files = {}, sources = {};
-      var keys = Object.keys(raw);
-      var named = function (name) { return raw[name]; };
-      var viaContent = function (test) {
-        for (var i = 0; i < keys.length; i++) if (test(raw[keys[i]])) return keys[i];
-        return "";
-      };
-      var driveName = keys.indexOf(DRIVE) !== -1 ? DRIVE :
-        keys.indexOf("google-drive.json") !== -1 ? "google-drive.json" :
-        viaContent(function (v) { return typeof v.folder_id === "string" || typeof v.folder_url === "string"; });
-      if (driveName) { files[DRIVE] = named(driveName); sources[DRIVE] = driveName; }
-
-      var sitesName = keys.indexOf(SITES) !== -1 ? SITES :
-        keys.indexOf("sites.json") !== -1 ? "sites.json" :
-        viaContent(function (v) { return Array.isArray(v.allowed_sites); });
-      if (sitesName) { files[SITES] = named(sitesName); sources[SITES] = sitesName; }
-
-      var accountName = keys.indexOf(ACCOUNT) !== -1 ? ACCOUNT :
-        viaContent(function (v) { return v.type === "service_account"; });
-      if (accountName) { files[ACCOUNT] = named(accountName); sources[ACCOUNT] = accountName; }
+      if (Object.prototype.hasOwnProperty.call(raw, DRIVE)) {
+        files[DRIVE] = raw[DRIVE];
+        sources[DRIVE] = DRIVE;
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, SITES)) {
+        files[SITES] = raw[SITES];
+        sources[SITES] = SITES;
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, ACCOUNT)) {
+        files[ACCOUNT] = raw[ACCOUNT];
+        sources[ACCOUNT] = ACCOUNT;
+      } else {
+        var keys = Object.keys(raw).filter(function (name) {
+          return name !== DRIVE && name !== SITES && /\.json$/i.test(name);
+        });
+        for (var i = 0; i < keys.length; i++) {
+          var value = raw[keys[i]];
+          if (value && value.type === "service_account") {
+            files[ACCOUNT] = value;
+            sources[ACCOUNT] = keys[i];
+            break;
+          }
+        }
+      }
       return { files: files, sources: sources };
     }
 

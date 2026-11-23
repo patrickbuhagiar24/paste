@@ -162,6 +162,23 @@ ada penulis urutan/lipat per-item yang kembali.
 | `dpkg-deb -f … Installed-Size` | Berapa ruang yang dipesan apt sebelum memasang. |
 | bangun ulang dari tag yang sama | Menghasilkan berkas `.deb` **identik byte-per-byte**, jadi angka `checksums.txt` bisa diverifikasi sendiri. |
 
+## 8c. Aturan "proyek masih dibangun" (arti praktisnya)
+
+Versi ini belum punya pengguna tetap, jadi proyek sengaja **tidak** menyimpan
+dua cara melakukan hal yang sama. Yang perlu Anda tahu sebagai pengguna:
+
+| Apa yang berubah | Akibat bagi Anda |
+| --- | --- |
+| Urutan & lipatan folder | Bisa kembali ke urutan Drive dan folder terbuka lagi. Atur ulang sekali. |
+| Berkas isi snippet di Google Drive | **Tidak pernah** disentuh. Selalu utuh dan bisa dibuka aplikasi lain. |
+| Nama berkas konfigurasi | Harus tepat (`pastex-google-drive.json`, `pastex-sites.json`); kunci service account boleh nama apa saja. |
+| Persyaratan browser | Chrome/Chromium 141 atau lebih baru. |
+
+Kalau tampilan terasa aneh setelah pembaruan pada masa pembangunan ini, jalankan
+`./scripts/reset-pastex-state.sh --apply` (hanya membersihkan cache lokal; isi
+Drive tidak disentuh), lalu buka panel lagi. Aturan lengkapnya ada di
+`DEVELOPMENT.md`.
+
 ## 9. Kesalahan yang mudah terjadi (dan gejalanya)
 
 | Gejala di mata pengguna | Kemungkinan sebab | Di mana melihat |

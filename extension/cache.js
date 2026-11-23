@@ -334,11 +334,10 @@
       var props = node.properties || {};
       if (node.kind === "folder") {
         return JSON.stringify([node.id, node.kind, node.name || "", !!node.collapsed,
-          props.pastex_order || "", props.pastex_collapsed || "",
           (node.children || []).map(nodeSignature)]);
       }
       return JSON.stringify([node.id, node.kind, node.name || "", node.driveName || "",
-        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred, props.pastex_order || ""]);
+        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred]);
     }
 
     function treeSignature(tree) {

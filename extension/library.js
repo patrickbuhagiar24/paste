@@ -24,18 +24,23 @@
 
   // --- the centralized order and collapse index ---
 
+  // The stored shape is versioned. An unknown version is not decoded field by
+  // field: it is discarded, and the library falls back to Drive's own order
+  // with every folder open. See DEVELOPMENT.md ("state carries a version").
+  var INDEX_VERSION = 2;
+
   function emptyIndex() {
-    return { order: {}, collapsed: {} };
+    return { order: {}, collapsed: {}, version: INDEX_VERSION };
   }
 
-  // The index is a label on the root folder. Older libraries keep the
-  // per-item labels; they are still read, but the central index wins.
+  // The index is a single label on the root folder. It is the only source of
+  // order and collapse state: there is no per-item fallback any more.
   function parseIndex(properties) {
     var raw = properties && properties.pastex_index;
     if (typeof raw !== "string" || !raw) return emptyIndex();
     var data;
     try { data = JSON.parse(raw); } catch (ignored) { return emptyIndex(); }
-    if (!data || typeof data !== "object") return emptyIndex();
+    if (!data || typeof data !== "object" || data.v !== INDEX_VERSION) return emptyIndex();
     var index = emptyIndex();
     if (data.order && typeof data.order === "object") {
       Object.keys(data.order).forEach(function (parent) {
@@ -53,8 +58,26 @@
     return index;
   }
 
+  // Apply the centralized order for one folder. Rows the index names come
+  // first, in the stored order; rows it does not name (new files, files added
+  // from Drive) keep Drive's own order after them.
+  function orderByIndex(files, index, folderId) {
+    var saved = (index && index.order && index.order[folderId]) || [];
+    if (!saved.length) return files;
+    var position = new Map();
+    saved.forEach(function (id, at) { position.set(id, at); });
+    var ranked = [], unranked = [];
+    files.forEach(function (file) {
+      if (position.has(file.id)) ranked.push({ file: file, at: position.get(file.id) });
+      else unranked.push(file);
+    });
+    ranked.sort(function (a, b) { return a.at - b.at; });
+    return ranked.map(function (item) { return item.file; }).concat(unranked);
+  }
+
   function cloneIndex(index) {
     var copy = emptyIndex();
+    copy.version = INDEX_VERSION;
     Object.keys((index && index.order) || {}).forEach(function (parent) {
       copy.order[parent] = (index.order[parent] || []).slice();
     });
@@ -64,14 +87,15 @@
     return copy;
   }
 
-  // The signature of a node describes everything a listing reports about
-  // it: its name, its type, its timestamps, Drive's content checksum and its
-  // labels. Two listings with the same signature describe the same node.
+  // The signature of a node describes everything a listing reports about it:
+  // its name, its type, its timestamps, Drive's content checksum and the one
+  // label Pastex writes on the root folder. Two listings with the same
+  // signature describe the same node.
   function nodeSignature(file) {
     var props = (file && file.properties) || {};
     return JSON.stringify([(file && file.id) || "", (file && file.name) || "",
       (file && file.mimeType) || "", (file && file.modifiedTime) || "",
-      (file && file.sha256Checksum) || "", props.pastex_order || "", props.pastex_collapsed || ""]);
+      (file && file.sha256Checksum) || "", props.pastex_index || ""]);
   }
 
   async function connect(native, drive) {
@@ -220,23 +244,14 @@
           onCursor: function (cursor) { cursors[folderId] = cursor || ""; },
         });
       });
-      // Unranked/new files retain Drive's natural order after ranked entries.
-      function rank(file) {
-        var raw = file.properties && file.properties.pastex_order;
-        if (typeof raw !== "string" || !/^(0|[1-9][0-9]*)$/.test(raw)) return Number.MAX_SAFE_INTEGER;
-        var value = Number(raw);
-        return Number.isSafeInteger(value) ? value : Number.MAX_SAFE_INTEGER;
-      }
-      files = files.map(function (file, index) { return { file: file, index: index }; });
-      files.sort(function (a, b) { return rank(a.file) - rank(b.file) || a.index - b.index; });
-      files = files.map(function (item) { return item.file; });
+      files = orderByIndex(files, index, folderId);
       var jobs = [];
       files.forEach(function (file) {
         var signature = nodeSignature(file);
         var unchanged = savedSigs[file.id] !== undefined && savedSigs[file.id] === signature;
         seen.add(file.id);
         if (file.mimeType === drive.FOLDER_MIME) {
-          var collapsed = !!(file.properties && file.properties.pastex_collapsed === "1");
+          var collapsed = index.collapsed[file.id] === "1";
           var folder = {
             id: file.id, kind: "folder", name: file.name, children: [], collapsed: collapsed,
             properties: file.properties || {},
