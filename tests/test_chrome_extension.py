@@ -593,7 +593,9 @@ def test_deb_declares_installed_size_and_multi_arch(tmp_path):
                                 text=True, check=True).stdout.split()[0])
     assert abs(int(size) - actual) <= 8, f"declared {size} KiB, payload is {actual} KiB"
     assert _control(deb, "Multi-Arch") == "foreign"
-    assert _control(deb, "Provides") == "paste-teks"
+    # The retired project name is not claimed as an alias: Pastex ships under
+    # its own name only, so nothing can depend on the old one.
+    assert _control(deb, "Provides") == ""
 
 
 @needs_dpkg
