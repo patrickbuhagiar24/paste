@@ -147,10 +147,49 @@ test("a broken folder never replaces a working configuration", async () => {
 test("missing pieces are named in the error", async () => {
   const source = create(memoryStore(), Discovery, Sites, memoryStore());
   const noDrive = { "pastex-sites.json": JSON.stringify({ allowed_sites: [] }), "service-account.json": JSON.stringify(account) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noDrive)), /pastex-google-drive\.json/);
+  await assert.rejects(source.chooseFolder(dirHandle("config", noDrive)), /pastex-google-drive\.json is missing/);
 
   const noKey = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "pastex-sites.json": JSON.stringify({ allowed_sites: [] }) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noKey)), /service-account\.json/);
+  await assert.rejects(source.chooseFolder(dirHandle("config", noKey)), /service-account\.json is missing/);
+
+  const noSites = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "service-account.json": JSON.stringify(account) };
+  await assert.rejects(source.chooseFolder(dirHandle("config", noSites)), /pastex-sites\.json is missing/);
+});
+
+test("every missing file is reported at once, not one per attempt", async () => {
+  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const onlyKey = { "service-account.json": JSON.stringify(account) };
+  await assert.rejects(source.chooseFolder(dirHandle("config", onlyKey)), (err) => {
+    assert.match(err.message, /pastex-google-drive\.json is missing/);
+    assert.match(err.message, /pastex-sites\.json is missing/);
+    return true;
+  });
+});
+
+test("a missing file is never reported as a validation error", async () => {
+  // It used to say "allowed_sites must be an array" for a file that was absent.
+  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const noSites = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "service-account.json": JSON.stringify(account) };
+  await assert.rejects(source.chooseFolder(dirHandle("config", noSites)), (err) => {
+    assert.doesNotMatch(err.message, /allowed_sites/);
+    assert.match(err.message, /is missing/);
+    return true;
+  });
+});
+
+test("a malformed file IS reported separately from a missing one", async () => {
+  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const malformed = {
+    "pastex-google-drive.json": JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/" }),
+    "service-account.json": JSON.stringify({ type: "service_account" }),
+    "pastex-sites.json": JSON.stringify({ allowed_sites: ["<all_urls>"] }),
+  };
+  await assert.rejects(source.chooseFolder(dirHandle("config", malformed)), (err) => {
+    assert.match(err.message, /no usable folder_id or folder_url/);
+    assert.match(err.message, /not a usable service-account key/);
+    assert.match(err.message, /Invalid site origin/);
+    return true;
+  });
 });
 
 test("reading before choosing a folder explains what to do", async () => {

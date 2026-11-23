@@ -100,22 +100,51 @@
       return { files: files, sources: sources };
     }
 
-    function validate(found) {
-      var drive = found.files[DRIVE], sa = found.files[ACCOUNT], sitesFile = found.files[SITES];
+    /* Check every file and report all the problems at once. A user who has to
+     * pick the folder again after each single error is being told one third of
+     * what is wrong, so missing and malformed files are collected, not thrown
+     * one by one. */
+    function problems(found) {
+      var files = found.files || {};
+      var drive = files[DRIVE], sa = files[ACCOUNT], sitesFile = files[SITES];
+      var list = [];
+
       var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
       if (!id && drive && typeof drive.folder_url === "string") {
         var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
         id = match ? match[1] : "";
       }
       var validId = /^[A-Za-z0-9_-]+$/.test(id);
-      var validSa = sa && sa.type === "service_account" && typeof sa.client_email === "string" && sa.client_email.trim() &&
-        typeof sa.private_key === "string" && sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 && sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
-      if (!validId) throw new Error("Add a pastex-google-drive.json with a valid folder_id to the folder.");
-      if (!validSa) throw new Error("Add a valid service-account.json key to the folder.");
-      if (!sitesFile || !Array.isArray(sitesFile.allowed_sites))
-        throw new Error(SITES + ": allowed_sites must be an array.");
-      sites.parse(sitesFile.allowed_sites); // Invalid lists fail closed everywhere.
-      return { folderId: id, client_email: sa.client_email, private_key: sa.private_key, allowedSites: sitesFile.allowed_sites };
+      if (!drive) list.push(DRIVE + " is missing");
+      else if (!validId) list.push(DRIVE + " has no usable folder_id or folder_url");
+
+      var validSa = sa && sa.type === "service_account" &&
+        typeof sa.client_email === "string" && sa.client_email.trim() &&
+        typeof sa.private_key === "string" &&
+        sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 &&
+        sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+      if (!sa) list.push(ACCOUNT + " is missing");
+      else if (!validSa) list.push(ACCOUNT + " is not a usable service-account key");
+
+      if (!sitesFile) list.push(SITES + " is missing");
+      else if (!Array.isArray(sitesFile.allowed_sites)) list.push(SITES + " needs an allowed_sites array");
+      else {
+        try { sites.parse(sitesFile.allowed_sites); }
+        catch (err) { list.push(SITES + ": " + (err.message || err)); }
+      }
+
+      return {
+        list: list,
+        value: validId && validSa && sitesFile && Array.isArray(sitesFile.allowed_sites) ?
+          { folderId: id, client_email: sa.client_email, private_key: sa.private_key, allowedSites: sitesFile.allowed_sites } : null,
+      };
+    }
+
+    function validate(found) {
+      var checked = problems(found);
+      if (checked.list.length) throw new Error(checked.list.join("; ") + ".");
+      // sites.parse() already ran inside problems(), so the list is known good.
+      return checked.value;
     }
 
     /* Called by the panel after the user picks a folder. Scans the surface,

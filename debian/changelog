@@ -1,3 +1,22 @@
+pastex (2.15.1-1) unstable; urgency=medium
+
+  * The folder check now reports every problem at once. It used to throw on the
+    first one, so a folder missing two files needed two attempts and two
+    explanations.
+  * A missing file is no longer reported as a validation error. A folder
+    without pastex-sites.json used to say "allowed_sites must be an array",
+    which described a file that was not there; it now says
+    "pastex-sites.json is missing".
+  * Messages name the file and what to do:
+      service-account.json is missing
+      pastex-google-drive.json has no usable folder_id or folder_url
+      service-account.json is not a usable service-account key
+      pastex-sites.json: Invalid site origin: <all_urls>
+    The panel prefixes them with "Folder has problems:".
+  * A rejected folder still leaves the previous cache untouched.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+
 pastex (2.15.0-1) unstable; urgency=medium
 
   * Fixed "Could not read the library: The request is not allowed by the user

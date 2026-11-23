@@ -48,6 +48,13 @@ no Drive link is ever shared.
    ignored. Files are validated before the choice is accepted; if anything is
    invalid, the previous configuration is kept.
 
+   The check reports **every** problem at once and names the files: a missing
+   file is reported as missing (`service-account.json is missing`), while a
+   present but unusable one is reported separately
+   (`pastex-google-drive.json has no usable folder_id or folder_url`). Fix them
+   all, then pick the folder again — the picker does not have to be repeated
+   after each single fix.
+
 Only the **surface** of the folder is scanned: files ending in `.json` are
 read, subfolders are skipped without being entered, and a `.json` file that does
 not parse is ignored rather than failing the whole folder.

@@ -717,7 +717,7 @@
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        err.message ? "Could not use it. " + err.message : "Could not use it.", err.name === "AbortError" ? "" : "error");
+        err.message ? "Folder has problems: " + err.message : "Could not use the folder.", err.name === "AbortError" ? "" : "error");
     } finally {
       button.disabled = false;
     }
