@@ -76,8 +76,8 @@
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Configure a service-account.json link in the configuration manifest.");
-    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Configure a pastex-google-drive.json link in the configuration manifest.");
+    if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
     var account = drive.parseServiceAccount(JSON.stringify(config.serviceAccount));
     var token = await drive.fetchAccessToken(account);
     var rootId = config.drive.folderId;

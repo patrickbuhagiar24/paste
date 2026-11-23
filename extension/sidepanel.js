@@ -9,9 +9,10 @@
   "use strict";
 
   var Store = window.PastexStore;
+  // The panel scans the chosen folder once and stores the parsed files, so the
+  // worker and later panel opens read the cache instead of the folder.
   var Config = window.PastexConfigSource.create(
-    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites,
-    window.PastexManifest, typeof fetch === "undefined" ? null : fetch
+    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites, chrome.storage.local
   );
 
   var tree = [];
@@ -355,7 +356,7 @@
     if (!progressTimer) progressTimer = window.setTimeout(function () {
       progressTimer = 0;
       scheduleRender();
-      setStatus("Loading Google Drive… " + index.texts.length + " snippets found.");
+      setStatus("Loading… " + index.texts.length + " snippets found.");
     }, 100);
   }
 
@@ -393,7 +394,7 @@
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-fill" });
       if (!response || !response.ok || !response.result || !response.result.filled) return;
       await applyBackgroundChange();
-      setStatus("Loaded the rest of the library from the cache.", "ok");
+      setStatus("Loaded the rest from the cache.", "ok");
     } catch (ignored) { /* a later open tries again */ }
   }
 
@@ -434,7 +435,7 @@
     loadConfigVersion = configVersion;
     renderDriveBar();
     render();
-    if (!quiet) setStatus(force ? "Syncing with Google Drive…" : "Loading snippets…");
+    if (!quiet) setStatus(force ? "Syncing…" : "Loading…");
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library", force: !!force });
       if (loadConfigVersion !== configVersion) return false;
@@ -455,9 +456,8 @@
       if (result.cached && result.pending) scheduleFill();
       var warnings = result.warnings || [];
       if (!quiet) {
-        setStatus(warnings.length ? "Loaded with " + warnings.length + " unreadable item(s): " + warnings[0] :
-          (fromCache ? "Ready: " + index.texts.length + " snippets from the cache." :
-            "Google Drive synced: " + index.texts.length + " snippets."), warnings.length ? "error" : "ok");
+        setStatus(warnings.length ? warnings.length + " item(s) could not be read." :
+          index.texts.length + " snippets" + (fromCache ? " (cache)" : "") + ".", warnings.length ? "error" : "ok");
       }
       return true;
     } catch (err) {
@@ -468,7 +468,7 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
-      if (!quiet) setStatus("Could not read the library: " + (err.message || err) + (ready ? " (showing previous list)" : ""), "error");
+      if (!quiet) setStatus(err.message ? "Could not read the library. " + err.message : "Could not read the library.", "error");
       return false;
     } finally {
       loading = false;
@@ -496,21 +496,21 @@
       response = { ok: false };
     }
     if (response && response.ok) {
-      setStatus("Inserted into the page.", "ok");
+      setStatus("Inserted.", "ok");
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration manifest.", "error");
+      setStatus("This site is not allowed.", "error");
       return;
     }
     if (!response || response.reason !== "no-editable") {
       // A transport or content-script failure is not a request to copy.
-      setStatus("Insert failed: " + ((response && response.reason) || "the page did not accept the snippet."), "error");
+      setStatus("Could not insert.", "error");
       return;
     }
     try {
       await navigator.clipboard.writeText(node.text || "");
-      setStatus("No editable field focused — copied. Press Ctrl+V.", "ok");
+      setStatus("Copied. Press Ctrl+V.", "ok");
     } catch (err) {
       setStatus("Could not insert or copy.", "error");
     }
@@ -634,7 +634,7 @@
     savingLocal = true;
     renderDriveBar();
     render();
-    setStatus("Saving to the cache…");
+    setStatus("Saving…");
     var result = null, failure = "";
     try {
       command.rootId = rootId;
@@ -645,26 +645,25 @@
       result = response.result || {};
       if (typeof result.pending === "number") pendingWrites = result.pending;
     } catch (err) {
-      failure = "Could not save: " + (err.message || err);
+      failure = err.message ? "Could not save. " + err.message : "Could not save.";
     } finally { busy = false; savingLocal = false; }
     // Apply the cached list locally: no Drive request, no loading state.
     await applyBackgroundChange();
     renderDriveBar();
     if (failure) setStatus(failure, "error");
-    else setStatus(pendingWrites ?
-      "Saved to the cache; " + pendingWrites + " change(s) go to Drive when you leave this site." : "Saved.", "ok");
+    else setStatus(pendingWrites ? "Saved. " + pendingWrites + " waiting to sync." : "Saved.", "ok");
     return result;
   }
 
   async function saveEditor() {
     var name = $("editor-name").value.trim();
-    if (!name || name.indexOf("/") !== -1) { setStatus("Enter a name without /.", "error"); return; }
+    if (!name || name.indexOf("/") !== -1) { setStatus("No / in the name.", "error"); return; }
     if (busy) return;
     var mode = editorMode;
     var node = index.byId.get(editorNodeId) || null;
     var parentId = mode === "new-folder" || mode === "new-text" ? ($("editor-parent").value || rootId) : parentOf(tree, editorNodeId, rootId);
     if (!parentId || ((mode !== "new-folder" && mode !== "new-text") && !node)) {
-      setStatus("That item or folder is no longer available; refresh first.", "error"); return;
+      setStatus("That item is gone. Refresh.", "error"); return;
     }
     var result = await runMutation({ action: "save", mode: mode, name: name, node: node,
       parentId: parentId, text: $("editor-text").value });
@@ -692,7 +691,7 @@
     await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
-  // --- configuration: one JSON manifest with links ---
+  // --- configuration: one folder containing the three JSON files ---
 
   async function applyConfiguration(load) {
     var button = $("btn-config");
@@ -714,31 +713,27 @@
       refreshRequested = false;
       while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
       await refresh(true);
-      setStatus(applied.label + ": " + found.drive + ", " + found.account + ", " + found.sites + ". Reload open pages." +
-        (issues.length ? " " + issues.join(" ") : ""), issues.length ? "error" : "ok");
+      setStatus(issues.length ? "Saved, but sites need a browser restart." : applied.label + ".", issues.length ? "error" : "ok");
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        "Could not use configuration: " + (err.message || err), err.name === "AbortError" ? "" : "error");
+        err.message ? "Folder has problems: " + err.message : "Could not use the folder.", err.name === "AbortError" ? "" : "error");
     } finally {
       button.disabled = false;
     }
   }
 
   $("btn-config").addEventListener("click", function () {
-    if (typeof window.showOpenFilePicker !== "function") {
-      setStatus("This browser does not support selecting a manifest file.");
+    if (typeof window.showDirectoryPicker !== "function") {
+      setStatus("Folder picking is not supported here.");
       return;
     }
-    // The picker must be called directly from the user gesture.
+    // The picker must be called directly from the user gesture. The folder is
+    // scanned for the three JSON files by content; no manifest is read.
     return applyConfiguration(async function () {
-      var handles = await window.showOpenFilePicker({
-        multiple: false,
-        types: [{ description: "JSON manifest", accept: { "application/json": [".json"] } }],
-      });
-      var file = await handles[0].getFile();
-      var found = await Config.chooseManifestText(await file.text());
-      return { found: found, label: "Using manifest " + file.name };
+      var handle = await window.showDirectoryPicker({ mode: "read", id: "pastex-config" });
+      var found = await Config.chooseFolder(handle);
+      return { found: found, label: "Using folder " + (handle.name || "configuration") };
     });
   });
 
@@ -770,28 +765,27 @@
   // wait instead.
   $("btn-sync").addEventListener("click", async function () {
     if (busy) { refreshRequested = false; return; }
-    setStatus("Sending changes to Google Drive…");
+    setStatus("Sending…");
     var response = null;
     try {
       response = await chrome.runtime.sendMessage({ type: "pastex-sync-now" });
     } catch (ignored) { response = null; }
     if (!response || !response.ok || !response.result) {
-      setStatus("Sync failed: " + ((response && response.error) || "Drive is unavailable."), "error");
+      setStatus("Sync failed. Try again.", "error");
       return;
     }
     var result = response.result;
     pendingWrites = result.pending || 0;
     renderDriveBar();
     if (result.deferred) {
-      setStatus("Saved here; " + result.pending + " change(s) go to Drive when you close this tab.", "ok");
+      setStatus("Saved. " + result.pending + " waiting to sync.", "ok");
       return;
     }
     if (result.pending) {
-      setStatus("Sent " + (result.flushed.sent || 0) + " change(s); " + result.pending + " are still waiting.", "error");
+      setStatus("Sent " + (result.flushed.sent || 0) + "; " + result.pending + " waiting.", "error");
       return;
     }
-    setStatus((result.flushed.sent ? "Sent " + result.flushed.sent + " change(s) to Google Drive." : "Nothing to send.") +
-      " Use ↻ Sync after reopening the panel to read Drive's ids.", "ok");
+    setStatus(result.flushed.sent ? "Sent " + result.flushed.sent + "." : "Nothing to send.", "ok");
   });
 
   // The queue depth is shown in the drive bar, so it is read once on open and
@@ -815,7 +809,7 @@
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;
     selectedItems.clear();
-    if (selecting && query) setStatus("Clear search to reorder items.");
+    if (selecting && query) setStatus("Clear the search first.");
     render();
   });
   $("btn-up").addEventListener("click", function () { moveSelected(-1); });

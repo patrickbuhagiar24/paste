@@ -64,9 +64,9 @@
     async function identity() {
       var config = await native.readConfig();
       if (!config.serviceAccount || !config.serviceAccount.client_email || !config.serviceAccount.private_key)
-        throw new Error(config.serviceAccountError || "Configure a service-account.json link in the configuration manifest.");
+        throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
       if (!config.drive || !config.drive.folderId)
-        throw new Error(config.driveError || "Configure a pastex-google-drive.json link in the configuration manifest.");
+        throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
       if (identityCache.config === config) return identityCache.value;
       var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -583,7 +583,7 @@
       mutations = operation.catch(function () {});
       return operation;
     }
-    // The user picked a configuration manifest: the next read is a full sync.
+    // The user picked a configuration folder: the next read is a full sync.
     function configurationChanged() { fullSyncStale = true; }
 
     // A read-only view of the cached snapshot, for a queued index write.

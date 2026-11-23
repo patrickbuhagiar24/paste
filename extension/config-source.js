@@ -1,126 +1,235 @@
-/* Read configuration from a single manifest of Google Drive links.
- * Only the links are persisted; downloaded JSON and keys stay in memory.
- * Linked files are memoized per manifest so repeated opens, mutations and
- * allowlist checks do not re-download the same three JSON files. */
+/* Read configuration from a folder the user picked once, then keep the parsed
+ * JSON in persistent storage so later reads never touch the folder again.
+ *
+ * Why: only the side panel has a user gesture and a folder handle. The
+ * background worker reads configuration from an offscreen document, which is
+ * not allowed to use File System Access handles ("The request is not allowed by
+ * the user agent or the platform in the current context"). So the panel scans
+ * the folder once, stores the result, and everything afterwards reads the cache.
+ * The folder is a source of configuration, never its storage. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexConfigSource = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
   var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", ACCOUNT = "service-account.json";
-  var LINKED = "linked ";
+  var FOLDER = "folder ", CACHE = "pastex-config-cache";
+  var MAX_BYTES = 256 * 1024;
 
-  function create(store, discovery, sites, manifest, fetchImpl) {
-    var fetcher = fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-    var cache = { config: null, configKey: "", sites: null, sitesKey: "" };
+  function create(store, discovery, sites, cacheStore) {
+    var memoized = { config: null, configKey: "", sites: null, sitesKey: "" };
     var inFlight = new Map();
 
-    function requireManifest(source) {
-      if (!source || source.kind !== "manifest" || !source.files || typeof source.files !== "object")
-        throw new Error("Choose a configuration manifest in Config first.");
-      if (!manifest || typeof manifest.fetchJson !== "function" || !manifest.NAMES)
-        throw new Error("Link-based configuration is unavailable in this context.");
-      return source;
+    function storage() {
+      if (!cacheStore || typeof cacheStore.get !== "function" || typeof cacheStore.set !== "function")
+        throw new Error("Configuration storage is unavailable.");
+      return cacheStore;
     }
 
-    function keyOf(source) {
-      return JSON.stringify([source.kind, source.files]);
+    async function readCache() {
+      // chrome.storage.get(key) resolves to an OBJECT keyed by the key, so the
+      // record has to be unwrapped. Reading it as the record itself makes
+      // `files` undefined on every later open.
+      var result = await storage().get(CACHE);
+      var record = result && typeof result === "object" ? result[CACHE] : null;
+      return record && typeof record === "object" ? record : null;
     }
 
-    async function memo(kind, key, force, load) {
-      if (!force && cache[kind] && cache[kind + "Key"] === key) return cache[kind];
-      var slot = kind + ":" + key;
-      if (!force && inFlight.has(slot)) return inFlight.get(slot);
-      var promise = (async function () {
-        var value = await load();
-        cache[kind] = value;
-        cache[kind + "Key"] = key;
-        return value;
-      })();
-      if (!force) inFlight.set(slot, promise);
-      try { return await promise; }
-      finally { if (inFlight.get(slot) === promise) inFlight.delete(slot); }
+    async function writeCache(files, name) {
+      await storage().set({ [CACHE]: {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        folder: name || "",
+        files: files,
+      } });
     }
 
-    async function linkedFile(source, name) {
-      var result = await manifest.fetchJson(source.files[name], fetcher, manifest.DOWNLOAD_TIMEOUT_MS);
+    async function clearCache() {
+      await storage().set({ [CACHE]: null });
+      memoized.config = null; memoized.configKey = "";
+      memoized.sites = null; memoized.sitesKey = "";
+      inFlight.clear();
+    }
+
+    /* Scan only the surface of the chosen folder: entries that are files and
+     * end in .json. Subfolders are skipped without being opened. */
+    async function scanFolder(handle) {
+      if (!handle || typeof handle.values !== "function")
+        throw new Error("Choose a configuration folder in Config first.");
+      var raw = {};
+      for await (var entry of handle.values()) {
+        if (entry.kind !== "file") continue;
+        if (!/\.json$/i.test(entry.name || "")) continue;
+        var file;
+        try { file = await entry.getFile(); } catch (err) { continue; }
+        var text;
+        try { text = await file.text(); } catch (err) { continue; }
+        if (text.length > MAX_BYTES) continue;
+        var value;
+        try { value = JSON.parse(text.replace(/^\uFEFF/, "")); } catch (err) { continue; }
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        raw[file.name || entry.name] = value;
+      }
+      if (!Object.keys(raw).length) throw new Error("No usable .json files in the folder.");
+      return raw;
+    }
+
+    /* Identify the three files by their contents, so names do not matter and
+     * a key downloaded under a project-specific name still works. */
+    function identify(raw) {
+      var files = {}, sources = {};
+      var keys = Object.keys(raw);
+      var named = function (name) { return raw[name]; };
+      var viaContent = function (test) {
+        for (var i = 0; i < keys.length; i++) if (test(raw[keys[i]])) return keys[i];
+        return "";
+      };
+      var driveName = keys.indexOf(DRIVE) !== -1 ? DRIVE :
+        keys.indexOf("google-drive.json") !== -1 ? "google-drive.json" :
+        viaContent(function (v) { return typeof v.folder_id === "string" || typeof v.folder_url === "string"; });
+      if (driveName) { files[DRIVE] = named(driveName); sources[DRIVE] = driveName; }
+
+      var sitesName = keys.indexOf(SITES) !== -1 ? SITES :
+        keys.indexOf("sites.json") !== -1 ? "sites.json" :
+        viaContent(function (v) { return Array.isArray(v.allowed_sites); });
+      if (sitesName) { files[SITES] = named(sitesName); sources[SITES] = sitesName; }
+
+      var accountName = keys.indexOf(ACCOUNT) !== -1 ? ACCOUNT :
+        viaContent(function (v) { return v.type === "service_account"; });
+      if (accountName) { files[ACCOUNT] = named(accountName); sources[ACCOUNT] = accountName; }
+      return { files: files, sources: sources };
+    }
+
+    /* Check every file and report all the problems at once. A user who has to
+     * pick the folder again after each single error is being told one third of
+     * what is wrong, so missing and malformed files are collected, not thrown
+     * one by one. */
+    function problems(found) {
+      var files = found.files || {};
+      var drive = files[DRIVE], sa = files[ACCOUNT], sitesFile = files[SITES];
+      var list = [];
+
+      var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
+      if (!id && drive && typeof drive.folder_url === "string") {
+        var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
+        id = match ? match[1] : "";
+      }
+      var validId = /^[A-Za-z0-9_-]+$/.test(id);
+      if (!drive) list.push(DRIVE + " is missing");
+      else if (!validId) list.push(DRIVE + " has no usable folder_id or folder_url");
+
+      var validSa = sa && sa.type === "service_account" &&
+        typeof sa.client_email === "string" && sa.client_email.trim() &&
+        typeof sa.private_key === "string" &&
+        sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 &&
+        sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+      if (!sa) list.push(ACCOUNT + " is missing");
+      else if (!validSa) list.push(ACCOUNT + " is not a usable service-account key");
+
+      if (!sitesFile) list.push(SITES + " is missing");
+      else if (!Array.isArray(sitesFile.allowed_sites)) list.push(SITES + " needs an allowed_sites array");
+      else {
+        try { sites.parse(sitesFile.allowed_sites); }
+        catch (err) { list.push(SITES + ": " + (err.message || err)); }
+      }
+
       return {
-        name: name,
-        size: result.text.length,
-        webkitRelativePath: "linked/" + name,
-        json: result.json,
-        text: async function () { return result.text; },
+        list: list,
+        value: validId && validSa && sitesFile && Array.isArray(sitesFile.allowed_sites) ?
+          { folderId: id, client_email: sa.client_email, private_key: sa.private_key, allowedSites: sitesFile.allowed_sites } : null,
       };
     }
 
-    async function linkedFiles(source, skipSites) {
-      var names = (manifest.NAMES || []).filter(function (name) { return !(skipSites && name === SITES); });
-      return Promise.all(names.map(function (name) { return linkedFile(source, name); }));
+    function validate(found) {
+      var checked = problems(found);
+      if (checked.list.length) throw new Error(checked.list.join("; ") + ".");
+      // sites.parse() already ran inside problems(), so the list is known good.
+      return checked.value;
     }
 
-    async function readConfigFrom(source, force) {
-      var active = requireManifest(source);
-      return memo("config", keyOf(active), !!force, async function () {
-        var found = await discovery.discover(await linkedFiles(active, true));
-        var drive = found.files[DRIVE], sa = found.files[ACCOUNT];
-        var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
-        if (!id && drive && typeof drive.folder_url === "string") {
-          var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
-          id = match ? match[1] : "";
-        }
-        var validId = /^[A-Za-z0-9_-]+$/.test(id);
-        var validSa = sa && sa.type === "service_account" && typeof sa.client_email === "string" && sa.client_email.trim() &&
-          typeof sa.private_key === "string" && sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 && sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+    /* Called by the panel after the user picks a folder. Scans the surface,
+     * validates, and only then replaces the cache: a broken folder never
+     * wipes a working configuration. */
+    async function chooseFolder(handle) {
+      var found = identify(await scanFolder(handle));
+      validate(found);
+      await writeCache(found.files, handle.name || "");
+      memoized.config = null; memoized.configKey = "";
+      memoized.sites = null; memoized.sitesKey = "";
+      return { drive: FOLDER + DRIVE, account: FOLDER + ACCOUNT, sites: FOLDER + SITES };
+    }
+
+    /* All later reads come from the cache; the folder is not used again. */
+    async function readConfigFrom(force) {
+      var record = await readCache();
+      if (!record) throw new Error("Choose a configuration folder in Config first.");
+      var key = record.savedAt + ":" + record.folder;
+      return memo("config", key, !!force, async function () {
+        var v = validate({ files: record.files, sources: {} });
         return {
-          drive: validId ? { folderId: id } : null,
-          driveError: validId ? "" : "Choose a manifest with a valid " + DRIVE + " link.",
-          serviceAccount: validSa ? { client_email: sa.client_email, private_key: sa.private_key } : null,
-          serviceAccountError: validSa ? "" : "Choose a manifest with a valid " + ACCOUNT + " link.",
-          sources: found.sources,
+          drive: { folderId: v.folderId },
+          driveError: "",
+          serviceAccount: { client_email: v.client_email, private_key: v.private_key },
+          serviceAccountError: "",
+          sources: {},
         };
       });
     }
 
-    async function readSitesFrom(source, force) {
-      var active = requireManifest(source);
-      return memo("sites", keyOf(active), !!force, async function () {
-        var linked = await linkedFile(active, SITES);
-        var data = linked.json;
-        if (!data || !Array.isArray(data.allowed_sites))
-          throw new Error(SITES + ": allowed_sites must be an array.");
-        sites.parse(data.allowed_sites); // Invalid lists fail closed everywhere.
-        return { allowedSites: data.allowed_sites, source: LINKED + SITES };
+    async function readSitesFrom(force) {
+      var record = await readCache();
+      if (!record) throw new Error("Choose a configuration folder in Config first.");
+      var key = record.savedAt + ":" + record.folder;
+      return memo("sites", key, !!force, async function () {
+        var v = validate({ files: record.files, sources: {} });
+        return { allowedSites: v.allowedSites, source: FOLDER + SITES };
       });
     }
 
-    async function chooseManifestText(text) {
-      if (!manifest || typeof manifest.parse !== "function")
-        throw new Error("Link-based configuration is unavailable in this context.");
-      var descriptor = manifest.parse(text);
-      // All three linked files are independent; download them concurrently.
-      var results = await Promise.all([
-        readConfigFrom(descriptor, true),
-        readSitesFrom(descriptor, true),
-      ]);
-      var drive = results[0], allowed = results[1];
-      if (!drive.drive) throw new Error(drive.driveError);
-      if (!drive.serviceAccount) throw new Error(drive.serviceAccountError);
-      // Persist only the download URLs, never the downloaded JSON or key.
-      await store.set(descriptor);
-      return { drive: LINKED + DRIVE, account: LINKED + ACCOUNT, sites: allowed.source };
+    function memo(kind, key, force, load) {
+      if (!force && memoized[kind] && memoized[kind + "Key"] === key) return memoized[kind];
+      var slot = kind + ":" + key;
+      if (!force && inFlight.has(slot)) return inFlight.get(slot);
+      var promise = (async function () {
+        var value = await load();
+        memoized[kind] = value;
+        memoized[kind + "Key"] = key;
+        return value;
+      })();
+      if (!force) inFlight.set(slot, promise);
+      try { return promise; }
+      finally { inFlight.get(slot) === promise && inFlight.delete(slot); }
     }
 
-    function invalidate() {
-      cache.config = null; cache.configKey = "";
-      cache.sites = null; cache.sitesKey = "";
-      inFlight.clear();
+    /* Status for the panel: tells the user which files are in use. */
+    async function describe() {
+      var record = await readCache();
+      if (!record) return { configured: false, folder: "", savedAt: "" };
+      var found = identify(record.files || {});
+      return {
+        configured: true,
+        folder: record.folder || "",
+        savedAt: record.savedAt || "",
+        missing: [DRIVE, SITES, ACCOUNT].filter(function (name) { return !found.files[name]; }),
+      };
     }
 
     return {
-      chooseManifestText: chooseManifestText,
-      invalidate: invalidate,
-      readConfig: async function (force) { return readConfigFrom(await store.get(), force); },
-      readSites: async function (force) { return readSitesFrom(await store.get(), force); },
+      chooseFolder: chooseFolder,
+      clearCache: clearCache,
+      describe: describe,
+      invalidate: clearCache,
+      readCached: async function (force) {
+        var config = await readConfigFrom(!!force);
+        var allowed = await readSitesFrom(!!force);
+        return {
+          drive: { folderId: config.drive.folderId },
+          serviceAccount: config.serviceAccount,
+          allowedSites: allowed.allowedSites,
+        };
+      },
+      readConfig: readConfigFrom,
+      readSites: readSitesFrom,
     };
   }
   return { create: create };

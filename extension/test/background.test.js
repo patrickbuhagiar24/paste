@@ -14,7 +14,8 @@ function settle(ms) {
 }
 
 
-function harness(home, unavailable, shared, closeUnsupported) {
+function harness(home, unavailable, shared, closeUnsupported, options) {
+  const opts = options || {};
   const listeners = {};
   const closed = [];
   const event = (name) => ({ addListener(fn) { listeners[name] = fn; } });
@@ -38,19 +39,31 @@ function harness(home, unavailable, shared, closeUnsupported) {
   const runtime = {
     id: "abc", getURL: (name) => "chrome-extension://abc/" + name,
     onInstalled: event("installed"), onStartup: event("startup"), onMessage: event("message"), onConnect: event("connect"),
+    // The worker no longer asks an offscreen document for configuration; it
+    // reads the cache the panel wrote. Any such request must fail loudly.
     sendMessage: async (message) => {
+      if (message && message.target === "pastex-config-reader") {
+        throw new Error("the offscreen configuration reader must not be used");
+      }
       launches++;
-      if (unavailable) return { ok: false, error: "folder unavailable" };
-      const dir = path.join(home, "chosen-folder");
-      try {
-        if (message.operation === "sites") return { ok: true, data: { allowedSites: JSON.parse(fs.readFileSync(path.join(dir, "pastex-sites.json"))).allowed_sites } };
-        return { ok: true, data: { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } } };
-      } catch (err) { return { ok: false, error: err.message }; }
+      return { ok: true };
     },
   };
   const sessionData = {};
   const localData = shared && shared.local ? shared.local : {};
   if (shared) shared.local = localData;
+  // The panel writes this record when it scans the chosen folder.
+  if (!unavailable) {
+    localData["pastex-config-cache"] = {
+      version: 1, savedAt: "2026-01-01T00:00:00.000Z", folder: "chosen-folder",
+      files: {
+        "pastex-google-drive.json": { folder_id: "root" },
+        "pastex-sites.json": opts.withoutSites ? {} : { allowed_sites: ["https://allowed.example"] },
+        "service-account.json": { type: "service_account", client_email: "x",
+          private_key: "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n" },
+      },
+    };
+  }
   function area(store) {
     return {
       get: async (key) => ({ [key]: store[key] }),
@@ -98,7 +111,8 @@ function harness(home, unavailable, shared, closeUnsupported) {
   return { listeners, context, listenersForApis, opened, closed, behaviors, alarmCalls,
     set idle(value) { idleState = value; },
     get launches() { return launches; },
-    get registered() { return registered; }, get injected() { return injected; } };
+    get registered() { return registered; }, get injected() { return injected; },
+    sharedLocal: localData };
 }
 
 test("extension startup never creates a configuration directory", async () => {
@@ -108,9 +122,14 @@ test("extension startup never creates a configuration directory", async () => {
       const browser = harness(home, false);
       browser.listeners[eventName]();
       await new Promise(setImmediate);
-      assert.equal(browser.launches, 1);
+      // Configuration is read from storage now: startup must not message any
+      // other context and must not touch the filesystem.
+      assert.equal(browser.launches, 0);
       assert.deepEqual(fs.readdirSync(home), []);
-      assert.equal(browser.registered.length, 0);
+      // The cached configuration is usable immediately, so the allowlisted
+      // site is registered without any folder access.
+      assert.equal(browser.registered.length, 1);
+      assert.deepEqual(browser.registered[0].matches, ["https://allowed.example/*"]);
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   }
 });
@@ -118,13 +137,14 @@ test("extension startup never creates a configuration directory", async () => {
 test("site registration and on-demand injection are limited to configured sites", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-allow-"));
   try {
-    const browser = harness(home, false);
+    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
-    assert.equal(browser.registered.length, 0);
-    fs.mkdirSync(path.join(home, "chosen-folder"));
-    const file = path.join(home, "chosen-folder", "pastex-sites.json");
-    fs.writeFileSync(file, JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    assert.equal(browser.registered.length, 0, "no allowlist means no registration");
+    // Configuration lives in storage: replacing the cached allowlist is what a
+    // panel rescan does, and no folder or file is involved.
+    const config = browser.sharedLocal["pastex-config-cache"];
+    config.files["pastex-sites.json"] = { allowed_sites: ["https://allowed.example"] };
     browser.listeners.startup();
     await new Promise(setImmediate);
     assert.deepEqual(Array.from(browser.registered[0].matches), ["https://allowed.example/*"]);
@@ -149,31 +169,32 @@ test("site registration and on-demand injection are limited to configured sites"
     assert.equal(browser.injected, 0);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     assert.equal(browser.injected, 1);
-    fs.writeFileSync(file, "bad json");
+    config.files["pastex-sites.json"] = { allowed_sites: ["<all_urls>"] };
     browser.listeners.startup();
     await new Promise(setImmediate);
-    assert.equal(browser.registered.length, 0);
+    assert.equal(browser.registered.length, 0, "an invalid allowlist fails closed");
     assert.equal((await allowedMessage("https://allowed.example/")).allowed, false);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /site-not-allowed/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test("an unavailable configuration manifest does not prevent extension startup", async () => {
+test("an unavailable configuration does not prevent extension startup", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.listeners.installed();
   await new Promise(setImmediate);
-  assert.equal(browser.launches, 1);
+  // A missing cache must not throw, and must not fall back to a folder read.
+  assert.equal(browser.launches, 0);
 });
 
 test("only the extension panel can request a site registration reload", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-reload-"));
   try {
-    const browser = harness(home, false);
+    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
-    fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
-    const file = path.join(home, "chosen-folder", "pastex-sites.json");
-    fs.writeFileSync(file, JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
+    assert.equal(browser.registered.length, 0, "nothing registered without an allowlist");
+    const cached = browser.sharedLocal["pastex-config-cache"];
+    cached.files["pastex-sites.json"] = { allowed_sites: ["https://allowed.example"] };
     let denied;
     assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "https://allowed.example" }, (res) => { denied = res; }), false);
     assert.equal(denied.ok, false);
@@ -401,14 +422,17 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-fast-paste-"));
   try {
     const browser = harness(home, false);
-    fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
-    fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.listeners.startup();
     await new Promise(setImmediate);
-    const readsAfterStartup = browser.launches;
+    // Count storage reads directly: that is the only path configuration takes
+    // now, so "reused" means "not read again", not "no message sent".
+    let configReads = 0;
+    const storage = browser.context.chrome.storage.local;
+    const originalGet = storage.get;
+    storage.get = async function (key) { if (key === "pastex-config-cache") configReads++; return originalGet.call(storage, key); };
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
-    assert.equal(browser.launches, readsAfterStartup, "paste must not re-read linked configuration");
+    assert.equal(configReads, 0, "a repeated paste must reuse the allowlist it already has");
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 

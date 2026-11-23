@@ -68,12 +68,15 @@ function panelHarness(fail, options = {}) {
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element("fragment"), addEventListener() {} };
   const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport,
     PastexConfigSource: { create: () => ({
-      chooseManifestText: async (text) => { imports.push(text); return { drive: "linked drive.json", account: "linked account.json", sites: "linked sites.json" }; },
+      chooseFolder: async (handle) => {
+        imports.push(handle.name);
+        return { drive: "folder drive.json", account: "folder account.json", sites: "folder sites.json" };
+      },
     }) },
-    PastexHandleStore: {}, PastexSites: {}, PastexManifest: {},
-    showOpenFilePicker: async (opts) => {
+    PastexHandleStore: {}, PastexSites: {},
+    showDirectoryPicker: async (opts) => {
       pickerCalls++;
-      return options.manifestPicker ? options.manifestPicker(opts) : [{ getFile: async () => ({ name: "config.json", text: async () => "{}" }) }];
+      return options.folderPicker ? options.folderPicker(opts) : { name: "my-config" };
     },
     confirm: () => options.confirm !== false, setTimeout, clearTimeout,
     addEventListener() {}};
@@ -125,7 +128,7 @@ function panelHarness(fail, options = {}) {
       return { ok: true };
     },
   };
-  const context = vm.createContext({ document, window, chrome: { runtime }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
+  const context = vm.createContext({ document, window, chrome: { runtime, storage: { local: { get: async () => ({}), set: async () => {} } } }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
   return { elements, records, context, imports, messages, clipboardTexts, pickerCalls: () => pickerCalls,
     progress: (message) => progress(message) };
@@ -155,7 +158,7 @@ test("side panel keeps unreadable Drive items visible and reports the error", as
   await settled();
   assert.match(allText(elements.tree), /Synced.*⚠/);
   assert.match(allText(elements.tree), /Empty Folder/);
-  assert.match(elements.status.textContent, /unreadable.*403 denied/);
+  assert.match(elements.status.textContent, /1 item\(s\) could not be read/);
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   const editButton = row.children.find((child) => (child.title || "").startsWith("Cannot edit:"));
   assert.ok(editButton.disabled);
@@ -193,7 +196,7 @@ test("side panel edits the cache and queues the Drive write instead of calling D
   assert.ok(messages.some((m) => m.type === "pastex-panel-local-edit"));
 });
 
-test("Config opens the JSON file picker immediately", async () => {
+test("Config opens the folder picker immediately", async () => {
   const { elements, pickerCalls } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
@@ -279,7 +282,7 @@ test("a failed insertion does not silently copy the snippet", async () => {
   row.listeners.click();
   await settled();
   assert.deepEqual(clipboardTexts, []);
-  assert.match(elements.status.textContent, /Insert failed/);
+  assert.match(elements.status.textContent, /Could not insert/);
 });
 
 test("clipboard fallback runs only when no editable field is focused", async () => {
@@ -289,21 +292,20 @@ test("clipboard fallback runs only when no editable field is focused", async () 
   row.listeners.click();
   await settled();
   assert.deepEqual(clipboardTexts, ["from Google Drive"]);
-  assert.match(elements.status.textContent, /copied/);
+  assert.match(elements.status.textContent, /Copied/);
 });
 
-test("manifest picker loads one JSON with links and refreshes sites and Drive", async () => {
+test("folder picker scans one folder and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
   await elements["btn-config"].listeners.click();
-  assert.deepEqual(imports, ["{}"]);
+  assert.deepEqual(imports, ["my-config"]);
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements.status.textContent, /Using manifest config\.json/);
-  assert.match(elements.status.textContent, /linked drive\.json/);
+  assert.match(elements.status.textContent, /Using folder my-config/);
 });
 
-test("canceling the manifest picker leaves configuration unchanged", async () => {
-  const { elements, imports } = panelHarness(false, { manifestPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
+test("canceling the folder picker leaves configuration unchanged", async () => {
+  const { elements, imports } = panelHarness(false, { folderPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
   await elements["btn-config"].listeners.click();
   assert.equal(imports.length, 0);
   assert.match(elements.status.textContent, /unchanged/);
@@ -320,7 +322,7 @@ test("collapse all folds every folder and clears an active search", async () => 
   await settled(); await settled();
   assert.equal(elements.search.value, "");
   // The fold is applied to the cache and queued like any other edit.
-  assert.match(elements.status.textContent, /Saved to the cache/);
+  assert.match(elements.status.textContent, /Saved/);
   const folderRow = elements.tree.children.find((row) => allText(row).includes("Empty Folder"));
   assert.equal(folderRow.children[0].textContent, "▸");
 });
@@ -338,7 +340,7 @@ test("session cache count is shown in the drive bar, not the footer", async () =
   const { elements } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
   await settled();
   assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
-  assert.match(elements.status.textContent, /Ready: 2 snippets from the cache/);
+  assert.match(elements.status.textContent, /2 snippets \(cache\)/);
 });
 
 test("a background sync notification repaints the panel from the cache", async () => {
@@ -404,7 +406,7 @@ test("Sync sends the queue and never reads the library back", async () => {
     "Sync must not ask for a library read");
   assert.equal(messages.some((message) => message.type === "pastex-panel-library" && message.force === true), false,
     "and it must not force a Drive read");
-  assert.match(elements.status.textContent, /Sent 2 change\(s\) to Google Drive\./);
+  assert.match(elements.status.textContent, /Sent 2\./);
 });
 
 test("Sync says how many changes are held back while a site is open", async () => {
@@ -418,7 +420,7 @@ test("Sync says how many changes are held back while a site is open", async () =
   elements["btn-sync"].listeners.click();
   await settled();
   assert.equal(messages.some((message) => message.type === "pastex-panel-library"), false);
-  assert.match(elements.status.textContent, /3 change\(s\) go to Drive when you close this tab/);
+  assert.match(elements.status.textContent, /3 waiting to sync/);
 });
 
 test("a cached open with a row missing its body asks the worker to fill it", async () => {

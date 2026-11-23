@@ -42,8 +42,8 @@ def test_manifest_permissions_are_minimal_and_documented():
         "scripting",
         "activeTab",
         "clipboardWrite",
-        "offscreen",
         "storage",
+        "fileSystemAccess",
     }
     # Broad host permissions enable dynamic registration for user-chosen sites;
     # content scripts themselves are registered only for the allowlist.
@@ -171,7 +171,7 @@ def test_manifest_icons_exist_and_match_sizes():
 
 
 def test_html_pages_reference_only_shipped_scripts():
-    for page in ("sidepanel.html", "config-reader.html"):
+    for page in ("sidepanel.html",):
         text = (EXT / page).read_text(encoding="utf-8")
         for src in re.findall(r'<script\s+src="([^"]+)"', text):
             assert "://" not in src, f"{page} loads remote code: {src}"
@@ -193,9 +193,9 @@ def test_no_remote_code_or_eval_in_extension_sources():
 
 
 def test_https_is_only_used_for_google_apis():
-    # Drive links are configuration inputs; the links themselves are validated
-    # to this host in config-manifest.js before any request is made.
-    allowed = {"www.googleapis.com", "oauth2.googleapis.com", "drive.google.com"}
+    # Configuration now comes from a local folder; the only Google hosts are
+    # the Drive API and its token endpoint.
+    allowed = {"www.googleapis.com", "oauth2.googleapis.com"}
     for path in sorted(EXT.glob("*.js")):
         for host in re.findall(r"https://([^/'\"\s]+)", path.read_text(encoding="utf-8")):
             assert host in allowed, f"{path.name} talks to {host}"
@@ -418,11 +418,11 @@ def test_extension_readme_documents_setup_and_signing():
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
-        "IndexedDB",
+        "pastex-config-cache",
         "pastex-google-drive.json",
         "service-account.json",
-        "The file picker opens directly",
-        "only the three download URLs",
+        "A folder picker opens directly",
+        "Configuration is then **cached**",
     ):
         assert required in readme, f"README misses {required!r}"
 
@@ -448,7 +448,7 @@ def test_release_requires_new_crx_secret():
     assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]' in workflow
 
 
-def test_configuration_comes_only_from_a_user_selected_manifest():
+def test_configuration_comes_only_from_a_user_selected_folder():
     for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/rules", ROOT / "debian/postinst"]:
         text = path.read_text(encoding="utf-8")
         assert "~/.config/pastex" not in text
@@ -459,11 +459,24 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
     assert 'id="choose-folder"' not in html
     script = (EXT / "sidepanel.js").read_text()
     assert '$("btn-config").addEventListener' in script
-    assert "showOpenFilePicker({" in script
-    assert "showDirectoryPicker" not in (EXT / "sidepanel.js").read_text()
-    assert "config-manifest.js" in html
-    assert "config-manifest.js" in (EXT / "config-reader.html").read_text()
-    assert "PastexManifest" in (EXT / "config-reader.js").read_text()
+    # Configuration is a folder of JSON files discovered by content.
+    assert "showDirectoryPicker({" in script
+    assert "showOpenFilePicker" not in script
+    assert "config-manifest.js" not in html
+    # There is no offscreen configuration reader any more: the worker reads the
+    # cache the panel wrote, so it never needs a folder handle.
+    assert not (EXT / "config-reader.html").exists()
+    assert not (EXT / "config-reader.js").exists()
+    assert not (EXT / "config-client.js").exists()
+    assert "PastexManifest" not in script
+    assert "chooseFolder" in script
+    worker = (EXT / "background.js").read_text()
+    assert "PastexConfigCacheReader" in worker
+    assert "PastexConfigClient" not in worker
+    cache_reader = (EXT / "config-cache-reader.js").read_text()
+    assert "pastex-config-cache" in cache_reader
+    # The folder is scanned once by the panel and never opened by the worker.
+    assert "showDirectoryPicker" not in worker
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
     assert "indexedDB" in (EXT / "handle-store.js").read_text()
     assert "nativeMessaging" not in _manifest()["permissions"]

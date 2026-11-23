@@ -1,3 +1,69 @@
+pastex (2.15.1-1) unstable; urgency=medium
+
+  * The folder check now reports every problem at once. It used to throw on the
+    first one, so a folder missing two files needed two attempts and two
+    explanations.
+  * A missing file is no longer reported as a validation error. A folder
+    without pastex-sites.json used to say "allowed_sites must be an array",
+    which described a file that was not there; it now says
+    "pastex-sites.json is missing".
+  * Messages name the file and what to do:
+      service-account.json is missing
+      pastex-google-drive.json has no usable folder_id or folder_url
+      service-account.json is not a usable service-account key
+      pastex-sites.json: Invalid site origin: <all_urls>
+    The panel prefixes them with "Folder has problems:".
+  * A rejected folder still leaves the previous cache untouched.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+
+pastex (2.15.0-1) unstable; urgency=medium
+
+  * Fixed "Could not read the library: The request is not allowed by the user
+    agent or the platform in the current context." The background worker asked
+    an offscreen document for configuration, and that document tried to use the
+    user's folder handle. File System Access handles are not usable there.
+  * Configuration is now read once from the folder and cached. The panel scans
+    the chosen folder when it is picked, stores the parsed JSON in
+    chrome.storage.local, and both the panel and the worker read that cache.
+    The folder is a source of configuration, never its storage: later reads do
+    not open it at all, so a browser restart needs no folder grant.
+  * Only the surface of the folder is scanned. Subfolders are skipped without
+    being entered, non-.json files are ignored, and JSON that does not parse is
+    skipped instead of failing the whole folder.
+  * Removed the offscreen configuration reader (config-reader.html/.js and
+    config-client.js). The worker imports config-cache-reader.js instead, so
+    "offscreen" is no longer needed for configuration.
+  * Re-selecting a folder no longer wipes the cached configuration: the worker
+    keeps what the panel just wrote and only resets the library and queue.
+  * Status messages under the buttons are shorter and plainer.
+  * Fixed two storage bugs found while porting: chrome.storage.get() resolves
+    to an object keyed by the requested name, but both readers treated that
+    wrapper as the record, so `files` was undefined on every later open.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+
+pastex (2.14.0-1) unstable; urgency=medium
+
+  * Configuration now comes from a folder on disk, not a manifest of Drive
+    links. Click Config, pick the folder, and the three JSON files are
+    discovered by content: the key by "type": "service_account", the others by
+    folder_id/folder_url and allowed_sites. Names and extra files do not
+    matter, and nested folders are ignored.
+  * Nothing has to be shared publicly any more. The service-account key never
+    leaves the user's computer, so it cannot leak through a shared Drive link.
+    Only the snippets folder is shared, with the service account, as Editor.
+  * Chrome stores only the folder handle (IndexedDB). To keep that grant
+    across browser restarts the extension now declares fileSystemAccess.
+  * Removed config-manifest.js: there are no Drive links to parse or download.
+  * Fixed a file-identity bug found while porting: the folder scan used a
+    function-scoped `var file` inside the loop, so every entry's text() closure
+    read the last file in the folder.
+  * Docs, examples and tests follow the folder flow; cek-izin-tautan.sh and
+    related link-based guides are superseded.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 21 Nov 2026 00:00:00 +0000
+
 pastex (2.13.3-1) unstable; urgency=medium
 
   * A browser start with an empty queue no longer reads Drive. The 3-second
