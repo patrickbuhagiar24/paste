@@ -111,6 +111,9 @@ jobs:
           # The public Pages archive is always signed; unsigned builds exist
           # only for local testing via scripts/setup-apt-repo.sh.
           PASSTEX_SIGNED: '1'
+          # Deliberately not set: build-apt-repository.sh derives it from the
+          # last commit, so Release (Date, Valid-Until) is reproducible. The
+          # same checkout must publish the same metadata twice.
         run: ./scripts/build-apt-repository.sh dist site "$APT_SUITE"
 
       - name: Sign and verify the archive

@@ -15,6 +15,21 @@
 # InRelease, Release.gpg and the public keyrings to the same output directory.
 set -euo pipefail
 export LC_ALL=C
+cd "$(dirname "$0")/.."
+
+# Reproducible metadata. The Release file is dated from SOURCE_DATE_EPOCH, and
+# without it "now" would make two builds of the same commit differ. This script
+# therefore derives the same value build-deb.sh does (the last commit time),
+# instead of depending on the caller remembering to export it. A release
+# tarball with no .git falls back to a fixed date, which beats "now" as well.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH="$(git log -1 --format=%ct 2>/dev/null || true)"
+  SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-315532800}"
+fi
+case "$SOURCE_DATE_EPOCH" in
+  ''|*[!0-9]*) echo "error: SOURCE_DATE_EPOCH must be a unix timestamp" >&2; exit 2 ;;
+esac
+export SOURCE_DATE_EPOCH
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
   echo "Usage: $0 PACKAGE_DIRECTORY OUTPUT_DIRECTORY [SUITE]" >&2

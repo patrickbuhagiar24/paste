@@ -252,6 +252,40 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
 
 
 @NEEDS_DPKG
+def test_builder_dates_the_archive_from_the_commit_without_being_told(
+    tmp_path: Path,
+) -> None:
+    """Two builds of the same checkout must agree, with no variable to export.
+
+    `Date: now` made every build differ, so checksums.txt could not be checked
+    by rebuilding. The builder now derives the same SOURCE_DATE_EPOCH
+    build-deb.sh uses, and it must do so from any working directory.
+    """
+    packages = _build_test_package(tmp_path)
+
+    def release(target: Path) -> str:
+        subprocess.run(
+            [str(SCRIPTS / "build-apt-repository.sh"), str(packages), str(target), "stable"],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,  # not the repository root: the script must not care
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "PASSTEX_SIGNED": "0"},
+        )
+        return _text(target / "dists" / "stable" / "Release")
+
+    first, second = release(tmp_path / "a"), release(tmp_path / "b")
+    assert first == second, "the Release file is not reproducible"
+    assert "Date: " in first and "Valid-Until: " in first
+
+
+def test_builder_derives_the_epoch_instead_of_waiting_for_it() -> None:
+    """The rule lives in the script, not in whoever calls it."""
+    script = _text(SCRIPTS / "build-apt-repository.sh")
+    assert "git log -1 --format=%ct" in script, "the epoch is not derived from the commit"
+    assert "export SOURCE_DATE_EPOCH" in script, "a derived value must reach the Python writer"
+
+
+@NEEDS_DPKG
 def test_builder_refuses_to_publish_more_than_one_version(tmp_path: Path) -> None:
     """An installed base never needs two builds of the same package: the older
     file would sit in the pool forever, unreachable but public."""

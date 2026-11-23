@@ -26,8 +26,12 @@ and an older file would stay public forever without being reachable.
 `dists/stable/Release` carries `Date` and `Valid-Until` (30 days apart). APT
 refuses expired metadata instead of trusting a stale mirror, so a repository
 that stops being updated becomes a visible error rather than a silent risk.
-Both fields come from `SOURCE_DATE_EPOCH` when it is set, which is what keeps a
-rebuild of the same commit byte-identical.
+Both fields come from `SOURCE_DATE_EPOCH`, which is what keeps a rebuild of the
+same commit byte-identical. `scripts/build-apt-repository.sh` derives that value
+itself (the last commit time, exactly as `scripts/build-deb.sh` does) and works
+from any directory, so a rebuild does not depend on remembering to export it.
+The test suite checks that two builds of one checkout produce the same `Release`
+file.
 
 The suite is **`stable`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
 
