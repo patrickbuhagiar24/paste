@@ -36,12 +36,23 @@ pastex (2.19.0-1) unstable; urgency=medium
     copy was tried before dropping another account's snapshot, so a library on
     screen could lose its bodies while an off-screen library kept its place.
     Nothing a user notices changes while the snapshot fits.
+  * APT metadata is now dated and expiring: dists/<suite>/Release carries
+    Valid-Until 30 days after Date, so an archive that stops being updated is
+    refused by apt instead of trusted indefinitely. Both fields follow
+    SOURCE_DATE_EPOCH, which keeps a rebuild of the same commit byte-identical.
+    Acquire-By-Hash is no longer restated, because this archive has no by-hash
+    tree and the client default already matches.
+  * The pool publishes exactly one version. scripts/build-apt-repository.sh
+    refuses an input directory holding two versions instead of uploading the
+    older one alongside, and the test suite checks that refusal.
   * New scripts/reset-pastex-state.sh clears the extension's local storage and
     says so: Drive is never touched.
   * DEVELOPMENT.md gains rule 6: one language, English. tests/test_language.py
-    fails when Indonesian text returns to a living document, script or shipped
-    module, when a renamed document is left behind as a copy, or when a
-    document link points at a file that no longer exists.
+    now scans every tracked file, tests and fixtures included, for Indonesian
+    words (the last one was the sample text "baris pertama\n\nbaris kedua" in
+    a content test, now "first line\n\nsecond line"), fails on a letter outside
+    English and the UI glyph set, and fails when a renamed document is left
+    behind as a copy or a document link points at a file that no longer exists.
   * New tests/test_development_policy.py fails when shipped code keeps a
     compatibility path, when a persisted shape loses its version, or when the
     policy document stops describing the three classes.

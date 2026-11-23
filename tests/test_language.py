@@ -1,13 +1,15 @@
 """The project speaks one language: English.
 
-This guard covers the documents, the shipped JavaScript, and the shell scripts
-a user runs. It is a word list, not a translator: it catches an Indonesian
-sentence that slipped back into a file, which is exactly the failure it can
-detect reliably. Historical `debian/changelog` entries are exempt, because a
-changelog records what happened under the names that existed then.
+Three layers, weakest to strongest:
 
-The word list deliberately holds only words that have no English spelling
-collision, so a false positive cannot force a rewrite of correct English.
+1. an explicit word list, so the failure names the language;
+2. every tracked text file, including tests and fixtures — that is where the
+   last Indonesian sentence hid (`baris pertama` in a test fixture);
+3. letters outside ASCII, which no English document needs beyond the UI glyphs
+   this project actually uses.
+
+Historical `debian/changelog` entries are exempt from the word list, because a
+changelog records what happened under the names that existed then.
 """
 
 import re
@@ -31,13 +33,31 @@ LIVING_FILES = (
 
 CODE_GLOBS = ("extension/*.js", "scripts/*.sh", "tests/*.py", "debian/postinst", "debian/postrm")
 
+# Every tracked file is scanned by the two broad checks below: a fixture or a
+# comment is project content just like a document. Binary files are skipped.
+BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".deb", ".crx", ".gz")
+
+# Non-ASCII characters the project uses on purpose: UI glyphs, typography and
+# the German/French accented words in the UTF-8 test fixture.
+ALLOWED_NON_ASCII = set("—–…→←↑↓↻▸▾▼│•·×≥≥⚡＋☑☐⚠✎📝📄📁🗑✓😀üöéï’‘“”§≤")
+
 # Indonesian function words and everyday nouns. None of these are English words.
 INDONESIAN = (
+    # function words
     "yang", "untuk", "tidak", "dengan", "adalah", "sudah", "belum", "harus",
-    "karena", "atau", "jika", "juga", "hanya", "bisa", "berkas", "tombol",
-    "halaman", "pengguna", "tautan", "unduh", "unggah", "perubahan",
-    "memakai", "dipakai", "tersebut", "sebagai", "antara", "masih", "selalu",
-    "mungkin", "supaya", "sebelum", "sesudah", "bilah", "pohon", "caranya",
+    "karena", "atau", "jika", "juga", "hanya", "bisa", "masih", "selalu",
+    "mungkin", "supaya", "sebelum", "sesudah", "sebagai", "antara", "tetapi",
+    "namun", "bahwa", "oleh", "secara", "setiap", "semua", "tanpa", "saat",
+    "ketika", "sambil", "dalam", "atas", "bawah", "lebih", "paling", "sangat",
+    # everyday nouns a fixture or UI string tends to use
+    "berkas", "tombol", "halaman", "pengguna", "tautan", "unduh", "unggah",
+    "perubahan", "bilah", "pohon", "pilihan", "kesalahan", "petunjuk",
+    "panduan", "keamanan", "jendela", "catatan", "contoh", "baris", "teks",
+    "tulisan", "daftar", "urutan", "warna", "huruf", "angka",
+    # ordinals and verbs that appear in sample text
+    "pertama", "kedua", "ketiga", "keempat", "kelima", "baru", "lama",
+    "memakai", "dipakai", "tersebut", "caranya", "membuat", "membaca",
+    "menulis", "menghapus", "menyimpan", "membuka", "menutup", "berjalan",
 )
 
 PATTERN = re.compile(r"\b(?:" + "|".join(INDONESIAN) + r")\b", re.IGNORECASE)
@@ -64,6 +84,54 @@ def test_living_files_and_code_are_english():
         "Indonesian text is back in a living file:\n  "
         + "\n  ".join(findings[:10])
         + "\nSee DEVELOPMENT.md: one language, English."
+    )
+
+
+def _tracked_text_files():
+    import subprocess
+
+    names = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    for name in names:
+        if name.lower().endswith(BINARY_SUFFIXES):
+            continue
+        path = ROOT / name
+        try:
+            yield path, path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
+
+
+def test_every_tracked_file_is_english():
+    """The word list applies everywhere, tests and fixtures included."""
+    me = Path(__file__).resolve()
+    findings = []
+    for path, text in _tracked_text_files():
+        if path.resolve() == me or path.name == "changelog":
+            continue
+        for match in PATTERN.finditer(text):
+            line = text[: match.start()].count("\n") + 1
+            findings.append(f"{path.relative_to(ROOT)}:{line}: {match.group(0)!r}")
+    assert not findings, (
+        "Indonesian text is back in the project:\n  "
+        + "\n  ".join(findings[:10])
+        + "\nSee DEVELOPMENT.md rule 6: one language, English."
+    )
+
+
+def test_no_letters_from_another_script():
+    """English needs no non-Latin letter; a stray one means pasted foreign text."""
+    findings = []
+    for path, text in _tracked_text_files():
+        for index, character in enumerate(text):
+            if ord(character) <= 127 or character in ALLOWED_NON_ASCII:
+                continue
+            line = text[:index].count("\n") + 1
+            findings.append(f"{path.relative_to(ROOT)}:{line}: U+{ord(character):04X} {character!r}")
+    assert not findings, (
+        "a character outside English and the project's own glyph set was found:\n  "
+        + "\n  ".join(findings[:10])
     )
 
 

@@ -123,6 +123,45 @@ def test_release_writer_emits_suite_checksums(tmp_path: Path) -> None:
     assert "main/binary-all/Packages.gz" in release
 
 
+def test_release_writer_publishes_a_validity_window_and_no_redundant_field(
+    tmp_path: Path,
+) -> None:
+    """A Release file must expire, and must not restate a default."""
+    distribution = tmp_path / "dists" / "stable"
+    index = distribution / "main" / "binary-all"
+    index.mkdir(parents=True)
+    (index / "Packages").write_text("Package: pastex\n", encoding="utf-8")
+
+    subprocess.run(
+        [sys.executable, str(SCRIPTS / "write-apt-release.py"), str(distribution), "stable"],
+        check=True,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", "SOURCE_DATE_EPOCH": "1700000000"},
+    )
+
+    release = _text(distribution / "Release")
+    assert "Date: Tue, 14 Nov 2023 22:13:20 GMT" in release, "Date ignores SOURCE_DATE_EPOCH"
+    assert "Valid-Until: Thu, 14 Dec 2023 22:13:20 GMT" in release, "no 30-day window"
+    assert "Acquire-By-Hash" not in release, "the archive has no by-hash tree to point at"
+
+
+def test_release_writer_is_reproducible_from_the_commit_time(tmp_path: Path) -> None:
+    """Same SOURCE_DATE_EPOCH, same Commit: two runs must agree byte for byte."""
+    def run(target: Path) -> bytes:
+        index = target / "main" / "binary-all"
+        index.mkdir(parents=True)
+        (index / "Packages").write_text("Package: pastex\n", encoding="utf-8")
+        subprocess.run(
+            [sys.executable, str(SCRIPTS / "write-apt-release.py"), str(target), "stable"],
+            check=True,
+            capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "SOURCE_DATE_EPOCH": "1700000000"},
+        )
+        return (target / "Release").read_bytes()
+
+    assert run(tmp_path / "a") == run(tmp_path / "b")
+
+
 def test_release_writer_rejects_an_invalid_suite(tmp_path: Path) -> None:
     distribution = tmp_path / "dist"
     distribution.mkdir()
@@ -144,12 +183,13 @@ NEEDS_DPKG = pytest.mark.skipif(
 )
 
 
-def _build_test_package(tmp_path: Path) -> Path:
-    stage = tmp_path / "deb" / "DEBIAN"
+def _build_test_package(tmp_path: Path, version: str = "1.6.8-1") -> Path:
+    root = tmp_path / "deb" / (version if version != "1.6.8-1" else "")
+    stage = root / "DEBIAN"
     stage.mkdir(parents=True)
     (stage / "control").write_text(
         "Package: pastex\n"
-        "Version: 1.6.8-1\n"
+        f"Version: {version}\n"
         "Section: utils\n"
         "Priority: optional\n"
         "Architecture: all\n"
@@ -158,14 +198,14 @@ def _build_test_package(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     packages = tmp_path / "deb-out"
-    packages.mkdir()
+    packages.mkdir(exist_ok=True)
     subprocess.run(
         [
             "dpkg-deb",
             "--build",
             "--root-owner-group",
-            str(tmp_path / "deb"),
-            str(packages / "pastex_1.6.8-1_all.deb"),
+            str(root),
+            str(packages / f"pastex_{version}_all.deb"),
         ],
         check=True,
         capture_output=True,
@@ -209,6 +249,27 @@ def test_builder_produces_a_standard_archive(tmp_path: Path) -> None:
     assert (site / ".nojekyll").is_file()
     assert (site / "index.html").is_file()
     assert not (site / "override").exists()
+
+
+@NEEDS_DPKG
+def test_builder_refuses_to_publish_more_than_one_version(tmp_path: Path) -> None:
+    """An installed base never needs two builds of the same package: the older
+    file would sit in the pool forever, unreachable but public."""
+    packages = _build_test_package(tmp_path)
+    _build_test_package(tmp_path, version="1.6.9-1")
+    site = tmp_path / "site"
+
+    result = subprocess.run(
+        [str(SCRIPTS / "build-apt-repository.sh"), str(packages), str(site), "stable"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "PASSTEX_SIGNED": "0"},
+    )
+
+    assert result.returncode == 1
+    assert "Publish one version at a time" in result.stderr
+    assert not (site / "dists").exists(), "a refused build leaves no archive behind"
 
 
 @NEEDS_DPKG

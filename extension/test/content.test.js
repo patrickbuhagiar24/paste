@@ -121,7 +121,7 @@ test("another extension cannot ask a page to insert text", async () => {
 test("multiline snippets are inserted into a textarea verbatim", async () => {
   const page = setupContent();
   page.target.focus(); await tick();
-  const text = "baris pertama\n\nbaris kedua  \r\nbaris ketiga";
+  const text = "first line\n\nsecond line  \r\nthird line";
   let result;
   page.events.message({ type: "pastex-insert", text }, { id: "pastex-extension-id" }, (response) => { result = response; });
   assert.equal(result.ok, true);

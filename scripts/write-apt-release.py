@@ -9,12 +9,31 @@ trust the host with ``[trusted=yes]``.
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
 
 SUITE_PATTERN = "abcdefghijklmnopqrstuvwxyz0123456789-"
+
+# How long a client may keep using this metadata without asking again. APT
+# refuses an archive whose Valid-Until has passed, which is what turns a stale
+# mirror into a visible error instead of a silent security hole.
+VALID_DAYS = 30
+
+
+def release_date() -> datetime:
+    """The moment the archive is dated.
+
+    SOURCE_DATE_EPOCH wins when it is set, so rebuilding the same commit with
+    the same key produces byte-identical metadata (README: reproducible
+    builds). Otherwise the current time is used.
+    """
+    epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if epoch.isdigit():
+        return datetime.fromtimestamp(int(epoch), tz=timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def write_release(distribution: Path, suite: str, *, origin: str = "Pastex") -> None:
@@ -26,16 +45,20 @@ def write_release(distribution: Path, suite: str, *, origin: str = "Pastex") -> 
     )
     if not files:
         raise ValueError("Cannot publish an archive without package indices.")
+    # Date and Valid-Until are RFC 2822 in UTC, as APT expects. No
+    # Acquire-By-Hash: this archive has no by-hash/ tree, and the default is
+    # what a client without the field would assume anyway.
+    date = release_date()
     fields = [
         f"Origin: {origin}",
         f"Label: {origin}",
         f"Suite: {suite}",
         f"Codename: {suite}",
-        f"Date: {format_datetime(datetime.now(timezone.utc), usegmt=True)}",
+        f"Date: {format_datetime(date, usegmt=True)}",
+        f"Valid-Until: {format_datetime(date + timedelta(days=VALID_DAYS), usegmt=True)}",
         "Architectures: all",
         "Components: main",
         f"Description: {origin} packages for Linux Mint ({suite})",
-        "Acquire-By-Hash: no",
     ]
     for label, algorithm in (
         ("MD5Sum", "md5"),

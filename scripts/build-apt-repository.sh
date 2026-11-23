@@ -55,7 +55,21 @@ pool="$staging/pool/main/p/pastex"
 dist="$staging/dists/$suite"
 mkdir -p "$pool" "$dist/main/binary-all"
 
-cp "${packages[@]}" "$pool/"
+# One version in the pool, on purpose. APT only ever installs one version of an
+# architecture-independent package, so publishing older builds would keep dead
+# files online forever and let a user pin a version the changelog has already
+# moved past. The rule is stated in DEVELOPMENT.md: one name, one path.
+versions=()
+for package in "${packages[@]}"; do
+  versions+=("$(dpkg-deb --field "$package" Version)")
+done
+mapfile -t versions < <(printf '%s\n' "${versions[@]}" | sort -u)
+if [[ ${#versions[@]} -gt 1 ]]; then
+  echo "Publish one version at a time; found: ${versions[*]}" >&2
+  exit 1
+fi
+version=${versions[0]}
+cp "$package_dir"/*_"$version"_*.deb "$pool/"
 chmod 0644 "$pool"/*.deb
 
 # Supply the archive override entries from each package's own control fields.

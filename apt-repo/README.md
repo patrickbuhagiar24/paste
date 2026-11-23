@@ -18,6 +18,17 @@ dists/stable/main/binary-all/Packages
 dists/stable/main/binary-all/Packages.gz
 ```
 
+The pool holds **one** version at a time: only the build that the index names.
+`scripts/build-apt-repository.sh` refuses a directory with two versions in it,
+because APT installs a single version of an architecture-independent package
+and an older file would stay public forever without being reachable.
+
+`dists/stable/Release` carries `Date` and `Valid-Until` (30 days apart). APT
+refuses expired metadata instead of trusting a stale mirror, so a repository
+that stops being updated becomes a visible error rather than a silent risk.
+Both fields come from `SOURCE_DATE_EPOCH` when it is set, which is what keeps a
+rebuild of the same commit byte-identical.
+
 The suite is **`stable`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
 
 ```text
