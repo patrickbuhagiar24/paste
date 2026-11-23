@@ -100,6 +100,56 @@ Satu hal yang sering terlewat: mengaktifkan *link sharing* pada berkas config be
 
 ---
 
+## Kombinasi yang tidak berhasil
+
+Ada usulan yang tampak masuk akal: **"service-account.json" dan "pastex-sites.json"
+diatur untuk SA sebagai Viewer, sedangkan "pastex-google-drive.json" untuk SA
+sebagai Editor.** Kombinasi ini **tidak berfungsi**, karena tiga alasan yang
+saling bebas:
+
+1. **Isinya sama-sama butuh diunduh anonim.** Ketiganya lewat `manifest.fetchJson`
+   yang sama, tanpa header `Authorization` (`extension/config-source.js` baris 46
+   dan 87). Izin apa pun yang diberikan *kepada SA* tidak mengubah apa pun —
+   permintaannya bukan berasal dari SA.
+2. **Pemilih berkas hanya memilih `manifest.json` lokal.** `sidepanel.js` baris 735
+   memakai `showOpenFilePicker` untuk satu berkas manifest; isi manifest itu
+   hanya tiga tautan, dan ketiganya tetap diunduh dari Drive. Tidak ada jalur
+   di mana ekstensi membaca berkas config dengan kredensial.
+3. **Editor pada `pastex-google-drive.json` tidak diperlukan.** Berkas itu hanya
+   berisi `folder_id`. Yang butuh kuasa tulis adalah **folder snippet**, bukan
+   berkas yang menunjuk ke folder itu.
+
+### Apa yang terjadi untuk setiap kombinasi
+
+| Izin pada berkas config | Penerima | Hasil |
+| --- | --- | --- |
+| Privat | — | GAGAL: HTTP 404 / halaman login |
+| **Viewer** | SA | **GAGAL** — SA tidak dipakai untuk mengunduh |
+| Editor | SA | GAGAL, dan sia-sia: memberi kuasa tulis ke berkas yang tidak pernah ditulis |
+| **Anyone with the link → Viewer** | siapa pun | **BERHASIL** |
+
+Pesan galat yang akan Anda lihat, tergantung respons Google:
+
+- `Could not download a linked configuration file (HTTP 404).` — berkas tidak
+  publik.
+- `A linked configuration file is not valid JSON. Check that each Drive link is
+  downloadable without signing in.` — Google mengembalikan halaman login HTML
+  dengan status 200.
+
+Kalimat terakhir pada pesan kedua itu adalah petunjuk penulisnya sendiri: yang
+menentukan adalah **tautan bisa diunduh tanpa login**, bukan izin SA.
+
+### Kalau Anda ingin config tidak publik
+
+Itu tidak didukung oleh alur tautan ini. Satu-satunya cara agar ketiga berkas
+tidak dapat diunduh anonim adalah berhenti memakai tautan — dan ekstensi tidak
+menyediakan mode itu. Jadi pilihannya nyata: **terima bahwa berkas config bisa
+dibaca siapa pun yang memegang tautannya**, atau jangan pakai alur tautan.
+
+Yang bisa Anda lakukan hanyalah memperkecil kerugian bila tautan bocor:
+kunci khusus Pastex (bukan kunci dari proyek lain), rotasi bila bocor, dan
+akses SA dibatasi ke folder snippet saja.
+
 ## Jawaban singkat untuk pertanyaan Anda
 
 - **`pastex-sites.json`** → **Viewer**, diberikan kepada **"Anyone with the link"** — bukan kepada service account, dan **bukan Editor**.
