@@ -1,5 +1,30 @@
 # Izin Drive untuk berkas konfigurasi Pastex
 
+## Aturan yang menentukan semuanya
+
+> **Editor hanya dibutuhkan untuk data yang DITULIS. Berkas config tidak pernah
+> ditulis oleh ekstensi — oleh siapa pun, setelah Anda mengunggahnya sekali.**
+
+Akibatnya:
+
+| Data | Disimpan di | Dibaca oleh | Ditulis oleh |
+| --- | --- | --- | --- |
+| ID folder snippet | `pastex-google-drive.json` | browser, **anonim** | tidak pernah |
+| Daftar situs | `pastex-sites.json` | browser, **anonim** | tidak pernah |
+| Kunci akun layanan | `service-account.json` | browser, **anonim** | tidak pernah |
+| **Isi snippet + label** | **folder snippet** | **SA, pakai token** | **SA, pakai token** |
+
+Hanya baris terakhir yang butuh **Editor**. Tiga baris pertama hanya dibaca,
+dan dibacanya **sebelum token ada**.
+
+### Kunci tidak bisa mengunduh dirinya sendiri
+
+Ini inti masalahnya. Untuk memakai kunci, ekstensi harus mengunduhnya lebih
+dulu. Kalau mengunduh kunci itu sendiri butuh kunci, tidak ada titik masuk.
+Karena itu `service-account.json` **wajib** bisa diunduh tanpa kredensial —
+dan seluruh berkas config mengikuti aturan yang sama karena dibaca pada tahap
+yang sama.
+
 ## Ringkasan satu tabel
 
 | Objek | Siapa yang mengakses | Izin | Kenapa |
