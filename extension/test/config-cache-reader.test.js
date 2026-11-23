@@ -48,7 +48,6 @@ test("the worker reads configuration from storage without any folder access", as
   assert.equal(drive.serviceAccount.client_email, account.client_email);
   assert.equal(drive.driveError, "");
   assert.deepEqual((await config.readSites()).allowedSites, ["https://example.org"]);
-  assert.equal(await config.hasConfiguration(), true);
 });
 
 test("folder_id wins over folder_url and a missing id is reported, not thrown at read time", async () => {
@@ -87,13 +86,11 @@ test("sites fail closed and a missing configuration explains what to do", async 
   const none = load(empty).create(empty);
   await assert.rejects(none.readConfig(), /Choose a configuration folder/);
   await assert.rejects(none.readSites(), /Choose a configuration folder/);
-  assert.equal(await none.hasConfiguration(), false);
 });
 
 test("invalidate clears the stored configuration", async () => {
   const store = storage(record(goodFiles()));
   const config = load(store).create(store);
   await config.invalidate();
-  assert.equal(await config.hasConfiguration(), false);
   await assert.rejects(config.readConfig(), /Choose a configuration folder/);
 });

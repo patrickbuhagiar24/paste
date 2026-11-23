@@ -478,7 +478,13 @@ def test_configuration_comes_only_from_a_user_selected_folder():
     # The folder is scanned once by the panel and never opened by the worker.
     assert "showDirectoryPicker" not in worker
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
-    assert "indexedDB" in (EXT / "handle-store.js").read_text()
+    # The folder handle is used once, inside the picker gesture, and never
+    # stored: no IndexedDB layer exists for it any more.
+    assert not (EXT / "handle-store.js").exists()
+    assert not (EXT / "config-import.js").exists()
+    assert "indexedDB" not in script
+    assert "PastexHandleStore" not in script
+    assert "PastexConfigImport" not in script
     assert "nativeMessaging" not in _manifest()["permissions"]
 
 
@@ -493,8 +499,10 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "Google Drive • session cache · " in script
     assert "Session cache: " not in script
     assert "Snippets loaded from session cache." not in script
-    assert "pastex_collapsed" in (EXT / "library.js").read_text(encoding="utf-8")
-    assert "pastex_collapsed" in (EXT / "drive.js").read_text(encoding="utf-8")
+    # The central index is the only writer of order and collapse state; the
+    # per-item labels are read-only history.
+    assert "pastex_index" in (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "PastexDrive.setOrder" not in script
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content
     assert 'typeof node.text === "string" ? node.text : ""' in script

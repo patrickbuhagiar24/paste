@@ -275,29 +275,31 @@ test("Drive pagination rejects a repeated token instead of loading forever", asy
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
 });
 
-test("Drive reorder merges properties instead of erasing collapse state", async () => {
-  const fetchImpl = stubFetch((url, options, n) => n === 1
-    ? jsonResponse({ properties: { pastex_order: "4", pastex_collapsed: "1" } })
-    : jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
-  await Drive.setOrder("tok", "id", 2, fetchImpl);
+test("the central index is one PATCH that preserves other properties", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: { pastex_other: "keep" } }));
+  await Drive.setIndex("tok", "root", { order: { root: ["a"] }, collapsed: {} }, fetchImpl);
   assert.equal(fetchImpl.calls[1].options.method, "PATCH");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
+  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), {
+    properties: {
+      pastex_other: "keep",
+      pastex_index: JSON.stringify({ order: { root: ["a"] }, collapsed: {} }),
+    },
+  });
   assert.equal(new URL(fetchImpl.calls[1].url).searchParams.get("supportsAllDrives"), "true");
 });
 
-test("Drive collapse merges properties instead of erasing saved order", async () => {
-  const fetchImpl = stubFetch((url, options, n) => n % 2 === 1
-    ? jsonResponse({ properties: { pastex_order: "3", pastex_collapsed: "0" } })
-    : jsonResponse({ id: "folder", properties: { pastex_collapsed: "1" } }));
-  await Drive.setCollapsed("tok", "folder", true, fetchImpl);
-  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { properties: { pastex_order: "3", pastex_collapsed: "1" } });
-  await Drive.setCollapsed("tok", "folder", false, fetchImpl);
-  assert.deepEqual(JSON.parse(fetchImpl.calls[3].options.body), { properties: { pastex_order: "3", pastex_collapsed: "0" } });
+test("no per-item order or collapse writer is exported any more", () => {
+  // Reorder and fold share the root label; a per-item writer would be a second
+  // source of truth for the same fact.
+  assert.equal(Drive.setOrder, undefined);
+  assert.equal(Drive.setCollapsed, undefined);
 });
 
 test("known Drive properties avoid the pre-PATCH GET while preserving other keys", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "id", properties: { pastex_order: "2" } }));
-  await Drive.setOrder("tok", "id", 2, fetchImpl, { pastex_order: "4", pastex_collapsed: "1" });
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: {} }));
+  await Drive.setIndex("tok", "root", { order: {}, collapsed: {} }, fetchImpl, { pastex_index: "old", pastex_other: "1" });
   assert.equal(fetchImpl.calls.length, 1, "metadata already loaded with listChildren must not be fetched again");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), { properties: { pastex_order: "2", pastex_collapsed: "1" } });
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
+    properties: { pastex_index: JSON.stringify({ order: {}, collapsed: {} }), pastex_other: "1" },
+  });
 });

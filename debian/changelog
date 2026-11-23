@@ -1,3 +1,35 @@
+pastex (2.16.0-1) unstable; urgency=medium
+
+  * Remove every layer the product no longer runs. A module that no page or
+    worker loads is a second implementation that drifts, so it is gone rather
+    than kept "just in case":
+      - handle-store.js (IndexedDB folder handle) and config-import.js
+        (folder-file discovery) were left over from the folder-handle design;
+        the panel scans the folder directly and stores the parsed JSON.
+      - config-source.js no longer takes unused store/discovery arguments, and
+        its write-only exports describe(), clearCache(), invalidate() and
+        readCached() are removed. create(sites, cacheStore) is the whole API.
+      - drive.js no longer exports the per-item writers setOrder/setCollapsed.
+        Reorder and fold have written the single pastex_index label since
+        2.12; a second writer for the same fact is a second source of truth.
+        The per-item labels are still read for libraries written by older
+        versions.
+      - store.js loses flatten(), findById() and search(); the panel uses
+        createIndex(), which returns the same lookups precomputed.
+      - library.js stops exporting loadTree, parseIndex, nodeSignature and
+        emptyIndex; cache.js stops exporting pending and invalidate; the
+        config cache reader stops exporting hasConfiguration; drive.js stops
+        exporting DRIVE_URL, SCOPES, bytesToBase64Url and pemToPkcs8.
+  * No behaviour changes: this release only deletes code that was unreachable
+    from sidepanel.html, the manifest and the worker.
+  * New extension/test/dead-code.test.js fails the build when a shipped file
+    is not reachable, when sidepanel.html loads a module that does not provide
+    a Pastex* global the panel uses, or when the per-item Drive writers come
+    back.
+  * ARSITEKTUR.md explains the project to a reader who does not program.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
+
 pastex (2.15.1-1) unstable; urgency=medium
 
   * The folder check now reports every problem at once. It used to throw on the

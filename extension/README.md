@@ -66,6 +66,9 @@ cache afterwards, so opening Pastex later never opens the folder again, not even
 after a browser restart. Choosing a new folder replaces the cache; a folder that
 fails validation leaves the previous cache untouched.
 
+There is no folder-handle store: the grant is used inside the picker gesture
+and never persisted, so `extension/handle-store.js` no longer exists.
+
 This is why the worker needs no offscreen document: a File System Access handle
 is not usable outside the page that holds it, and asking for one from an
 extension document fails with *"The request is not allowed by the user agent or

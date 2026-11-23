@@ -411,7 +411,6 @@
       signatures: result.signatures, index: result.index, cursors: result.cursors };
   }
 
-  return { connect: connect, loadTree: loadTree, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
-    parseIndex: parseIndex, cloneIndex: cloneIndex, nodeSignature: nodeSignature,
-    emptyIndex: emptyIndex };
+  return { connect: connect, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
+    cloneIndex: cloneIndex };
 });

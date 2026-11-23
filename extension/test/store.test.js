@@ -20,42 +20,6 @@ function sampleTree() {
   ];
 }
 
-test("flatten returns texts in tree order", () => {
-  const ids = Store.flatten(sampleTree()).map((n) => n.id);
-  assert.deepEqual(ids, ["t1", "t2", "t3"]);
-});
-
-test("findById finds nested nodes", () => {
-  assert.equal(Store.findById(sampleTree(), "t2").name, "Follow Up");
-  assert.equal(Store.findById(sampleTree(), "missing"), null);
-});
-
-test("search matches names before contents", () => {
-  const tree = sampleTree();
-  assert.deepEqual(
-    Store.search(tree, "").map((n) => n.id),
-    ["t1", "t2", "t3"]
-  );
-  assert.deepEqual(
-    Store.search(tree, "repl").map((n) => n.id),
-    ["t1"]
-  );
-  // "ping" is body-only; "hello" is body-only too — both found.
-  assert.deepEqual(
-    Store.search(tree, "ping").map((n) => n.id),
-    ["t2"]
-  );
-  // Name hit sorts before body hit.
-  const mixed = [
-    { id: "body", kind: "text", name: "zzz", text: "alpha here", updatedAt: "" },
-    { id: "name", kind: "text", name: "alpha title", text: "nothing", updatedAt: "" },
-  ];
-  assert.deepEqual(
-    Store.search(mixed, "alpha").map((n) => n.id),
-    ["name", "body"]
-  );
-});
-
 test("multi-select moves blocks within each folder and ignores selected descendants on delete", () => {
   const tree = [
     { id: "a", kind: "text" }, { id: "b", kind: "text" },
@@ -76,4 +40,10 @@ test("createIndex precomputes id, folder and lowercase search lookups", () => {
   assert.equal(index.texts.length, 3);
   assert.deepEqual(index.search("PING").map((n) => n.id), ["t2"]);
   assert.deepEqual(index.search("").map((n) => n.id), ["t1", "t2", "t3"]);
+  // Name hits sort before body hits, and an empty query returns every text.
+  const mixed = [
+    { id: "body", kind: "text", name: "zzz", text: "alpha here" },
+    { id: "name", kind: "text", name: "alpha title", text: "nothing" },
+  ];
+  assert.deepEqual(Store.createIndex(mixed).search("alpha").map((n) => n.id), ["name", "body"]);
 });

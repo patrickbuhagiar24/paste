@@ -339,10 +339,14 @@ dari halaman yang bukan situs diizinkan/bukan frame utama.
 8. **`setStatus` kini tahu "nada" hasil.** Logika status masih tersebar di
    banyak tempat; bila tumbuh lagi, pertimbangkan satu helper
    `report(kind, message)` agar tidak ada pemanggilan yang lupa memberi nada.
-9. **`config-reader.js` hanya 15 baris** — masih wajar, tetapi lapisan
-   offscreen + handle-store + config-source berarti tiga jalur yang harus
-   dijaga konsisten. Dokumentasikan diagram alir konfigurasi singkat di
-   README extension sudah cukup.
+9. ~~**`config-reader.js` hanya 15 baris** — lapisan offscreen + handle-store +
+   config-source berarti tiga jalur yang harus dijaga konsisten.~~
+   **Selesai di 2.16.0:** `handle-store.js` dan `config-import.js` dihapus,
+   `config-source.js` tinggal satu jalur (`create(sites, cacheStore)` →
+   `chooseFolder`/`readConfig`/`readSites`), dan
+   `extension/test/dead-code.test.js` menolak berkas yang tidak dimuat apa pun.
+   Ringkasan untuk pembaca non-programmer ada di
+   [ARSITEKTUR.md](ARSITEKTUR.md).
 10. **`debian/changelog` naik versi setiap perubahan UI** — bagus untuk
     rilis, tetapi pertimbangkan entri "Unreleased" di `CHANGELOG.md`
     terpisah agar commit kecil tidak memaksa bump versi.

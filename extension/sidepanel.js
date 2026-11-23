@@ -11,9 +11,7 @@
   var Store = window.PastexStore;
   // The panel scans the chosen folder once and stores the parsed files, so the
   // worker and later panel opens read the cache instead of the folder.
-  var Config = window.PastexConfigSource.create(
-    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites, chrome.storage.local
-  );
+  var Config = window.PastexConfigSource.create(window.PastexSites, chrome.storage.local);
 
   var tree = [];
   var index = Store.createIndex([]);

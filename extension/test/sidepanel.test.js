@@ -6,7 +6,6 @@ const vm = require("node:vm");
 const Store = require("../store.js");
 const Library = require("../library.js");
 const Queue = require("../queue.js");
-const ConfigImport = require("../config-import.js");
 
 class Element {
   constructor(tag) { this.tagName = tag; this.children = []; this.style = {}; this.listeners = {}; this.value = ""; this.hidden = false; this.textContent = ""; }
@@ -66,14 +65,14 @@ function panelHarness(fail, options = {}) {
     importConfigs: async (files) => { imports.push(files); return options.importResult || { imported: Object.keys(files), error: "" }; },
   };
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element("fragment"), addEventListener() {} };
-  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport,
+  const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library,
     PastexConfigSource: { create: () => ({
       chooseFolder: async (handle) => {
         imports.push(handle.name);
         return { drive: "folder drive.json", account: "folder account.json", sites: "folder sites.json" };
       },
     }) },
-    PastexHandleStore: {}, PastexSites: {},
+    PastexSites: {},
     showDirectoryPicker: async (opts) => {
       pickerCalls++;
       return options.folderPicker ? options.folderPicker(opts) : { name: "my-config" };

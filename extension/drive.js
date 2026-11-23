@@ -333,17 +333,10 @@
     });
   }
 
-  async function setOrder(token, fileId, order, fetchImpl, known) {
-    return patchProperties(token, fileId, { pastex_order: String(order) }, fetchImpl, known);
-  }
-
-  async function setCollapsed(token, fileId, collapsed, fetchImpl, known) {
-    return patchProperties(token, fileId, { pastex_collapsed: collapsed ? "1" : "0" }, fetchImpl, known);
-  }
-
   // The order and the collapse state of the whole library live in a single
   // label on the root folder, so a reorder or a collapse costs one Drive
-  // write instead of one write per item.
+  // write instead of one write per item. This is the only writer of order
+  // and collapse state: the old per-item labels are read-only history.
   async function setIndex(token, rootId, index, fetchImpl, known) {
     return patchProperties(token, rootId, { pastex_index: JSON.stringify(index) }, fetchImpl, known);
   }
@@ -404,14 +397,10 @@
 
   return {
     TOKEN_URL: TOKEN_URL,
-    DRIVE_URL: DRIVE_URL,
-    SCOPES: SCOPES,
     FOLDER_MIME: FOLDER_MIME,
     TEXT_MIME: TEXT_MIME,
-    bytesToBase64Url: bytesToBase64Url,
     stringToBase64Url: stringToBase64Url,
     base64ToBytes: base64ToBytes,
-    pemToPkcs8: pemToPkcs8,
     parseServiceAccount: parseServiceAccount,
     claimSet: claimSet,
     signJwt: signJwt,
@@ -422,8 +411,6 @@
     getFolder: getFolder,
     downloadText: downloadText,
     renameFile: renameFile,
-    setOrder: setOrder,
-    setCollapsed: setCollapsed,
     setIndex: setIndex,
     trashFile: trashFile,
     createFolder: createFolder,

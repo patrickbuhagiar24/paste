@@ -3,7 +3,6 @@
  * once when the user picks it, the parsed JSON is cached, and every later read
  * comes from the cache. Only the surface of the folder is scanned. */
 const assert = require("node:assert/strict");
-const Discovery = require("../config-import.js");
 const Sites = require("../sites.js");
 const { create } = require("../config-source.js");
 
@@ -38,12 +37,12 @@ function memoryStore(initial) {
 function harness(files, folders) {
   const store = memoryStore();
   // The cache writer and the reader must be the SAME store.
-  return { source: create(memoryStore(), Discovery, Sites, store), store: store, handle: dirHandle("config", files, folders) };
+  return { source: create(Sites, store), store: store, handle: dirHandle("config", files, folders) };
 }
 
 test("choosing a folder scans it once and stores the parsed files, not the handle", async () => {
   const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
+  const source = create(Sites, store);
   const info = await source.chooseFolder(dirHandle("config", goodFiles()));
   assert.deepEqual(info, {
     drive: "folder pastex-google-drive.json",
@@ -59,7 +58,7 @@ test("choosing a folder scans it once and stores the parsed files, not the handl
 
 test("every later read comes from the cache and never touches the folder again", async () => {
   const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
+  const source = create(Sites, store);
   let opens = 0;
   const handle = dirHandle("config", goodFiles());
   // Build a NEW handle that counts iterations. Reassigning `.values` on the
@@ -85,11 +84,11 @@ test("every later read comes from the cache and never touches the folder again",
 
 test("a new browser session reads the cache without a folder handle at all", async () => {
   const store = memoryStore();
-  const first = create(memoryStore(), Discovery, Sites, store);
+  const first = create(Sites, store);
   await first.chooseFolder(dirHandle("config", goodFiles()));
 
   // A fresh source object stands in for the next open: no handle anywhere.
-  const next = create(memoryStore(), Discovery, Sites, store);
+  const next = create(Sites, store);
   const config = await next.readConfig();
   assert.equal(config.drive.folderId, "rootfolder");
   assert.equal(config.serviceAccount.client_email, "a@example.com");
@@ -103,7 +102,7 @@ test("only the surface is scanned: subfolders are skipped, not opened", async ()
   nested.values = async function* () { nestedOpened++; yield* values(); };
 
   const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
+  const source = create(Sites, store);
   const files = goodFiles();
   files["notes.txt"] = "ignored, not .json";
   files["broken.json"] = "{ not json";
@@ -123,7 +122,7 @@ test("the three files are identified by content, so names do not matter", async 
     "project-1a2b3c.json": JSON.stringify(account),
   };
   const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
+  const source = create(Sites, store);
   await source.chooseFolder(dirHandle("config", files));
   assert.equal((await source.readConfig()).drive.folderId, "fromid");
   assert.deepEqual((await source.readSites()).allowedSites, ["https://a.example"]);
@@ -131,7 +130,7 @@ test("the three files are identified by content, so names do not matter", async 
 
 test("a broken folder never replaces a working configuration", async () => {
   const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
+  const source = create(Sites, store);
   await source.chooseFolder(dirHandle("config", goodFiles()));
   const before = JSON.stringify(store.peek());
 
@@ -145,7 +144,7 @@ test("a broken folder never replaces a working configuration", async () => {
 });
 
 test("missing pieces are named in the error", async () => {
-  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const source = create(Sites, memoryStore());
   const noDrive = { "pastex-sites.json": JSON.stringify({ allowed_sites: [] }), "service-account.json": JSON.stringify(account) };
   await assert.rejects(source.chooseFolder(dirHandle("config", noDrive)), /pastex-google-drive\.json is missing/);
 
@@ -157,7 +156,7 @@ test("missing pieces are named in the error", async () => {
 });
 
 test("every missing file is reported at once, not one per attempt", async () => {
-  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const source = create(Sites, memoryStore());
   const onlyKey = { "service-account.json": JSON.stringify(account) };
   await assert.rejects(source.chooseFolder(dirHandle("config", onlyKey)), (err) => {
     assert.match(err.message, /pastex-google-drive\.json is missing/);
@@ -168,7 +167,7 @@ test("every missing file is reported at once, not one per attempt", async () => 
 
 test("a missing file is never reported as a validation error", async () => {
   // It used to say "allowed_sites must be an array" for a file that was absent.
-  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const source = create(Sites, memoryStore());
   const noSites = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "service-account.json": JSON.stringify(account) };
   await assert.rejects(source.chooseFolder(dirHandle("config", noSites)), (err) => {
     assert.doesNotMatch(err.message, /allowed_sites/);
@@ -178,7 +177,7 @@ test("a missing file is never reported as a validation error", async () => {
 });
 
 test("a malformed file IS reported separately from a missing one", async () => {
-  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const source = create(Sites, memoryStore());
   const malformed = {
     "pastex-google-drive.json": JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/" }),
     "service-account.json": JSON.stringify({ type: "service_account" }),
@@ -193,27 +192,8 @@ test("a malformed file IS reported separately from a missing one", async () => {
 });
 
 test("reading before choosing a folder explains what to do", async () => {
-  const source = create(memoryStore(), Discovery, Sites, memoryStore());
+  const source = create(Sites, memoryStore());
   await assert.rejects(source.readConfig(), /Choose a configuration folder in Config first/);
   await assert.rejects(source.readSites(), /Choose a configuration folder in Config first/);
 });
 
-test("describe reports where the configuration came from and what is missing", async () => {
-  const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
-  assert.deepEqual(await source.describe(), { configured: false, folder: "", savedAt: "" });
-  await source.chooseFolder(dirHandle("my-config", goodFiles()));
-  const described = await source.describe();
-  assert.equal(described.configured, true);
-  assert.equal(described.folder, "my-config");
-  assert.deepEqual(described.missing, []);
-});
-
-test("clearing the cache returns to the unconfigured state", async () => {
-  const store = memoryStore();
-  const source = create(memoryStore(), Discovery, Sites, store);
-  await source.chooseFolder(dirHandle("config", goodFiles()));
-  await source.clearCache();
-  await assert.rejects(source.readConfig(), /Choose a configuration folder/);
-  assert.equal((await source.describe()).configured, false);
-});

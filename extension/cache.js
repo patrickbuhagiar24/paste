@@ -43,7 +43,6 @@
   var KEY = "pastex.drive.session.v1";
   var LKEY = "pastex.drive.local.v1";
   var FKEY = "pastex.drive.fresh.v1";
-  var FRESH_MS = 60000;
   var MAX_LOCAL = 5;
 
   function create(native, drive, library, storage, cryptoApi, persistent) {
@@ -660,8 +659,7 @@
       return removed;
     }
 
-    return { get: get, sync: sync, verify: verify, fill: fill,
-      pending: pendingCount, invalidate: invalidate, mutate: mutate,
+    return { get: get, sync: sync, verify: verify, fill: fill, mutate: mutate,
       configurationChanged: configurationChanged, mutateLocal: mutateLocal,
       dropLocal: dropLocal, current: current };
   }

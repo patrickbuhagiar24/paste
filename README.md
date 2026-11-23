@@ -75,6 +75,13 @@ the version in `extension/manifest.json` and `debian/changelog`. The release
 notes repeat the signing fingerprint so it can be cross-checked independently
 of the repository website; see [SECURITY.md](SECURITY.md).
 
+## Architecture in plain language
+
+[ARSITEKTUR.md](ARSITEKTUR.md) explains how Pastex works without code: the four
+parts a user can imagine (panel, in-page button, background worker, Google
+Drive), what happens to an edit, when Drive is contacted, and a "to change X,
+open Y" file map.
+
 ## Development and packaging
 
 ```bash

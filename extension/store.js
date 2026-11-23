@@ -11,27 +11,6 @@
       if (node.kind === "folder") walk(node.children || [], fn, trail.concat(node.name));
     });
   }
-  function flatten(nodes) {
-    var out = [];
-    walk(nodes, function (node) { if (node.kind === "text") out.push(node); });
-    return out;
-  }
-  function findById(nodes, id) {
-    var hit = null;
-    walk(nodes, function (node) { if (node.id === id) hit = node; });
-    return hit;
-  }
-  function search(nodes, query) {
-    var q = (query || "").trim().toLowerCase();
-    var texts = flatten(nodes);
-    if (!q) return texts;
-    var names = [], contents = [];
-    texts.forEach(function (node) {
-      if ((node.name || "").toLowerCase().indexOf(q) !== -1) names.push(node);
-      else if ((node.text || "").toLowerCase().indexOf(q) !== -1) contents.push(node);
-    });
-    return names.concat(contents);
-  }
   // Move each selected block one position among its siblings, never across
   // folders. Return only groups that actually changed.
   function reorderGroups(nodes, selected, direction) {
@@ -104,6 +83,6 @@
     visit(nodes);
     return result;
   }
-  return { walk: walk, flatten: flatten, findById: findById, search: search,
-    createIndex: createIndex, reorderGroups: reorderGroups, selectedRoots: selectedRoots };
+  return { walk: walk, createIndex: createIndex, reorderGroups: reorderGroups,
+    selectedRoots: selectedRoots };
 });

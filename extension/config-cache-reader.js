@@ -57,7 +57,6 @@
       readConfig: readConfig,
       readSites: readSites,
       invalidate: async function () { await storage.set({ [CACHE]: null }); },
-      hasConfiguration: async function () { return !!(await record()); },
     };
   }
   root.PastexConfigCacheReader = { create: create };

@@ -1,12 +1,12 @@
 /* Read configuration from a folder the user picked once, then keep the parsed
  * JSON in persistent storage so later reads never touch the folder again.
  *
- * Why: only the side panel has a user gesture and a folder handle. The
- * background worker reads configuration from an offscreen document, which is
- * not allowed to use File System Access handles ("The request is not allowed by
- * the user agent or the platform in the current context"). So the panel scans
- * the folder once, stores the result, and everything afterwards reads the cache.
- * The folder is a source of configuration, never its storage. */
+ * Why: only the side panel has a user gesture and a folder handle. A File
+ * System Access handle cannot be used from an extension document other than
+ * the page that holds it ("The request is not allowed by the user agent or the
+ * platform in the current context"), so the panel scans the folder once,
+ * stores the result, and everything afterwards reads that cache. The folder is
+ * a source of configuration, never its storage. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexConfigSource = factory();
@@ -16,7 +16,7 @@
   var FOLDER = "folder ", CACHE = "pastex-config-cache";
   var MAX_BYTES = 256 * 1024;
 
-  function create(store, discovery, sites, cacheStore) {
+  function create(sites, cacheStore) {
     var memoized = { config: null, configKey: "", sites: null, sitesKey: "" };
     var inFlight = new Map();
 
@@ -42,13 +42,6 @@
         folder: name || "",
         files: files,
       } });
-    }
-
-    async function clearCache() {
-      await storage().set({ [CACHE]: null });
-      memoized.config = null; memoized.configKey = "";
-      memoized.sites = null; memoized.sitesKey = "";
-      inFlight.clear();
     }
 
     /* Scan only the surface of the chosen folder: entries that are files and
@@ -201,33 +194,8 @@
       finally { inFlight.get(slot) === promise && inFlight.delete(slot); }
     }
 
-    /* Status for the panel: tells the user which files are in use. */
-    async function describe() {
-      var record = await readCache();
-      if (!record) return { configured: false, folder: "", savedAt: "" };
-      var found = identify(record.files || {});
-      return {
-        configured: true,
-        folder: record.folder || "",
-        savedAt: record.savedAt || "",
-        missing: [DRIVE, SITES, ACCOUNT].filter(function (name) { return !found.files[name]; }),
-      };
-    }
-
     return {
       chooseFolder: chooseFolder,
-      clearCache: clearCache,
-      describe: describe,
-      invalidate: clearCache,
-      readCached: async function (force) {
-        var config = await readConfigFrom(!!force);
-        var allowed = await readSitesFrom(!!force);
-        return {
-          drive: { folderId: config.drive.folderId },
-          serviceAccount: config.serviceAccount,
-          allowedSites: allowed.allowedSites,
-        };
-      },
       readConfig: readConfigFrom,
       readSites: readSitesFrom,
     };
