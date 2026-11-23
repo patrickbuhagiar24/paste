@@ -2,15 +2,20 @@
 
 ## Ringkasan
 
-| Berkas | Untuk siapa | Izin minimum | Kenapa |
-| --- | --- | --- | --- |
-| `service-account.json` | **service account** (dirinya sendiri) | — *(tidak dibagikan)* | Ini kunci milik SA itu sendiri, bukan berkas yang perlu diakses |
-| `pastex-sites.json` | **cuma Anda** (manusia) | **Privat** | Tidak ada pihak lain yang boleh membacanya |
-| `pastex-google-drive.json` | **cuma Anda** (manusia) | **Privat** | Sama, hanya berisi ID folder |
-| Folder snippet + isinya | **service account** | **Editor** | Snippet & label harus bisa ditulis |
-| Folder tempat config | **cuma Anda** | **Privat** | Ekstensi mengunduhnya lewat tautan publik |
+| Berkas | Izin di Drive | Kenapa |
+| --- | --- | --- |
+| `service-account.json` | **Anyone with the link → Viewer** | Harus bisa diunduh anonim; tapi jangan diberi akses Edit |
+| `pastex-sites.json` | **Anyone with the link → Viewer** | Sama — wajib bisa diunduh anonim |
+| `pastex-google-drive.json` | **Anyone with the link → Viewer** | Sama — wajib bisa diunduh anonim |
+| Folder snippet + isinya | **`client_email` SA → Editor** | Snippet & label harus bisa ditulis |
 
-**Intinya: dari ketiga berkas config, tidak ada satu pun yang perlu dibagikan ke service account.** Ekstensi mengunduhnya lewat tautan, bukan lewat kredensial. Justru **Viewer kepada siapa pun adalah kesalahan** — lihat bagian bahaya di bawah.
+**Koreksi penting (versi sebelumnya dokumen ini salah):** ketiga berkas config
+**tidak** boleh "Privat". Ekstensi mengunduhnya tanpa kredensial, jadi tanpa
+*link sharing* ia menerima halaman login HTML dan gagal. Yang benar:
+**Anyone with the link → Viewer**, bukan Editor, dan **jangan** ke service account.
+
+Editor pada berkas config tidak diperlukan dan justru berbahaya: itu
+memberi kuasa menulis kepada siapa pun yang memegang tautannya.
 
 ---
 
@@ -77,7 +82,7 @@ Yang perlu dibagikan ke SA **hanya** folder `Pastex`.
 
 ## Bahaya yang perlu Anda sadari
 
-Karena tautan config harus bisa diunduh tanpa login, **siapa pun yang memiliki tautan itu bisa membacanya**. Untuk `service-account.json` ini serius: siapa pun yang memegang tautannya memegang kunci akun layanan Anda.
+Karena tautan config **wajib** bisa diunduh tanpa login (kalau tidak, ekstensi gagal), **siapa pun yang memiliki tautan itu bisa membacanya**. Ini konsekuensi yang tidak bisa dihindari dari desain berbasis tautan. Untuk `service-account.json` ini serius: siapa pun yang memegang tautannya memegang kunci akun layanan Anda.
 
 README proyek menyebutnya sendiri (`extension/README.md` baris 19–22):
 
@@ -91,15 +96,22 @@ Mitigasi yang masuk akal:
 4. **Rotasi kunci** bila tautan pernah bocor.
 5. Ingat: ini adalah SA dengan scope **Drive penuh** — bukan read-only. Karena itu batasi folder yang dibagikan, jangan bagikan seluruh Drive.
 
-Satu hal yang sering terlewat: mengaktifkan *link sharing* pada berkas config berarti berkas itu **tidak** menjadi "privat" dalam arti sebenarnya. Yang bisa Anda lakukan hanyalah menjaga tautannya. Itulah kompromi desain dari alur berbasis tautan ini.
+Satu hal yang sering terlewat: mengaktifkan *link sharing* pada berkas config berarti berkas itu **tidak** menjadi "privat" dalam arti sebenarnya, dan **tidak mengaktifkannya berarti ekstensi tidak berfungsi**. Anda tidak bisa memilih keduanya — hanya bisa memilih siapa yang memegang tautannya. Itulah kompromi desain dari alur berbasis tautan ini.
 
 ---
 
 ## Jawaban singkat untuk pertanyaan Anda
 
-- **`pastex-sites.json`** → **bukan Editor, bukan juga Viewer kepada SA**. Simpan **privat**, hanya Anda.
-- **`pastex-google-drive.json`** → sama, privat.
-- **`service-account.json`** → tidak dibagikan sama sekali.
-- **Yang butuh Editor adalah folder snippet-nya**, diberikan kepada `client_email` akun layanan.
+- **`pastex-sites.json`** → **Viewer**, diberikan kepada **"Anyone with the link"** — bukan kepada service account, dan **bukan Editor**.
+- **`pastex-google-drive.json`** → sama: Viewer, Anyone with the link.
+- **`service-account.json`** → Viewer, Anyone with the link (terpaksa, karena harus diunduh anonim).
+- **Folder snippet** → **Editor**, diberikan kepada `client_email` akun layanan.
 
-Kalau yang Anda maksud "pelihat" adalah **service account** sebagai penerima izin: untuk ketiga berkas config, jawabannya **tidak perlu sama sekali** — Viewer pun tidak. Dan untuk folder snippet, Viewer **tidak cukup**; harus Editor.
+Jadi jawaban untuk "editor atau cukup pelihat": **cukup pelihat (Viewer)** — untuk
+ketiga berkas config. Editor tidak diperlukan sama sekali di sana. Yang **wajib
+Editor** hanya **folder snippet-nya**, dan itu untuk service account, bukan untuk
+manusia.
+
+Penerima izinnya pun berbeda: config diberikan kepada **siapa pun yang punya
+tautan** (karena diunduh anonim), sedangkan folder snippet diberikan kepada
+**service account**. Memberi akses SA ke berkas config tidak berpengaruh apa pun.
