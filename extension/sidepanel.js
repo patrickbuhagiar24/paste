@@ -368,6 +368,12 @@
       if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
       if (message.filled) { applyBackgroundChange(); return; }
       if (message.local) { if (typeof message.pending === "number") pendingWrites = message.pending; applyBackgroundChange(); return; }
+      // Drive refused a queued write for good; the row it described is gone.
+      if (message.dropped) {
+        setStatus("Drive refused a saved change" + (message.reason ? ": " + message.reason : "."), "error");
+        applyBackgroundChange(true);
+        return;
+      }
       onProgress(message.tree, message.rootId);
     });
   } catch (ignored) { /* Loading still works without live progress. */ }

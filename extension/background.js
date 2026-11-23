@@ -135,6 +135,16 @@ function notifyPanelsLocal(pending) {
   });
 }
 
+// A queued write that Drive refused for good leaves the panel with a row it
+// shows and Drive does not have. The panel is told, so it can say so instead of
+// looking as if the edit were saved.
+function notifyPanelsDropped(reason) {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ dropped: true, reason: reason || "" }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
 function notifyPanelsChanged(lastCheckedAt) {
   progressPorts.forEach(function (port) {
     try { port.postMessage({ changed: true, lastCheckedAt: lastCheckedAt || Date.now() }); }
@@ -716,8 +726,14 @@ async function sendQueued(entry, session) {
   } catch (err) {
     var failure = err && err.message ? err.message : String(err);
     if (isPermanentFailure(failure)) {
+      // Refused for good. The entry cannot be retried, but dropping it in
+      // silence is how a write disappears without a word: the panel is told,
+      // so the user sees why the row did not land, and an open panel repaints
+      // without the row that Drive does not have.
+      console.warn("Pastex: a queued write was refused and dropped:", failure);
       await deferredQueue.remove([entry.id]);
       await libraryCache.dropLocal(entry);
+      notifyPanelsDropped(failure);
       return { ok: false, retry: false, error: failure };
     }
     // Offline, a rate limit or a missing configuration: keep it for later.

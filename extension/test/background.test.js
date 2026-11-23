@@ -1047,6 +1047,31 @@ test("a move is queued locally and reaches Drive as one move per row", async () 
   assert.equal(writes.filter((w) => w[0] === "index").length, 0, "a move is not an index write");
 });
 
+test("a write Drive refuses for good is reported instead of vanishing", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  // An open panel listens on a port; this is how a refusal reaches it.
+  const posted = [];
+  // A panel port: the worker accepts it only from an extension page in a tab.
+  browser.listeners.connect({
+    name: "pastex-library-progress",
+    sender: { id: browser.context.chrome.runtime.id, url: browser.context.chrome.runtime.getURL("sidepanel.html") },
+    onDisconnect: { addListener() {} }, onMessage: { addListener() {} },
+    postMessage: (message) => { posted.push(message); },
+  });
+  await send({ type: "pastex-panel-library" });
+  browser.context.PastexDrive.uploadNew = async () => { throw new Error("Drive API POST /files failed (HTTP 400): Invalid name"); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Bad", text: "x", parentId: "root",
+    item: { kind: "text", name: "Bad", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  const dropped = posted.find((m) => m.dropped);
+  assert.ok(dropped, "the panel is told that the write was dropped");
+  assert.match(dropped.reason, /Invalid name/);
+});
+
 test("a row that never reached Drive is not moved in Drive", async () => {
   const { browser, send } = editScenario();
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
