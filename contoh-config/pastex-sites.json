@@ -1,0 +1,6 @@
+{
+	"allowed_sites": [
+		"https://example.com",
+		"https://*.example.org"
+	]
+}
