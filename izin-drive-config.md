@@ -1,167 +1,120 @@
-# Izin Drive: siapa butuh Editor, siapa cukup Viewer
+# Izin Drive untuk berkas konfigurasi Pastex
 
-## Ringkasan
+## Ringkasan satu tabel
 
-| Berkas | Izin di Drive | Kenapa |
-| --- | --- | --- |
-| `service-account.json` | **Anyone with the link → Viewer** | Harus bisa diunduh anonim; tapi jangan diberi akses Edit |
-| `pastex-sites.json` | **Anyone with the link → Viewer** | Sama — wajib bisa diunduh anonim |
-| `pastex-google-drive.json` | **Anyone with the link → Viewer** | Sama — wajib bisa diunduh anonim |
-| Folder snippet + isinya | **`client_email` SA → Editor** | Snippet & label harus bisa ditulis |
+| Objek | Siapa yang mengakses | Izin | Kenapa |
+| --- | --- | --- | --- |
+| **Folder snippet** | `client_email` akun layanan | **Editor** | Snippet dan label harus bisa ditulis |
+| `pastex-google-drive.json` | pengunjung anonim (tautan) | **Viewer** | Isinya hanya `folder_id`; perlu dibaca sebelum ada kredensial |
+| `pastex-sites.json` | pengunjung anonim (tautan) | **Viewer** | Sama, dibaca anonim |
+| `service-account.json` | pengunjung anonim (tautan) | **Viewer** | Kunci itu sendiri harus diunduh dulu |
+| Folder tempat config | — | apa saja | Izin folder tidak menurun ke berkas di Drive |
 
-**Koreksi penting (versi sebelumnya dokumen ini salah):** ketiga berkas config
-**tidak** boleh "Privat". Ekstensi mengunduhnya tanpa kredensial, jadi tanpa
-*link sharing* ia menerima halaman login HTML dan gagal. Yang benar:
-**Anyone with the link → Viewer**, bukan Editor, dan **jangan** ke service account.
-
-Editor pada berkas config tidak diperlukan dan justru berbahaya: itu
-memberi kuasa menulis kepada siapa pun yang memegang tautannya.
+Kata kunci yang membedakan semuanya: **apa yang dibaca sebelum kredensial ada.**
 
 ---
 
-## Kenapa
+## Kenapa "SA Editor" pada `pastex-google-drive.json` tidak berpengaruh
 
-### Berkas config dibaca lewat tautan publik, bukan lewat SA
-
-`extension/config-manifest.js` baris 45:
+Ini urutan yang dilakukan ekstensi saat Anda memilih manifest
+(`extension/config-source.js` baris 61–82):
 
 ```js
-function downloadUrl(id) {
-  return "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(id);
+async function readConfigFrom(source, force) {
+  var active = requireManifest(source);
+  return memo("config", keyOf(active), !!force, async function () {
+    var found = await discovery.discover(await linkedFiles(active, true));   // (1) unduh 2 berkas
+    var drive = found.files[DRIVE], sa = found.files[ACCOUNT];               // (2) isi baru tersedia
+    var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
+    ...
+    return { drive: validId ? { folderId: id } : null, ..., serviceAccount: validSa ? {...} : null, ... };
+  });
 }
 ```
 
-Tidak ada header `Authorization` di permintaan itu (`fetchJson`, baris 74). Artinya berkas config didownload sebagai **pengunjung anonim**. Konsekuensinya:
+Perhatikan dua hal:
 
-- Memberi izin Viewer kepada service account **tidak ada gunanya** — ekstensi tidak memakai identitas SA untuk mengunduhnya.
-- Yang menentukan berhasil/gagal adalah apakah tautan itu **bisa diunduh tanpa login**.
+1. **`linkedFiles(...)` dipanggil di baris sebelum `sa` ada.** Saat baris 64 berjalan
+   — tempat `folder_id` dibaca dari `pastex-google-drive.json` — variabel `sa`
+   baru saja diisi pada baris yang sama. Artinya pembacaan `pastex-google-drive.json`
+   **selesai sebelum** kunci akun layanan tersedia untuk dipakai.
+2. **Tidak ada jalur yang memakai kunci untuk mengunduh.** Kalau ada, ia harus
+   berada sebelum baris 64 — dan tidak ada.
 
-### Folder snippet justru **wajib** Editor
+Yang benar-benar dipakai kunci itu adalah **folder snippet**, bukan berkas config:
 
-`extension/drive.js` memakai scope penuh `https://www.googleapis.com/auth/drive` (baris 23) dan menulis dengan `POST`/`PATCH`/`DELETE` (baris 183, 308, 330, 353, 360, 384, 396) — untuk membuat snippet, mengganti isi, menghapus, dan menulis label `pastex_index`/`pastex_order`/`pastex_collapsed`.
-
-Kalau folder itu hanya **Viewer**, yang berhasil hanya membaca. Menambah, mengedit, menghapus, dan mengubah urutan/lipat semuanya gagal. Yang tampak oleh Anda: daftar terbaca, tapi setiap penyimpanan gagal.
-
-### `pastex-sites.json` punya risiko paling besar
-
-Berkas ini berisi daftar situs tempat launcher boleh muncul. Isinya **tidak disimpan di browser** — dibaca ulang dari Drive (hanya tiga URL yang tersimpan di IndexedDB).
-
-Artinya: **siapa pun yang bisa mengedit berkas itu bisa menambah situs ke allowlist**, dan perubahan itu berlaku pada pemeriksaan berikutnya tanpa Anda perlu menyetujui apa pun di browser. Karena itu:
-
-- **Jangan** berikan akses edit kepada akun lain selain Anda.
-- **Jangan** taruh di folder bersama (shared folder).
-- **Jangan** taruh di folder snippet — folder itu dipegang SA sebagai Editor.
-
-Kalau sudah telanjur di folder snippet: pindahkan. Alasannya bukan bug, tapi higiene — SA punya akses tulis ke folder itu, jadi kunci bocor berarti orang lain bisa mengubah allowlist Anda.
-
-Catatan: ekstensi memvalidasi isi allowlist (`sites.js` baris 12–16: hanya origin HTTP(S), maksimal 500, tanpa wildcard global) dan **gagal-tertutup** bila kosong/rusak. Jadi penyerang tidak bisa menyuntikkan pola aneh — tapi ia tetap bisa menambahkan situs yang sah.
-
-### `service-account.json` adalah kunci, bukan konfigurasi
-
-Berkas ini berisi `private_key` akun layanan. Tidak ada alasan membagikannya ke siapa pun. Yang **perlu** dilakukan hanyalah menambahkan `client_email`-nya sebagai **Editor** pada **folder snippet**.
-
----
-
-## Bentuk izin yang aman
-
-```text
-Google Drive Anda
-├── 📁 Pastex                 ← SA: Editor    (snippet .txt + label)
-│   ├── catatan.txt
-│   └── ...
-├── 📁 Pastex-config          ← Privat (hanya Anda)
-│   ├── pastex-sites.json
-│   ├── pastex-google-drive.json
-│   └── service-account.json
-└── 📄 manifest.json          ← Privat, berisi 3 tautan
+```js
+// background.js — membaca daftar isi folder memakai token dari kunci
+var children = await PastexDrive.listChildren(token, command.parentId);
+// drive.js — menulis snippet dan label, juga memakai token
+method: "PATCH" / "POST" / "DELETE"
 ```
 
-Yang perlu dibagikan ke SA **hanya** folder `Pastex`.
+Jadi rantainya berurutan dan tidak bisa dibalik:
 
----
+```text
+tau­tan manifest
+   → unduh pastex-google-drive.json   (anonim)
+   → unduh service-account.json       (anonim)
+   → unduh pastex-sites.json          (anonim)
+   → baru sekarang kunci tersedia
+        → tanda tangani JWT
+        → tukar jadi token akses
+        → baca/tulis folder snippet    ← DI SINILAH Editor dipakai
+```
 
-## Bahaya yang perlu Anda sadari
+Memberi SA izin pada `pastex-google-drive.json` setara dengan memberi kunci
+rumah kepada orang yang tidak pernah datang ke rumah itu.
 
-Karena tautan config **wajib** bisa diunduh tanpa login (kalau tidak, ekstensi gagal), **siapa pun yang memiliki tautan itu bisa membacanya**. Ini konsekuensi yang tidak bisa dihindari dari desain berbasis tautan. Untuk `service-account.json` ini serius: siapa pun yang memegang tautannya memegang kunci akun layanan Anda.
+## Bukti: header yang benar-benar dikirim
 
-README proyek menyebutnya sendiri (`extension/README.md` baris 19–22):
+Saya jalankan `config-manifest.js` dengan `fetch` tiruan untuk merekam permintaan
+yang dibuatnya:
 
-> *"the key must be downloadable by the browser for this link-based flow to work. If the Drive link is public, anyone with the link has your service-account private key. Use a restricted, short-lived key and rotate it immediately if the link leaks."*
+```text
+Header yang DIKIRIM ekstensi:
+{
+  "Accept": "application/json,text/plain;q=0.9,*/*;q=0.8"
+}
+Ada Authorization? false
+```
 
-Mitigasi yang masuk akal:
+Tanpa `Authorization`, Google memperlakukan permintaan itu sebagai pengunjung
+anonim. Izin SA tidak pernah dibaca — bukan ditolak, memang tidak dikirim.
 
-1. **Jangan sumbar tautan itu ke siapa pun** — tidak di chat, tidak di forum, tidak di screenshot.
-2. Pakai **kunci khusus** untuk Pastex; jangan pakai ulang kunci dari proyek lain.
-3. Batasi akses SA **hanya** ke folder snippet (jangan seluruh Drive).
-4. **Rotasi kunci** bila tautan pernah bocor.
-5. Ingat: ini adalah SA dengan scope **Drive penuh** — bukan read-only. Karena itu batasi folder yang dibagikan, jangan bagikan seluruh Drive.
+## Konsekuensi praktis
 
-Satu hal yang sering terlewat: mengaktifkan *link sharing* pada berkas config berarti berkas itu **tidak** menjadi "privat" dalam arti sebenarnya, dan **tidak mengaktifkannya berarti ekstensi tidak berfungsi**. Anda tidak bisa memilih keduanya — hanya bisa memilih siapa yang memegang tautannya. Itulah kompromi desain dari alur berbasis tautan ini.
+**Kalau `pastex-google-drive.json` hanya "Anyone with the link → Editor":**
+berkas itu **bisa diunduh** (Editor mencakup izin baca), jadi konfigurasi
+**akan berhasil**. Tapi izin Edit-nya tidak pernah dipakai, dan itu berarti Anda
+memberi kuasa tulis kepada siapa pun yang memegang tautannya — tanpa manfaat apa pun.
 
----
+**Kalau `pastex-google-drive.json` hanya "Anyone with the link → Viewer":**
+berhasil, dengan risiko yang lebih kecil. Ini yang dianjurkan.
 
-## Kombinasi yang tidak berhasil
+**Kalau salah satu berkas hanya privat (tanpa link sharing):** gagal. Google
+mengembalikan halaman login, dan ekstensi melaporkan
+`A linked configuration file is not valid JSON. Check that each Drive link is
+downloadable without signing in.`
 
-Ada usulan yang tampak masuk akal: **"service-account.json" dan "pastex-sites.json"
-diatur untuk SA sebagai Viewer, sedangkan "pastex-google-drive.json" untuk SA
-sebagai Editor.** Kombinasi ini **tidak berfungsi**, karena tiga alasan yang
-saling bebas:
+## Yang perlu dipastikan
 
-1. **Isinya sama-sama butuh diunduh anonim.** Ketiganya lewat `manifest.fetchJson`
-   yang sama, tanpa header `Authorization` (`extension/config-source.js` baris 46
-   dan 87). Izin apa pun yang diberikan *kepada SA* tidak mengubah apa pun —
-   permintaannya bukan berasal dari SA.
-2. **Pemilih berkas hanya memilih `manifest.json` lokal.** `sidepanel.js` baris 735
-   memakai `showOpenFilePicker` untuk satu berkas manifest; isi manifest itu
-   hanya tiga tautan, dan ketiganya tetap diunduh dari Drive. Tidak ada jalur
-   di mana ekstensi membaca berkas config dengan kredensial.
-3. **Editor pada `pastex-google-drive.json` tidak diperlukan.** Berkas itu hanya
-   berisi `folder_id`. Yang butuh kuasa tulis adalah **folder snippet**, bukan
-   berkas yang menunjuk ke folder itu.
+- Ketiga berkas config: **Anyone with the link → Viewer** (bukan Editor).
+- **Folder snippet**: dibagikan ke `client_email` akun layanan sebagai **Editor**.
+- `folder_id` di dalam `pastex-google-drive.json` harus menunjuk ke folder snippet itu.
+- Izin pada folder config **tidak** menurun ke berkas di dalamnya — di Google
+  Drive, tautan dibagikan per berkas. Jadi atur izin pada ketiga berkasnya
+  masing-masing.
 
-### Apa yang terjadi untuk setiap kombinasi
+## Batasan desain
 
-| Izin pada berkas config | Penerima | Hasil |
-| --- | --- | --- |
-| Privat | — | GAGAL: HTTP 404 / halaman login |
-| **Viewer** | SA | **GAGAL** — SA tidak dipakai untuk mengunduh |
-| Editor | SA | GAGAL, dan sia-sia: memberi kuasa tulis ke berkas yang tidak pernah ditulis |
-| **Anyone with the link → Viewer** | siapa pun | **BERHASIL** |
+Alur berbasis tautan ini tidak bisa membuat berkas config privat. Kalau bisa
+diunduh tanpa login, maka siapa pun yang memegang tautannya bisa membacanya.
+Untuk `service-account.json` itu serius, karena isinya kunci privat.
 
-Pesan galat yang akan Anda lihat, tergantung respons Google:
+Mitigasi yang realistis:
 
-- `Could not download a linked configuration file (HTTP 404).` — berkas tidak
-  publik.
-- `A linked configuration file is not valid JSON. Check that each Drive link is
-  downloadable without signing in.` — Google mengembalikan halaman login HTML
-  dengan status 200.
-
-Kalimat terakhir pada pesan kedua itu adalah petunjuk penulisnya sendiri: yang
-menentukan adalah **tautan bisa diunduh tanpa login**, bukan izin SA.
-
-### Kalau Anda ingin config tidak publik
-
-Itu tidak didukung oleh alur tautan ini. Satu-satunya cara agar ketiga berkas
-tidak dapat diunduh anonim adalah berhenti memakai tautan — dan ekstensi tidak
-menyediakan mode itu. Jadi pilihannya nyata: **terima bahwa berkas config bisa
-dibaca siapa pun yang memegang tautannya**, atau jangan pakai alur tautan.
-
-Yang bisa Anda lakukan hanyalah memperkecil kerugian bila tautan bocor:
-kunci khusus Pastex (bukan kunci dari proyek lain), rotasi bila bocor, dan
-akses SA dibatasi ke folder snippet saja.
-
-## Jawaban singkat untuk pertanyaan Anda
-
-- **`pastex-sites.json`** → **Viewer**, diberikan kepada **"Anyone with the link"** — bukan kepada service account, dan **bukan Editor**.
-- **`pastex-google-drive.json`** → sama: Viewer, Anyone with the link.
-- **`service-account.json`** → Viewer, Anyone with the link (terpaksa, karena harus diunduh anonim).
-- **Folder snippet** → **Editor**, diberikan kepada `client_email` akun layanan.
-
-Jadi jawaban untuk "editor atau cukup pelihat": **cukup pelihat (Viewer)** — untuk
-ketiga berkas config. Editor tidak diperlukan sama sekali di sana. Yang **wajib
-Editor** hanya **folder snippet-nya**, dan itu untuk service account, bukan untuk
-manusia.
-
-Penerima izinnya pun berbeda: config diberikan kepada **siapa pun yang punya
-tautan** (karena diunduh anonim), sedangkan folder snippet diberikan kepada
-**service account**. Memberi akses SA ke berkas config tidak berpengaruh apa pun.
+1. Pakai kunci **khusus Pastex**, jangan pakai ulang kunci proyek lain.
+2. Rotasi kunci bila tautannya pernah bocor.
+3. Batasi akses SA **hanya** ke folder snippet.
+4. Jangan pernah menyebar tautan config di chat, forum, atau tangkapan layar.
