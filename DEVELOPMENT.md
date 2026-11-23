@@ -69,6 +69,12 @@ case" is the thing that needs justification, not deleting one.
 - Before adding a compatibility branch, read the three classes above. If the
   data is content, stop. If it is metadata or cache, delete instead.
 - Prefer one explicit version check over many defensive `typeof` checks.
+- A stored shape has one writer and one reader, and they must be tested
+  together. `pastex_index` is written by `queue.js` and read by `library.js`;
+  when the two named the version field differently, every write was discarded
+  on the next read and the panel looked as if order and collapse did not save.
+  `extension/test/queue.test.js` now writes the label the way the worker does
+  and reads it back with the real loader.
 - When deleting a path, delete its test at the same time, and add a test that
   the path stays gone (see `extension/test/dead-code.test.js`).
 - Scratching a broken local state during development:
