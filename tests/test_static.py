@@ -304,3 +304,51 @@ def test_test_deploy_never_claims_to_be_a_release() -> None:
     text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
     assert "test path only" in text or "TEST build" in text
     assert "signed release archive" in text
+
+
+# --- the changelog rules lintian enforces in CI ---------------------------
+
+def _changelog_entries() -> list[tuple[str, str]]:
+    """(version, trailer date) for every entry, newest first."""
+    import re
+
+    text = (ROOT / "debian" / "changelog").read_text(encoding="utf-8")
+    entries = re.findall(
+        r"^pastex \(([^)]+)\).*?\n(?:.*?\n)*?^ -- .+?  (.+)$", text, re.MULTILINE
+    )
+    assert entries, "debian/changelog has no entries"
+    return entries
+
+
+def test_changelog_is_strictly_newest_first() -> None:
+    """lintian's latest-changelog-entry-without-new-date fails the CI build.
+
+    Its rule is `first_timestamp - second_timestamp > 0`, so an entry dated the
+    same as, or later than, the one above it stops the archive from being
+    published. That is exactly what happened when every entry carried
+    00:00:00 on the same day.
+    """
+    import email.utils
+
+    previous = None
+    for version, date in _changelog_entries():
+        stamp = email.utils.parsedate_to_datetime(date.strip()).timestamp()
+        if previous is not None:
+            assert previous - stamp > 0, (
+                f"changelog entry {version} is not older than the entry above it "
+                f"({date.strip()}); lintian --fail-on error would reject the package"
+            )
+        previous = stamp
+
+
+def test_changelog_weekdays_match_their_dates() -> None:
+    """lintian's debian-changelog-has-wrong-weekday, checked in every entry."""
+    import email.utils
+
+    wrong = []
+    for version, date in _changelog_entries():
+        declared = date.split(",", 1)[0].strip()
+        actual = email.utils.parsedate_to_datetime(date.strip()).strftime("%a")
+        if declared != actual:
+            wrong.append(f"{version}: says {declared}, {date.strip()} is a {actual}")
+    assert not wrong, "changelog weekday does not match the date:\n  " + "\n  ".join(wrong)
