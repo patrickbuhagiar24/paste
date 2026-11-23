@@ -29,11 +29,12 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-bar", "drive-dot", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-delete-selected"];
+  const ids = ["search", "tree", "empty", "drive-bar", "drive-dot", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
   elements["selection-actions"].hidden = true;
+  elements["row-menu"].hidden = true;
   const records = options.records || [
     { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
     { id: "folder1", name: "Empty Folder", mimeType: "folder", parent: "root" },
@@ -110,6 +111,8 @@ function panelHarness(fail, options = {}) {
       }
       if (message.type === "pastex-panel-library") {
         if (options.libraryResult) return options.libraryResult;
+        // The cache is the snapshot with the queued edits already applied, so
+        // a repaint after an edit shows the edit without a Drive read.
         if (!message.force && cache) return { ok: true, result: { ...cache, cached: true } };
         try {
           const result = await Library.load(native, drive, (tree, session) => progress({ tree, rootId: session.rootId }));
@@ -121,6 +124,9 @@ function panelHarness(fail, options = {}) {
       // keeps the queue itself, exactly like the real one.
       if (message.type === "pastex-panel-local-edit") {
         const c = message.command;
+        // A local edit also drops the "read again" flag, so the repaint that
+        // follows every edit reads the edited cache instead of Drive.
+        if (cache) cache = { ...cache, cached: true };
         try {
           const result = applyLocalEdit(c);
           return { ok: true, result };
@@ -165,8 +171,13 @@ test("side panel keeps unreadable Drive items visible and reports the error", as
   assert.match(allText(elements.tree), /Empty Folder/);
   assert.match(elements.status.textContent, /1 item\(s\) could not be read/);
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
-  const editButton = row.children.find((child) => (child.title || "").startsWith("Cannot edit:"));
-  assert.ok(editButton.disabled);
+  const editButton = row.children.find((child) => child.title === "Edit");
+  editButton.listeners.click({ stopPropagation() {} });
+  const menu = elements["row-menu"];
+  assert.equal(menu.hidden, false, "Edit opens the row menu");
+  const editText = menu.children.find((item) => item.textContent === "Edit text");
+  assert.ok(editText.disabled, "an item whose text could not be read cannot be rewritten");
+  assert.match(editText.title, /Cannot edit: 403 denied/);
   row.listeners.click();
   await settled();
   assert.match(elements.status.textContent, /403 denied/);
@@ -185,6 +196,7 @@ test("side panel edits the cache and queues the Drive write instead of calling D
   assert.equal(records.some((r) => r.name === "New.txt"), false, "creating must not write Drive while on a site");
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   row.children.find((child) => child.title === "Edit").listeners.click({ stopPropagation() {} });
+  elements["row-menu"].children.find((item) => item.textContent === "Edit text").listeners.click({ stopPropagation() {} });
   elements["editor-text"].value = "updated remotely";
   await elements["editor-save"].listeners.click();
   await settled();
@@ -259,25 +271,90 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   assert.equal(elements["selection-actions"].hidden, true);
 });
 
-test("text rows expose rename, edit, delete in order without an insert action or preview", async () => {
+test("rename and move live in the Edit menu, not in their own row buttons", async () => {
   const { elements, messages } = panelHarness(false);
   await settled();
   let row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   const buttons = row.children.filter((child) => child.className === "mini");
-  assert.deepEqual(buttons.map((child) => child.title), ["Rename", "Edit", "Delete"]);
-  buttons[1].listeners.click({ stopPropagation() {} });
+  assert.deepEqual(buttons.map((child) => child.title), ["Edit", "Delete"],
+    "the row has one Edit button, not a Rename button next to it");
+  // A snippet offers rename, an edit of its text and a move.
+  buttons[0].listeners.click({ stopPropagation() {} });
+  assert.equal(elements["row-menu"].hidden, false);
+  assert.deepEqual(elements["row-menu"].children.map((item) => item.textContent),
+    ["Rename", "Edit text", "Move to folder…"]);
+  elements["row-menu"].children[1].listeners.click({ stopPropagation() {} });
   assert.equal(elements["editor-overlay"].hidden, false);
   assert.equal(elements["editor-text"].value, "from Google Drive");
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 0);
+  elements["editor-cancel"].listeners.click();
+  // A folder can be renamed and moved, but has no text to edit.
+  const folderRow = elements.tree.children.find((r) => allText(r).includes("Empty Folder"));
+  folderRow.children.filter((child) => child.className === "mini")[0].listeners.click({ stopPropagation() {} });
+  assert.deepEqual(elements["row-menu"].children.map((item) => item.textContent),
+    ["Rename folder", "Move to folder…"]);
+  elements["row-menu"].children[0].listeners.click({ stopPropagation() {} });
+  assert.equal(elements["editor-title"].textContent, "Rename folder");
   elements["editor-cancel"].listeners.click();
   elements.search.value = "Synced";
   elements.search.listeners.input({ target: elements.search });
   await new Promise((resolve) => setTimeout(resolve, 170));
   row = elements.tree.children[0];
-  assert.deepEqual(row.children.filter((child) => child.className === "mini").map((child) => child.title), ["Rename", "Edit", "Delete"]);
+  assert.deepEqual(row.children.filter((child) => child.className === "mini").map((child) => child.title), ["Edit", "Delete"]);
   row.listeners.click();
   await settled();
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
+});
+
+test("Move sends the picked folder, and the row changes folder in the cache at once", async () => {
+  const records = [
+    { id: "item1", name: "Synced.txt", mimeType: "text/plain", text: "from Google Drive", parent: "root" },
+    { id: "folder1", name: "Empty Folder", mimeType: "folder", parent: "root" },
+    { id: "folder2", name: "Other Folder", mimeType: "folder", parent: "root" },
+  ];
+  const { elements, messages, records: live } = panelHarness(false, { records });
+  await settled();
+  const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
+  row.children.find((child) => child.title === "Edit").listeners.click({ stopPropagation() {} });
+  elements["row-menu"].children.find((item) => item.textContent === "Move to folder…").listeners.click({ stopPropagation() {} });
+  assert.equal(elements["editor-overlay"].hidden, false);
+  assert.equal(elements["editor-name"].style.display, "none", "a move never asks for a new name");
+  assert.equal(elements["editor-title"].textContent, "Move");
+  // The destination list leaves out the folder the row is already in, because
+  // moving it there would be a Drive write that changes nothing.
+  assert.equal(elements["editor-parent"].children.map((o) => o.textContent).join("|"), "(top level)|Empty Folder|Other Folder");
+  elements["editor-parent"].value = "folder2";
+  await elements["editor-save"].listeners.click();
+  await settled();
+  const move = messages.find((m) => m.type === "pastex-panel-local-edit" && m.command.kind === "move");
+  assert.equal(move.command.ids.join(","), "item1");
+  assert.equal(move.command.parentId, "folder2");
+  assert.equal(live.find((r) => r.id === "item1").parent, "root", "Drive waits for the flush");
+  // The cache already shows the row inside its new folder. The panel renders a
+  // folder's content as a block after the folder's own row, so the top level
+  // now holds two folders and no stray snippet row.
+  const top = elements.tree.children.filter((child) => child.className === "row");
+  assert.equal(top.length, 2, "the snippet is no longer a top-level row");
+  const other = top.find((r) => allText(r).includes("Other Folder"));
+  const after = elements.tree.children[elements.tree.children.indexOf(other) + 1];
+  assert.equal(after.className, "children");
+  assert.match(allText(after), /Synced/);
+});
+
+test("a folder cannot be moved into itself or into its own content", async () => {
+  const records = [
+    { id: "outer", name: "Outer", mimeType: "folder", parent: "root" },
+    { id: "inner", name: "Inner", mimeType: "folder", parent: "outer" },
+    { id: "last", name: "Last", mimeType: "folder", parent: "root" },
+  ];
+  const { elements } = panelHarness(false, { records });
+  await settled();
+  const outer = elements.tree.children.find((r) => allText(r).includes("Outer"));
+  outer.children.filter((child) => child.className === "mini")[0].listeners.click({ stopPropagation() {} });
+  elements["row-menu"].children.find((item) => item.textContent === "Move to folder…").listeners.click({ stopPropagation() {} });
+  const offered = elements["editor-parent"].children.map((option) => option.textContent);
+  // The folder itself and everything inside it are not destinations.
+  assert.equal(offered.join("|"), "(top level)|Last");
 });
 
 test("a failed insertion does not silently copy the snippet", async () => {

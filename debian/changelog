@@ -1,3 +1,26 @@
+pastex (2.20.0-1) unstable; urgency=medium
+
+  * BREAKING: a pastex_index label written by 2.19.0 is discarded and rebuilt.
+    It carried the version under the wrong field name, so it was never read
+    back; there is nothing to migrate, and the snippet files are untouched.
+  * Fixed: order and collapse state were written to Drive and then ignored on
+    every read. The panel builds the label under the key "v" and the loader
+    looked for "version", so pastex_index was discarded as an unknown shape and
+    the library fell back to Drive's own order with every folder open. Both
+    sides now use the same field, so a reorder and a fold survive a restart.
+  * Fixed: the order of the top-level rows was stored under the empty key ""
+    while the loader looks the root folder up by its own Drive id, so only the
+    order inside a subfolder ever worked. The root is now keyed the same way a
+    folder is.
+  * New: Move. Every row's Edit button opens a menu with Rename, Edit text and
+    Move to folder..., so Rename no longer has a button of its own. A move is
+    one Drive PATCH that adds the new parent and removes the old one, and a
+    multi-row move is available from the selection bar.
+  * The side panel repaints after an edit that was made from a dialog, so a
+    moved row appears in its new folder at once instead of after a reload.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 23 Nov 2026 23:43:00 +0000
+
 pastex (2.19.0-1) unstable; urgency=medium
 
   * DEVELOPMENT.md states the project's rule: it is in development, it moves

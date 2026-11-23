@@ -154,6 +154,32 @@
       });
       return [];
     }
+    if (command.kind === "move") {
+      // A move is the same edit in the cache as it is in Drive: the row leaves
+      // its old folder and joins the new one. Rows the caller named but that no
+      // longer exist are skipped, so a stale selection cannot create anything.
+      var moved = [];
+      (command.ids || []).forEach(function (target) {
+        var node = find(tree, target);
+        if (!node) return;
+        var toRoot = !command.parentId || command.parentId === snapshot.rootId || command.parentId === snapshot.root;
+        var holder = toRoot ? null : find(tree, command.parentId);
+        // A destination that is not a folder is a stale list, not a request to
+        // put the row somewhere that does not exist.
+        if (!toRoot && (!holder || holder.kind !== "folder")) return;
+        // A folder cannot be moved inside itself or inside its own content.
+        if (node.kind === "folder") {
+          var inside = false;
+          walk([node], function (child) { if (child.id === command.parentId) inside = true; });
+          if (inside) return;
+        }
+        if (!remove(tree, target)) return;
+        var siblings = holder ? (holder.children = holder.children || []) : tree;
+        siblings.push(node);
+        moved.push(target);
+      });
+      return moved;
+    }
     if (command.kind === "collapse") {
       (command.ids || []).forEach(function (target) {
         var node = find(tree, target);
@@ -168,7 +194,13 @@
   // stores it. A row that never reached Drive has no place in it yet.
   var INDEX_VERSION = 2;
 
-  function indexOf(tree) {
+  // Every folder's children are keyed by that folder's id, and the root folder
+  // is a folder like any other: its children are keyed by rootId. This has to
+  // match library.js applyIndex(), which looks the root up by rootId; keying the
+  // root as "" wrote a reorder that the next read could never find, so the order
+  // silently fell back to Drive's own order.
+  function indexOf(tree, rootId) {
+    var root = rootId || "";
     var index = { order: {}, collapsed: {}, v: INDEX_VERSION };
     (function walkFolders(nodes, parentId) {
       var ids = [];
@@ -181,10 +213,12 @@
         }
         if (node.kind === "folder") walkFolders(node.children, node.id);
       });
-      // The root folder's own children are recorded too: the tree supplied
-      // here is the content of the root folder, so "" is its key.
-      index.order[parentId || ""] = ids;
-    })(tree, "");
+      index.order[parentId] = ids;
+    })(tree, root);
+    // A library with no root id cannot name its root folder; recording it under
+    // "" would be the same unreachable key again, so it is left out and the
+    // order simply is Drive's own until a real root id is known.
+    if (!root) delete index.order[""];
     return index;
   }
 

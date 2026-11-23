@@ -36,7 +36,7 @@
         <h2 id="editor-title">New snippet</h2>
         <label id="editor-parent-label" for="editor-parent">Folder</label>
         <select id="editor-parent"></select>
-        <label for="editor-name">Name</label>
+        <label id="editor-name-label" for="editor-name">Name</label>
         <input id="editor-name" type="text" />
         <div id="editor-text-wrap">
           <label for="editor-text">Text</label>
@@ -48,10 +48,12 @@
         </div>
       </div>
     </div>
+    <div id="row-menu" role="menu" aria-label="Edit row" hidden></div>
     <div id="selection-actions" role="toolbar" aria-label="Selected item actions" hidden>
       <span id="selection-count">0 selected</span>
       <button id="btn-up" disabled>↑ Up</button>
       <button id="btn-down" disabled>↓ Down</button>
+      <button id="btn-move-selected" disabled>Move…</button>
       <button id="btn-delete-selected" class="danger" disabled>🗑 Delete</button>
     </div>
     <script src="store.js"></script>

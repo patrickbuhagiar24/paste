@@ -341,6 +341,28 @@
     return patchProperties(token, rootId, { pastex_index: JSON.stringify(index) }, fetchImpl, known);
   }
 
+  // Move a file or a folder into another folder. Drive has no move endpoint:
+  // a move is a PATCH whose addParents names the new folder and whose
+  // removeParents names the old one. Both are applied in the same request, so
+  // the item is never left in two folders or in none.
+  async function moveFile(token, fileId, fromParentId, toParentId, fetchImpl) {
+    var from = fromParentId || "";
+    if (!from) {
+      // Removing the old parent in the same request is what makes this a move
+      // rather than a second place to look: without it the item would turn up
+      // in both folders. The parent is read first when the caller has none.
+      var current = await driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+        query: { fields: "parents" }, fetchImpl: fetchImpl,
+      });
+      from = ((current && current.parents) || []).join(",");
+    }
+    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      method: "PATCH", contentType: "application/json; charset=UTF-8",
+      query: { addParents: toParentId, removeParents: from, fields: "id,parents" },
+      body: JSON.stringify({}), fetchImpl: fetchImpl,
+    });
+  }
+
   async function trashFile(token, fileId, fetchImpl) {
     return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
       method: "PATCH", contentType: "application/json; charset=UTF-8",
@@ -411,6 +433,7 @@
     getFolder: getFolder,
     downloadText: downloadText,
     renameFile: renameFile,
+    moveFile: moveFile,
     setIndex: setIndex,
     trashFile: trashFile,
     createFolder: createFolder,

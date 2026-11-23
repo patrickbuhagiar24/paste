@@ -94,6 +94,11 @@ function harness(home, unavailable, shared, options) {
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
     crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL,
+    // The Drive helper decodes a base64 key. A vm context has no atob/btoa, so
+    // a real load inside the harness failed for a reason that has nothing to do
+    // with the code under test.
+    atob: (data) => Buffer.from(String(data), "base64").toString("binary"),
+    btoa: (data) => Buffer.from(String(data), "binary").toString("base64"),
     // The worker talks HTTP through fetch; the stubs replace the calls that
     // would use it, but the symbol must exist.
     fetch: async () => { throw new Error("the network is stubbed in this test"); },
@@ -952,3 +957,143 @@ test("an edit is refused for a sender that is not the panel", async () => {
   assert.equal(refused.ok, false, "a content script cannot edit the library");
 });
 
+
+// --- the round trip a user actually complains about ------------------------
+//
+// "Add text, collapse a folder and reorder a row work in the panel, but after
+// restarting the browser they are gone, while creating a folder survived."
+// These tests follow the writes all the way to what Drive reports afterwards.
+
+function roundTripScenario() {
+  const { browser, writes } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  // The Drive folder as the loader will read it on the next start.
+  const driveState = { properties: {}, children: [] };
+  const drive = browser.context.PastexDrive;
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME,
+    properties: structuredClone(driveState.properties) });
+  drive.listChildren = async () => structuredClone(driveState.children);
+  drive.setIndex = async (t, root, index) => {
+    writes.push(["index", structuredClone(index)]);
+    driveState.properties.pastex_index = JSON.stringify(index);
+  };
+  drive.uploadNew = async (t, parent, name, text) => {
+    writes.push(["text", name, text]);
+    const id = "drive-" + name;
+    driveState.children.push({ id: id, name: name + ".txt", mimeType: drive.TEXT_MIME });
+    return { id: id };
+  };
+  drive.createFolder = async (t, name) => {
+    writes.push(["folder", name]);
+    const id = "drive-" + name;
+    driveState.children.push({ id: id, name: name, mimeType: drive.FOLDER_MIME });
+    return id;
+  };
+  // The next read of the library starts from what Drive now holds.
+  drive.downloadText = async () => "";
+  return { browser, writes, driveState, site };
+}
+
+test("add text, collapse and reorder survive a browser restart", async () => {
+  const { browser, driveState, site } = roundTripScenario();
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  await send({ type: "pastex-panel-library" });
+  // A folder already on Drive, so there is something to fold and to order.
+  driveState.children.push({ id: "folder1", name: "Folder", mimeType: browser.context.PastexDrive.FOLDER_MIME });
+  await send({ type: "pastex-panel-library" });
+
+  // 1. add a snippet, 2. fold the folder, 3. move the snippet to the top.
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "New one", text: "body", parentId: "root",
+    item: { kind: "text", name: "New one", parentId: "root", localId: "" },
+  } });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "collapse", ids: ["folder1"], collapsed: true,
+  } });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "reorder", groups: [["drive-New one", "folder1"]], parents: [""],
+  } });
+
+  // Leaving the site is what sends the queue.
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  assert.ok(driveState.children.some((file) => file.name === "New one.txt"),
+    "the added text reached Drive as a real file");
+  const index = JSON.parse(driveState.properties.pastex_index);
+  assert.deepEqual(index.collapsed, { folder1: "1" }, "the fold reached Drive");
+  assert.deepEqual(index.order.root, ["drive-New one", "folder1"],
+    "the order reached Drive under the root folder's own id");
+});
+
+test("a move is queued locally and reaches Drive as one move per row", async () => {
+  const { browser, writes, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  const drive = browser.context.PastexDrive;
+  const moves = [];
+  drive.moveFile = async (t, id, from, to) => { moves.push([id, to]); };
+  const queued = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "move", ids: ["item1"], parentId: "folder-dest",
+  } });
+  assert.equal(queued.ok, true);
+  assert.equal(moves.length, 0, "nothing reaches Drive while the site is open");
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1);
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.deepEqual(moves, [["item1", "folder-dest"]], "the queued move is applied once");
+  assert.equal(writes.filter((w) => w[0] === "index").length, 0, "a move is not an index write");
+});
+
+test("a row that never reached Drive is not moved in Drive", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  const drive = browser.context.PastexDrive;
+  const moves = [];
+  drive.moveFile = async (t, id, from, to) => { moves.push([id, to]); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "move", ids: ["local-abc"], parentId: "folder-dest",
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.deepEqual(moves, [], "a create places the row in its folder by itself");
+});
+
+test("the stored index is the one the loader applies, not a shape it ignores", async () => {
+  const { browser, driveState, site } = roundTripScenario();
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  const FOLDER = browser.context.PastexDrive.FOLDER_MIME;
+  const TEXT = browser.context.PastexDrive.TEXT_MIME;
+  driveState.children.push({ id: "a", name: "A.txt", mimeType: TEXT });
+  driveState.children.push({ id: "b", name: "B.txt", mimeType: TEXT });
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "reorder", groups: [["b", "a"]], parents: [""],
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  // Read the library again exactly as a fresh start would. The real loader is
+  // used here on purpose: editScenario replaces Library.load with a fixed list
+  // so the rest of these tests can ignore Drive, and that stub would hide the
+  // very thing this test is about.
+  const RealLibrary = require("../library.js");
+  // The scenarios use a placeholder key; the real loader has to be handed one
+  // it can parse, and a token that needs no signature check.
+  const realConfig = { readConfig: async () => ({
+    drive: { folderId: "root" },
+    serviceAccount: { client_email: "x", private_key: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----" },
+  }) };
+  browser.context.PastexDrive.fetchAccessToken = async () => "token";
+  browser.context.PastexDrive.downloadText = async () => "";
+  const again = await RealLibrary.load(
+    realConfig, browser.context.PastexDrive,
+    undefined, { bodies: {}, texts: {}, index: null });
+  assert.deepEqual(again.tree.map((node) => node.id), ["b", "a"],
+    "the order written to Drive is the order the next read shows");
+  assert.ok(FOLDER && TEXT);
+});

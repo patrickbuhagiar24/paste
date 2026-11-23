@@ -609,6 +609,46 @@ main {
 
 /* --- selection bar ------------------------------------------------------ */
 
+/* The Edit menu: one popup shared by every row, placed just under the tree.
+ * It is built fresh each time it opens, so it only ever holds the actions the
+ * row it belongs to can actually offer. */
+#row-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 6px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px var(--shadow-row);
+}
+
+#row-menu[hidden] {
+  display: none;
+}
+
+#row-menu button {
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#row-menu button:hover:not(:disabled),
+#row-menu button:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+#row-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 #selection-actions {
   display: flex;
   align-items: center;

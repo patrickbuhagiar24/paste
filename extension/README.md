@@ -267,7 +267,8 @@ stops when the system asks for reduced motion, and the rim grows when the
 system asks for more contrast. `assets/launcher-preview.html` shows the
 launcher on all three backgrounds. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it; its row has **Rename**, **Edit**, and **Delete** actions. The
+to insert it; its row has an **Edit** button, which opens a small menu holding
+**Rename**, **Edit text** and **Move to folder…**, and a **Delete** button. The
 complete snippet text is inserted verbatim, including newlines and trailing
 spaces, into textareas and editable fields; a single-line input cannot display
 line breaks. The allowlist is cached for 30 seconds so a click does not have to

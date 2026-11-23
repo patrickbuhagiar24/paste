@@ -27,10 +27,15 @@
   // The stored shape is versioned. An unknown version is not decoded field by
   // field: it is discarded, and the library falls back to Drive's own order
   // with every folder open. See DEVELOPMENT.md ("state carries a version").
+  //
+  // The version field is named "v" because that is what queue.js writes when it
+  // builds the label. When the two names disagreed, every write was stored
+  // under "version" and every read looked for "v", so each reorder and each
+  // fold was thrown away on the next load: one bug, two symptoms.
   var INDEX_VERSION = 2;
 
   function emptyIndex() {
-    return { order: {}, collapsed: {}, version: INDEX_VERSION };
+    return { order: {}, collapsed: {}, v: INDEX_VERSION };
   }
 
   // The index is a single label on the root folder. It is the only source of
@@ -77,7 +82,7 @@
 
   function cloneIndex(index) {
     var copy = emptyIndex();
-    copy.version = INDEX_VERSION;
+    copy.v = INDEX_VERSION;
     Object.keys((index && index.order) || {}).forEach(function (parent) {
       copy.order[parent] = (index.order[parent] || []).slice();
     });

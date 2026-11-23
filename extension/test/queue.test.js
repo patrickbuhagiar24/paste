@@ -158,3 +158,55 @@ test("two edits of a row that already exists stay two separate writes", async ()
   await queue.push([{ id: "2", kind: "edit", name: "A", text: "two", item: { id: "drive-1", kind: "text" } }]);
   assert.equal((await queue.all()).length, 2, "an existing row is not collapsed silently");
 });
+
+test("the order the panel writes is the order the loader applies after a restart", () => {
+  // BUG: indexOf() keyed the root folder's order as "", while the loader asks
+  // for it by the root folder's Drive id. A reorder was therefore written to
+  // Drive and then silently ignored on the next read.
+  const snap = snapshot();
+  snap.tree = [snap.tree[1], snap.tree[0]];   // the panel moved the second row up
+  const index = Queue.indexOf(snap.tree, snap.rootId);
+  assert.deepEqual(index.order.root, ["f", "a"],
+    "the root folder's order must be stored under its own id");
+  assert.equal(index.order[""], undefined,
+    "an unnamed key is the bug: the loader never asks for it");
+});
+
+test("the index the queue writes and the index the loader reads use the same keys", () => {
+  const snap = snapshot();
+  snap.tree.reverse();
+  snap.tree.forEach((node) => { if (node.kind === "folder") node.collapsed = true; });
+  const written = Queue.indexOf(snap.tree, snap.rootId);
+  const parents = Object.keys(written.order);
+  assert.deepEqual(parents.sort(), ["f", "root"]);
+  assert.ok(parents.includes("f"), "a nested folder's order is keyed by its id");
+  assert.equal(written.collapsed.f, "1", "a fold is still recorded by folder id");
+});
+
+test("the index the queue writes is the index the loader accepts", async () => {
+  const Library = require("../library.js");
+  const tree = [
+    { id: "a", kind: "text", name: "A" },
+    { id: "f", kind: "folder", name: "F", collapsed: true, children: [{ id: "b", kind: "text", name: "B" }] },
+  ];
+  // background.js writes cloneIndex(session.index), never the raw tree walk, so
+  // this is the shape that must be readable: both spellings of the version are
+  // covered by building the label the way the worker builds it.
+  const written = JSON.stringify(Library.cloneIndex(Queue.indexOf(tree, "root")));
+  // The loader only decodes a label whose version field it recognises. The two
+  // files once disagreed on the field name, so every reorder and every fold was
+  // stored and then ignored on the next read.
+  const drive = { FOLDER_MIME: "folder", TEXT_MIME: "text/plain",
+    getFolder: async () => ({ id: "root", mimeType: "folder", properties: { pastex_index: written } }),
+    listChildren: async (t, id) => (id === "root"
+      ? [{ id: "a", name: "A.txt", mimeType: "text/plain" }, { id: "f", name: "F", mimeType: "folder" }]
+      : [{ id: "b", name: "B.txt", mimeType: "text/plain" }]),
+    downloadText: async () => "body" };
+  const native = { readConfig: async () => ({ drive: { folderId: "root" },
+    serviceAccount: { client_email: "x", private_key: "k" } }) };
+  drive.parseServiceAccount = () => ({});
+  drive.fetchAccessToken = async () => "token";
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.index.order.root, ["a", "f"], "the order survived the round trip");
+  assert.equal(result.tree[1].collapsed, true, "the fold survived the round trip");
+});

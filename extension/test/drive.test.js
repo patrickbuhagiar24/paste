@@ -249,6 +249,24 @@ test("rename and delete use Drive metadata PATCH, with trash rather than permane
   assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), { trashed: true });
 });
 
+test("a move adds the new parent and removes the old one in the same request", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "f", parents: ["dest"] }));
+  await Drive.moveFile("tok", "f", "old", "dest", fetchImpl);
+  const call = fetchImpl.calls[0];
+  assert.equal(call.options.method, "PATCH");
+  assert.match(call.url, /addParents=dest/);
+  assert.match(call.url, /removeParents=old/);
+});
+
+test("a move without a known parent reads it first, so the row is never in two folders", async () => {
+  const fetchImpl = stubFetch(async (url) => (url.includes("addParents")
+    ? jsonResponse({ id: "f" })
+    : jsonResponse({ id: "f", parents: ["now"] })));
+  await Drive.moveFile("tok", "f", "", "dest", fetchImpl);
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.match(fetchImpl.calls[1].url, /removeParents=now/);
+});
+
 test("driveFetch reports API errors with the message", async () => {
   const fetchImpl = stubFetch(async () =>
     jsonResponse({ error: { message: "File not found: root" } }, 404)

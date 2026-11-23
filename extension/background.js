@@ -398,6 +398,15 @@ async function applyDriveCommand(session, command) {
     if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
     return { id: node.id };
   }
+  if (command.action === "move") {
+    var moved = await mapLimit(command.ids || [], 6, function (id) {
+      return PastexDrive.moveFile(token, id, undefined, command.parentId)
+        .then(function () { return ""; }, function (err) { return err.message || String(err); });
+    });
+    var refused = moved.filter(Boolean);
+    if (refused.length) throw new Error(refused.length + " item(s) could not be moved: " + refused[0]);
+    return {};
+  }
   if (command.action === "delete") {
     var results = await mapLimit(command.ids || [], 6, function (id) {
       return PastexDrive.trashFile(token, id).then(function () { return ""; },
@@ -488,6 +497,14 @@ function queuedCommand(command, createdId) {
       parents: command.kind === "reorder" ? (command.parents && command.parents.length ? command.parents.slice() : [""]) : undefined,
       collapse: command.kind === "collapse" ? { ids: (command.ids || []).slice(), collapsed: !!command.collapsed } : undefined };
   }
+  // A move names its targets in ids and the folder they go to. Like a delete it
+  // carries no item, so its id check comes below with the delete's.
+  if (command.kind === "move") {
+    var moving = (command.ids || []).filter(Boolean);
+    if (!moving.length) return null;
+    return { id: localId(), kind: "move", queuedAt: Date.now(), item: {},
+      ids: moving, parentId: command.parentId || "" };
+  }
   // A delete names its targets in ids and carries no item, so the id check
   // must look there first or the whole delete would be dropped.
   var id = item.localId || item.id || command.id ||
@@ -515,7 +532,7 @@ function queuedCommand(command, createdId) {
 // and this only rejects what can be checked locally.
 function validateLocalEdit(command) {
   if (!command || typeof command !== "object") throw new Error("Invalid edit request.");
-  if (["create", "edit", "rename", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
+  if (["create", "edit", "rename", "move", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
     throw new Error("Unknown Drive operation.");
   if (command.kind === "create" || command.kind === "edit" || command.kind === "rename") {
     if (typeof command.name !== "string" || !command.name.trim() || command.name.indexOf("/") !== -1)
@@ -622,8 +639,9 @@ function queuedIndex(entry, session, snapshot) {
   }
   // A reorder names the groups it changed. The tree in the cache is the best
   // description of a folder the entry does not name (a stale group), so it is
-  // used only to fill in what the entry left out.
-  var cached = PastexQueue.indexOf(snapshot && snapshot.tree);
+  // used only to fill in what the entry left out. The root folder's order must
+  // be keyed by its Drive id, which is the only key the loader looks up.
+  var cached = PastexQueue.indexOf(snapshot && snapshot.tree, session.rootId);
   var groups = entry.groups && entry.groups.length ? entry.groups : null;
   var parents = entry.parents && entry.parents.length ? entry.parents : null;
   if (groups) {
@@ -633,7 +651,7 @@ function queuedIndex(entry, session, snapshot) {
     });
   } else {
     Object.keys(cached.order).forEach(function (parent) {
-      index.order[parent === "" ? session.rootId : parent] = cached.order[parent];
+      index.order[parent] = cached.order[parent];
     });
   }
   return { action: "order", index: index };
@@ -651,6 +669,12 @@ function driveCommandFor(entry, session, snapshot) {
   if (entry.kind === "delete") {
     var ids = (entry.ids || []).filter(Boolean);
     return ids.length ? { action: "delete", ids: ids } : null;
+  }
+  if (entry.kind === "move") {
+    // A row that never reached Drive has no parent there; it is uploaded in the
+    // right folder by its own create entry, so there is nothing to move.
+    var movable = (entry.ids || []).filter(function (id) { return String(id).indexOf("local-") !== 0; });
+    return movable.length ? { action: "move", ids: movable, parentId: entry.parentId || rootId } : null;
   }
 
   // A row that never reached Drive is uploaded whatever the last edit called

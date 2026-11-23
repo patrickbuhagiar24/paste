@@ -38,6 +38,9 @@
   // the user works.
   var pendingWrites = 0;
   var savingLocal = false;
+  // The row whose Edit menu is open, so its aria-expanded can be cleared when
+  // the menu closes for any reason.
+  var menuOpener = null;
 
   function $(id) {
     return document.getElementById(id);
@@ -158,16 +161,14 @@
     return button;
   }
 
+  // Rename and Move are not separate buttons: both are edits of an existing
+  // row, so they live in one menu behind a single Edit button.
   function appendRowActions(row, node) {
     if (selecting) return;
-    row.appendChild(miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
-      openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
-    }));
-    if (node.kind === "text") {
-      var edit = miniButton("Edit", "📝", function () { openEditor("edit-text", node); });
-      if (node.loadError) { edit.disabled = true; edit.title = "Cannot edit: " + node.loadError; }
-      row.appendChild(edit);
-    }
+    var edit = miniButton("Edit", "✎", function () { openEditMenu(node, edit); });
+    edit.setAttribute("aria-haspopup", "menu");
+    edit.setAttribute("aria-expanded", "false");
+    row.appendChild(edit);
     var remove = miniButton("Delete", "🗑", function () { deleteNodes([node]); });
     remove.setAttribute("data-kind", "danger");
     row.appendChild(remove);
@@ -310,6 +311,7 @@
     $("selection-count").className = selectedItems.size ? "has-items" : "";
     $("btn-up").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, -1).length;
     $("btn-down").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, 1).length;
+    $("btn-move-selected").disabled = busy || !ready || !selectedItems.size;
     $("btn-delete-selected").disabled = busy || !ready || !selectedItems.size;
   }
 
@@ -398,9 +400,15 @@
 
   // A background sync already rewrote the cache, so this only reads the
   // snapshot back: no Drive request, no loading state and no status spam.
-  async function applyBackgroundChange() {
-    if (busy || loading || backgroundRefresh) return;
-    if ($("editor-overlay") && !$("editor-overlay").hidden) return;
+  //
+  // A background update never repaints under an open dialog, because it would
+  // replace the list the user is working in. An edit the user just confirmed is
+  // different: it already landed in the cache and the dialog is closing, so the
+  // row must be repainted even though the dialog is still on screen for the
+  // next few lines (a move would otherwise seem to do nothing).
+  async function applyBackgroundChange(whileEditing) {
+    if (busy || loading || backgroundRefresh) { return; }
+    if (!whileEditing && $("editor-overlay") && !$("editor-overlay").hidden) return;
     backgroundRefresh = true;
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library" });
@@ -536,6 +544,8 @@
     }
     editorMode = mode;
     editorNodeId = node ? node.id : "";
+    // A move that was abandoned must not leak its targets into this dialog.
+    movingIds = [];
     var titles = {
       "new-folder": "New folder",
       "new-text": "New snippet",
@@ -545,8 +555,7 @@
     };
     $("editor-title").textContent = titles[mode] || "Edit";
     var isNew = mode === "new-folder" || mode === "new-text";
-    $("editor-parent-label").style.display = isNew ? "" : "none";
-    $("editor-parent").style.display = isNew ? "" : "none";
+    showEditorFields(mode);
     if (isNew) {
       var select = $("editor-parent");
       while (select.firstChild) {
@@ -564,8 +573,6 @@
         select.value = selected.id;
       }
     }
-    var showText = mode === "new-text" || mode === "edit-text";
-    $("editor-text-wrap").style.display = showText ? "" : "none";
     $("editor-name").value = node ? esc(node.name) : "";
     $("editor-text").value = node && node.kind === "text" ? node.text || "" : "";
     $("editor-overlay").hidden = false;
@@ -575,6 +582,137 @@
 
   function closeEditor() {
     $("editor-overlay").hidden = true;
+    closeEditMenu();
+  }
+
+  // One switch builds every editor's fields, so a dialog can never keep a field
+  // a previous mode left visible. A new row picks a folder; a rename or an edit
+  // names an existing row; a move only picks a folder.
+  function showEditorFields(mode) {
+    var isMove = mode === "move";
+    var isNew = mode === "new-folder" || mode === "new-text";
+    $("editor-parent-label").style.display = isNew || isMove ? "" : "none";
+    $("editor-parent").style.display = isNew || isMove ? "" : "none";
+    $("editor-name-label").style.display = isMove ? "none" : "";
+    $("editor-name").style.display = isMove ? "none" : "";
+    $("editor-text-wrap").style.display = mode === "new-text" || mode === "edit-text" ? "" : "none";
+  }
+
+  // --- the Edit menu -------------------------------------------------------
+  //
+  // Rename, Edit text and Move all change a row that already exists, so they
+  // share one menu behind one button. The menu is rebuilt on every open because
+  // a folder offers fewer actions than a snippet.
+
+  function closeEditMenu() {
+    var menu = $("row-menu");
+    menu.hidden = true;
+    if (menuOpener && menuOpener.setAttribute) menuOpener.setAttribute("aria-expanded", "false");
+    menuOpener = null;
+  }
+
+  function openEditMenu(node, opener) {
+    var menu = $("row-menu");
+    while (menu.firstChild) menu.removeChild(menu.firstChild);
+    function add(label, run, disabledReason) {
+      var item = document.createElement("button");
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      if (disabledReason) {
+        item.disabled = true;
+        item.title = disabledReason;
+      }
+      item.addEventListener("click", function (event) {
+        event.stopPropagation();
+        closeEditMenu();
+        if (!item.disabled) run();
+      });
+      menu.appendChild(item);
+    }
+    add(node.kind === "folder" ? "Rename folder" : "Rename", function () {
+      openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
+    });
+    if (node.kind === "text") {
+      // A body that could not be read must not be replaced by an empty one.
+      add("Edit text", function () { openEditor("edit-text", node); },
+        node.loadError ? "Cannot edit: " + node.loadError : "");
+    }
+    add("Move to folder…", function () { openMoveEditor([node.id]); },
+      index.folders.length ? "" : "Create a folder first.");
+    menuOpener = opener || null;
+    menu.hidden = false;
+    if (menuOpener && menuOpener.setAttribute) menuOpener.setAttribute("aria-expanded", "true");
+  }
+
+  // --- move ----------------------------------------------------------------
+  //
+  // A move changes the folder a row lives in, never its name or its text. A
+  // folder cannot be moved into itself or into its own content, so those
+  // destinations are left out of the list rather than failing on Drive.
+
+  var movingIds = [];
+
+  function moveOptions(ids) {
+    var blocked = new Set(ids);
+    ids.forEach(function (id) {
+      var node = index.byId.get(id);
+      if (node && node.kind === "folder") {
+        Store.walk(node.children || [], function (child) { blocked.add(child.id); });
+      }
+    });
+    var current = ids.length === 1 ? (parentOf(tree, ids[0], rootId) || "") : "";
+    var options = [{ id: "", name: "(top level)" }];
+    Store.walk(tree, function (node) {
+      if (node.kind !== "folder" || blocked.has(node.id)) return;
+      // Moving a row where it already is would be a pointless Drive write.
+      if (ids.length === 1 && node.id === current) return;
+      options.push({ id: node.id, name: node.name });
+    });
+    return options;
+  }
+
+  function openMoveEditor(ids) {
+    ids = (ids || []).filter(Boolean);
+    if (!ids.length) return;
+    var options = moveOptions(ids);
+    if (options.length < 2) {
+      setStatus("There is no other folder to move into.", "error");
+      return;
+    }
+    movingIds = ids;
+    editorMode = "move";
+    editorNodeId = "";
+    $("editor-title").textContent = ids.length === 1 ? "Move" : "Move " + ids.length + " items";
+    showEditorFields("move");
+    var select = $("editor-parent");
+    while (select.firstChild) select.removeChild(select.firstChild);
+    options.forEach(function (option) {
+      var el = document.createElement("option");
+      el.value = option.id;
+      el.textContent = option.name;
+      select.appendChild(el);
+    });
+    // When a single row is moved, the folder it already sits in is the one
+    // place it cannot go, so the first other folder is preselected.
+    select.value = options[0] ? options[0].id : "";
+    $("editor-overlay").hidden = false;
+    if (select.focus) select.focus();
+  }
+
+  async function saveMove() {
+    var parentId = $("editor-parent").value || rootId;
+    var ids = movingIds.slice();
+    movingIds = [];
+    if (busy) return;
+    // The dialog is closed first: the repaint of the tree must not be skipped
+    // because an editor happens to be on screen.
+    closeEditor();
+    var result = await runMutation({ action: "move", ids: ids, parentId: parentId });
+    if (result) {
+      selectedId = "";
+      selectedItems.clear();
+      render();
+    }
   }
 
   function parentOf(nodes, id, parentId) {
@@ -609,6 +747,11 @@
       command.item = rowIdentity(live);
       return command;
     }
+    if (command.action === "move") {
+      command.kind = "move";
+      command.ids = (command.ids || []).filter(Boolean);
+      return command.ids.length ? command : null;
+    }
     if (command.action === "delete") { command.kind = "delete"; return command; }
     if (command.action === "collapse") { command.kind = "collapse"; return command; }
     if (command.action === "reorder") { command.kind = "reorder"; return command; }
@@ -626,7 +769,7 @@
 
   // An edit never talks to Drive: the worker applies it to the cache and
   // queues the write, and the panel repaints from the cache.
-  async function runMutation(command) {
+  async function runMutation(command, whileEditing) {
     if (busy || !ready) return null;
     busy = true;
     savingLocal = true;
@@ -645,8 +788,10 @@
     } catch (err) {
       failure = err.message ? "Could not save. " + err.message : "Could not save.";
     } finally { busy = false; savingLocal = false; }
-    // Apply the cached list locally: no Drive request, no loading state.
-    await applyBackgroundChange();
+    // Apply the cached list locally: no Drive request, no loading state. The
+    // caller says whether its own dialog is still open at this point: a save
+    // closes the editor after the repaint, a move closes it before.
+    await applyBackgroundChange(!!whileEditing);
     renderDriveBar();
     if (failure) setStatus(failure, "error");
     else setStatus(pendingWrites ? "Saved. " + pendingWrites + " waiting to sync." : "Saved.", "ok");
@@ -654,6 +799,7 @@
   }
 
   async function saveEditor() {
+    if (editorMode === "move") { await saveMove(); return; }
     var name = $("editor-name").value.trim();
     if (!name || name.indexOf("/") !== -1) { setStatus("No / in the name.", "error"); return; }
     if (busy) return;
@@ -664,7 +810,7 @@
       setStatus("That item is gone. Refresh.", "error"); return;
     }
     var result = await runMutation({ action: "save", mode: mode, name: name, node: node,
-      parentId: parentId, text: $("editor-text").value });
+      parentId: parentId, text: $("editor-text").value }, true);
     if (result) { selectedId = result.id || ""; closeEditor(); render(); }
   }
 
@@ -812,9 +958,17 @@
   });
   $("btn-up").addEventListener("click", function () { moveSelected(-1); });
   $("btn-down").addEventListener("click", function () { moveSelected(1); });
+  $("btn-move-selected").addEventListener("click", function () {
+    openMoveEditor(Store.selectedRoots(tree, selectedItems).map(function (node) { return node.id; }));
+  });
   $("btn-delete-selected").addEventListener("click", function () {
     deleteNodes(Store.selectedRoots(tree, selectedItems));
   });
+  // A click anywhere outside the menu closes it; the menu's own buttons stop
+  // the event, so choosing an action does not close it twice. Pastex has no
+  // keyboard shortcut of its own, so a menu is dismissed by the same click that
+  // opened it or by picking one of its actions.
+  document.addEventListener("click", function () { if (!$("row-menu").hidden) closeEditMenu(); });
 
   $("editor-save").addEventListener("click", saveEditor);
   $("editor-cancel").addEventListener("click", closeEditor);
