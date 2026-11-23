@@ -30,16 +30,18 @@ def test_both_packaging_paths_agree_on_relationship_fields():
     control = (ROOT / "debian" / "control").read_text()
     script = (ROOT / "scripts" / "build-deb.sh").read_text()
     body = script.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
-    for field in ("Multi-Arch", "Conflicts", "Replaces", "Recommends"):
+    for field in ("Multi-Arch", "Recommends"):
         from_control = _control_field(control, field)
         from_script = _control_field(body, field)
         assert from_control == from_script, (
             f"{field}: control={from_control} build-deb={from_script}"
         )
     assert _control_field(control, "Multi-Arch") == ["foreign"]
-    # No Provides: the package answers to its current name only.
-    assert _control_field(control, "Provides") == []
-    assert _control_field(body, "Provides") == []
+    # Pastex names no other package at all: no alias, no conflict, no takeover.
+    # The package is self-contained, so there is nothing to relate to.
+    for field in ("Provides", "Conflicts", "Replaces", "Breaks"):
+        assert _control_field(control, field) == [], f"debian/control still sets {field}"
+        assert _control_field(body, field) == [], f"build-deb.sh still sets {field}"
 
 
 def test_browser_is_recommended_and_desktop_tools_are_gone():

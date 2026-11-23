@@ -105,8 +105,6 @@ Architecture: @ARCH@
 Installed-Size: @SIZE@
 Multi-Arch: foreign
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
-Conflicts: paste-teks
-Replaces: paste-teks
 Recommends: google-chrome-stable | chromium
 Description: One-click text snippet manager for Google Chrome
  Pastex is a Chrome extension (Manifest V3): a snippet library in the

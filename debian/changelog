@@ -1,3 +1,19 @@
+pastex (2.17.2-1) unstable; urgency=medium
+
+  * Drop "Conflicts" and "Replaces" for the retired paste-teks package. With
+    "Provides" already gone, the control file now names no other package at
+    all: Pastex is self-contained and relates to nothing else.
+  * Consequence, stated plainly: on a machine that still has paste-teks
+    installed, dpkg may refuse the upgrade because both packages place files
+    under the same paths. Removing the old package first clears it:
+        sudo apt remove paste-teks
+    This is not detected by a field any more, so it can only be reported by
+    dpkg at install time.
+  * A test asserts that Provides, Conflicts, Replaces and Breaks are all
+    absent, in debian/control, in build-deb.sh and in the built .deb.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
+
 pastex (2.17.1-1) unstable; urgency=medium
 
   * Drop "Provides: paste-teks". Pastex ships under its own name only: the
