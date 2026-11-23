@@ -5,6 +5,8 @@ __pycache__/
 build/
 dist/
 apt-repo/dist/
+# Local test deployment output (scripts/test-deploy.sh --serve).
+apt-repo/test-site/
 site/
 # CRX signing key (release builds use the PASTEX_CRX_KEY CI secret instead).
 debian/crx-key.pem

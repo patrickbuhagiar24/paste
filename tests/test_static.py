@@ -266,3 +266,41 @@ def test_tag_build_creates_a_release_with_verification_data():
     assert "site/archive-keyring.fingerprint.txt site/checksums.txt site/extension-id.txt" in workflow
     assert "site/extension-id.txt" in workflow
     assert "site/checksums.txt" in workflow
+
+
+# --- deploying a test build to a real computer ----------------------------
+
+
+def test_test_deploy_script_offers_both_real_situations() -> None:
+    """A tester either has the checkout on their machine, or installs from it."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    for flag in ("--local", "--serve", "--uninstall", "--port", "--output", "--key"):
+        assert flag in text, f"test-deploy.sh has no {flag} option"
+    assert "http.server" in text, "serve mode does not actually serve anything"
+    assert "--bind 0.0.0.0" in text, "serve mode would only answer on loopback"
+
+
+def test_test_deploy_uses_a_stable_test_key_and_says_so() -> None:
+    """A fresh key per build changes the extension id, so Chrome treats every
+    test build as a different extension."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "debian/pastex-test-crx-key.pem" in text
+    assert "PASTEX_CRX_KEY=" in text
+    assert "not the release key" in text
+    assert "*-crx-key.pem" in (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_generated_installer_verifies_the_download_and_cleans_up() -> None:
+    """The installer a tester runs must fail closed and leave no apt source."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "SHA256SUMS" in text
+    assert "sha256sum -c" in text
+    assert "Checksum mismatch" in text
+    assert "Dir::Etc::sourcelist" in text, "install must not depend on other sources"
+    assert "cleanup() { rm -f" in text, "the temporary apt source must be removed"
+
+
+def test_test_deploy_never_claims_to_be_a_release() -> None:
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "test path only" in text or "TEST build" in text
+    assert "signed release archive" in text

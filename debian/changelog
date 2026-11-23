@@ -48,6 +48,17 @@ pastex (2.19.0-1) unstable; urgency=medium
   * The pool publishes exactly one version. scripts/build-apt-repository.sh
     refuses an input directory holding two versions instead of uploading the
     older one alongside, and the test suite checks that refusal.
+  * New scripts/test-deploy.sh deploys a build for testing on a real computer:
+    --local builds and installs with apt on the machine holding the checkout,
+    --serve publishes a local APT archive and serves it so another machine on
+    the network can install it, and --uninstall removes it again. Test builds
+    are signed with one stable key in the checkout (debian/pastex-test-crx-key.pem,
+    ignored by Git) so the test extension id does not change between builds, and
+    the script states that it is not a release. The generated installer checks
+    the download against SHA256SUMS, uses its own apt source for one run and
+    deletes it afterwards. Both modes were run end to end, including the
+    install, the verification of the browser registration, the rebuild after a
+    root build, and the removal.
   * New scripts/reset-pastex-state.sh clears the extension's local storage and
     says so: Drive is never touched.
   * DEVELOPMENT.md gains rule 6: one language, English. tests/test_language.py

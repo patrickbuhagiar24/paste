@@ -148,6 +148,47 @@ The other documents:
 | [DEVELOPMENT.md](DEVELOPMENT.md) | the in-development policy: what may be dropped and what is never touched |
 | [SECURITY.md](SECURITY.md) | the signing keys, the release checks and the service-account trade-off |
 
+## Testing a build on a real computer
+
+There are two situations, and one command each. Both are **test** deployments:
+the extension is signed with a test key kept in the checkout, so its extension
+ID stays the same between test builds and is deliberately different from the
+release ID. The signed archive above remains the only way an end user installs
+a released version.
+
+**Pastex is being tested on the machine that holds the checkout** — build and
+install it there with apt:
+
+```bash
+sudo ./scripts/test-deploy.sh --local
+```
+
+**Another machine on the same network is the test machine** — publish a local
+APT archive and serve it:
+
+```bash
+./scripts/test-deploy.sh --serve          # prints a one-line command to paste
+```
+
+The printed command is `curl -fsSL http://<address>:8099/install-from-here.sh |
+sudo sh`. That installer verifies the downloaded `.deb` against `SHA256SUMS`,
+adds the temporary apt source for one run only, removes it afterwards, and
+asks for confirmation first, because a test archive is unsigned and has to be
+trusted by host. Nothing about Google Drive is touched by either mode.
+
+After installing, **quit the browser completely and start it again**: Chrome
+reads the extension registration only at startup. Then enable Pastex in
+`chrome://extensions` and pick the configuration folder with **Config**.
+
+To undo it:
+
+```bash
+sudo ./scripts/test-deploy.sh --uninstall
+```
+
+The test signing key is written to `debian/pastex-test-crx-key.pem`. It is
+ignored by Git and is never the release key; delete it to get a new test ID.
+
 ## Development and packaging
 
 ```bash

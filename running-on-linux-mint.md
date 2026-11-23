@@ -97,3 +97,19 @@ The package touches nothing outside `/usr/share/pastex`,
 `/usr/share/{google-chrome,chromium}/extensions` and one marker file in
 `/var/lib/pastex`. Your snippets live in Drive and are never removed by the
 package.
+
+## Trying a build before it is released
+
+If you are testing rather than installing a release, do not follow the signed
+archive instructions above. Use the test deployment, which keeps one stable
+test extension ID and never touches the signed archive:
+
+```bash
+sudo ./scripts/test-deploy.sh --local      # this machine holds the checkout
+./scripts/test-deploy.sh --serve           # another machine on the network installs
+sudo ./scripts/test-deploy.sh --uninstall  # remove it again
+```
+
+Quit the browser completely after installing, start it again, and enable
+Pastex when it asks. Your snippets in Google Drive are never touched by these
+commands.
