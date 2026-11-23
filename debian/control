@@ -2,7 +2,7 @@ Source: pastex
 Section: web
 Priority: optional
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 13), python3, openssl
+Build-Depends: dpkg-dev, python3, openssl
 Standards-Version: 4.6.2
 Homepage: https://github.com/patrickbuhagiar24/paste
 Rules-Requires-Root: no

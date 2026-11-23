@@ -497,3 +497,59 @@ test("a complete snapshot is not replaced by a degraded one when the quota is ti
   assert.ok(rows.every((node) => node.kind !== "text" || node.hash || node.text),
     "the degraded snapshot still describes every row");
 });
+
+test("a tight quota drops other libraries before it drops this one's bodies", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const key = Object.keys(w.localData[Cache.LKEY])[0];
+  // Another account's snapshot sits in the same store and makes every write
+  // too large. It is not on screen, so it goes first.
+  w.localData[Cache.LKEY].other = { identity: "other", tree: [], savedAt: 1, padding: "x".repeat(400) };
+  const original = w.localArea.set;
+  w.localArea.set = async (values) => {
+    const all = values[Cache.LKEY] || {};
+    if (Object.keys(all).length > 1) throw new Error("QUOTA_BYTES quota exceeded");
+    return original(values);
+  };
+  await cache.get(true);
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY];
+  assert.deepEqual(Object.keys(stored), [key], "the library on screen keeps its slot");
+  assert.ok(Object.values(stored[key].texts).includes("body of t2"),
+    "the bodies of the library on screen survive");
+});
+
+test("bodies are given up only when nothing else is left, and the rows stay readable", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const key = Object.keys(w.localData[Cache.LKEY])[0];
+  const original = w.localArea.set;
+  w.localArea.set = async (values) => {
+    const all = values[Cache.LKEY] || {};
+    const snap = all[key];
+    // Anything carrying the inline copy of a row's text is too large.
+    const heavy = snap && (snap.tree || []).some((node) =>
+      (node.children || []).some((child) => typeof child.text === "string" && child.text));
+    if (heavy) throw new Error("QUOTA_BYTES quota exceeded");
+    return original(values);
+  };
+  await cache.get(true);
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY][key];
+  const row = stored.tree[0].children[0];
+  assert.equal(row.kind, "text", "every row still describes itself");
+  assert.ok(row.hash, "the row points at a body instead of carrying it");
+  assert.ok(stored.texts[row.hash], "the body itself is still stored once");
+});
+
+test("when nothing fits, the library stays in session memory", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  w.localArea.set = async () => { throw new Error("QUOTA_BYTES quota exceeded"); };
+  const first = await cache.get(false);
+  assert.equal(first.pending, 0, "the session copy is complete");
+  const afterFirst = w.listings;
+  const second = await cache.get(false);
+  assert.equal(second.tree[0].children[0].id, "t2", "reading still works");
+  assert.equal(w.listings, afterFirst, "a failed write forces no extra Drive read");
+});

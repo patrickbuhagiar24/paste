@@ -380,12 +380,12 @@ def test_build_deb_registers_the_crx_for_autodetection():
     assert '"external_version"' in script
 
 
-def test_debian_rules_registers_the_crx_for_autodetection():
-    rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
-    assert "scripts/pack-crx.py" in rules
-    assert "external_crx" in rules
-    assert "/usr/share/google-chrome/extensions" in rules
-    assert "/usr/share/chromium/extensions" in rules
+def test_the_build_registers_the_crx_for_autodetection():
+    build = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    assert "scripts/pack-crx.py" in build
+    assert "external_crx" in build
+    assert "/usr/share/google-chrome/extensions" in build
+    assert "/usr/share/chromium/extensions" in build
 
 
 def test_control_recommends_a_browser():
@@ -430,7 +430,7 @@ def test_extension_readme_documents_setup_and_signing():
 def test_packaging_never_touches_home_directories():
     """A .deb runs as root and must not create per-user files; only comments
     and postinst notes may mention ~/.config (creation happens on login)."""
-    for name in ("scripts/build-deb.sh", "debian/rules", "debian/postinst", "debian/postrm"):
+    for name in ("scripts/build-deb.sh", "debian/postinst", "debian/postrm"):
         text = (ROOT / name).read_text(encoding="utf-8")
         code = "\n".join(
             line
@@ -449,7 +449,7 @@ def test_release_requires_new_crx_secret():
 
 
 def test_configuration_comes_only_from_a_user_selected_folder():
-    for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/rules", ROOT / "debian/postinst"]:
+    for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/postinst"]:
         text = path.read_text(encoding="utf-8")
         assert "~/.config/pastex" not in text
         assert "pastex-native-host" not in text

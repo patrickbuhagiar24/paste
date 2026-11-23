@@ -24,7 +24,8 @@ acceptable when it touches the first row, even if the change looks cosmetic.
    deleted in the same commit. No fallbacks, no feature detection for old
    browser versions, no "still read for older libraries".
 2. **State carries an explicit version.** Every persisted shape has a version
-   number (`pastex_index` → `"v": 2`, `pastex-config-cache` → `version: 1`).
+   number (`pastex_index` → `"v": 2`, `pastex-config-cache` → `version: 2`, the
+   queue → its own storage key `pastex.deferred.v1`).
    An unknown version is **discarded and rebuilt**, never guessed at field by
    field.
 3. **Content is out of bounds.** A format change never reads, rewrites or
@@ -36,9 +37,12 @@ acceptable when it touches the first row, even if the change looks cosmetic.
 5. **Deletions are visible.** Anything that can change what a user sees is a
    `BREAKING:` entry in `debian/changelog`, with what was dropped and what the
    user may notice. `apt changelog pastex` is the delivery channel.
+6. **One language, English.** Documents, code comments, script output and
+   commit messages are English. A document that is renamed is renamed, not
+   copied: the old name disappears.
 
-Rules 1 and 2 are enforced by tests (`tests/test_development_policy.py`).
-Rules 3–5 are reviewed, and the changelog convention is checked too.
+Rules 1, 2, 5 and 6 are enforced by tests (`tests/test_development_policy.py`,
+`tests/test_language.py`). Rules 3 and 4 are reviewed.
 
 ## Why not keep compatibility while it is cheap?
 

@@ -12,13 +12,14 @@ refresh only downloads the branch that really changed. The order and the
 collapse state of the library live in one label on the root folder. The check
 interval grows while Drive keeps reporting the same library and returns to
 its fast value as soon as a change is seen; the panel shows when the library
-was last checked and **↻ Refresh** stays the manual fallback.
+was last checked and **↻ Sync** sends waiting changes by hand.
 
-In **Config**, choose one JSON manifest containing download links for
-`pastex-sites.json`, `pastex-google-drive.json` and your service-account JSON.
-Pastex fetches those links on demand and stores only the URLs; there is no
-folder picker. See [the extension README](extension/README.md) for the manifest
-format and the security trade-off of a linked service-account key.
+In **Config**, pick a local folder holding `pastex-google-drive.json`,
+`pastex-sites.json` and your service-account JSON. Pastex reads that folder
+once, validates every file, and then works from its own cache; nothing in the
+folder is ever uploaded or published. See
+[the extension README](extension/README.md) for the three files and their
+contents.
 
 ## Install on Linux Mint through APT only
 
@@ -132,10 +133,20 @@ anything a user will notice is a `BREAKING:` entry in the changelog.
 
 ## Architecture in plain language
 
-[ARSITEKTUR.md](ARSITEKTUR.md) explains how Pastex works without code: the four
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how Pastex works without code: the four
 parts a user can imagine (panel, in-page button, background worker, Google
 Drive), what happens to an edit, when Drive is contacted, and a "to change X,
 open Y" file map.
+
+The other documents:
+
+| Document | What it answers |
+| --- | --- |
+| [running-on-linux-mint.md](running-on-linux-mint.md) | installing and running Pastex on Linux Mint, step by step |
+| [where-order-and-collapse-live.md](where-order-and-collapse-live.md) | where manual order and folded folders are stored, and when they reset |
+| [ANALYSIS.md](ANALYSIS.md) | the colour and accessibility work, plus the improvements that are not done yet |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | the in-development policy: what may be dropped and what is never touched |
+| [SECURITY.md](SECURITY.md) | the signing keys, the release checks and the service-account trade-off |
 
 ## Development and packaging
 

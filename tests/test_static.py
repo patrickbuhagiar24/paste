@@ -107,20 +107,33 @@ def test_postinst_does_not_touch_accounts_or_services():
 
 
 def test_extension_payload_is_registered_for_autodetection():
-    """debian/rules must ship the unpacked extension, the signed .crx, and
-    the external-install JSON for Chrome and Chromium (2.x payload)."""
-    rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
+    """The one build path must ship the unpacked extension, the signed .crx,
+    and the external-install JSON for Chrome and Chromium (2.x payload)."""
+    build = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
     for required in (
-        "cp -r extension debian/pastex/usr/share/pastex/extension",
+        "cp -r extension",
         "scripts/pack-crx.py",
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "/usr/share/chromium/extensions",
         "extension/README.md",
     ):
-        assert required in rules, f"rules misses {required!r}"
+        assert required in build, f"build-deb.sh misses {required!r}"
     for legacy in ("usr/bin/pastex", "pastex.desktop", "pastex-uinput-group"):
-        assert legacy not in rules, f"rules still ships desktop file {legacy}"
+        assert legacy not in build, f"build-deb.sh still ships desktop file {legacy}"
+
+
+def test_there_is_exactly_one_build_path():
+    """DEVELOPMENT.md: one name, one path. A debhelper build would be a second
+    way to produce the same package, so it stays gone."""
+    assert not (ROOT / "debian" / "rules").exists(), (
+        "debian/rules is back; scripts/build-deb.sh is the only package build"
+    )
+    assert not (ROOT / "debian" / "source").exists(), (
+        "debian/source/ describes a source package the project does not build"
+    )
+    control = (ROOT / "debian" / "control").read_text(encoding="utf-8")
+    assert "debhelper" not in control, "the control file names a build tool the project does not use"
 
 
 # --- the generated control file must be shell-proof -----------------------

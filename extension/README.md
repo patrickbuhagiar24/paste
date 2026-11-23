@@ -13,16 +13,16 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
 ## Set up the configuration folder
 
 Configuration is a **folder of JSON files on your computer**, not a manifest of
-Drive links. Click **Config** once, pick the folder, and Pastex discovers the
-three files by their contents. Nothing in the folder needs to be public, and
+Drive links. Click **Config** once, pick the folder, and Pastex reads the
+three files by name. Nothing in the folder needs to be public, and
 no Drive link is ever shared.
 
 1. Enable the **Drive API** in Google Cloud, create a service account and
    download its JSON key. **Share the snippets folder with its `client_email`
    as an Editor** — that grant is the only thing that lets Pastex read and
    write snippets. Save the key in the configuration folder as
-   `service-account.json` (a key downloaded under a project-specific name is
-   also detected).
+   `service-account.json`. This is the one file recognised by its content, so a
+   key downloaded under a project-specific name is accepted too.
 2. Add `pastex-google-drive.json` to the same folder:
 
    ```json
@@ -44,7 +44,8 @@ no Drive link is ever shared.
    select the folder containing the three files. Every `.json` file in that
    folder is read and identified by content — a key carries
    `"type": "service_account"`, the others carry `folder_id`/`folder_url` and
-   `allowed_sites` — so names and extra files do not matter. Nested folders are
+   `allowed_sites`. Only `pastex-sites.json` and `pastex-google-drive.json` must
+   carry those exact names; extra files are ignored. Nested folders are
    ignored. Files are validated before the choice is accepted; if anything is
    invalid, the previous configuration is kept.
 
@@ -95,9 +96,11 @@ a download. The first open after a browser restart is served from
 `chrome.storage.local` before a silent refresh starts.
 
 `storage.local` is bounded, so a write degrades in stages instead of failing
-silently: the complete snapshot first, then the same snapshot with each body
-kept once, then only the newest snapshot. A complete snapshot is never
-replaced by a degraded one. A cached open reports how many rows still miss a
+silently, in one fixed order: every stored library complete, then this library
+alone complete, then this library alone compacted (each body kept once), then
+nothing. A snapshot that is on screen keeps its bodies before another account's
+snapshot keeps its place, and a complete snapshot is never replaced by a
+compacted one while it still fits. A cached open reports how many rows still miss a
 body; the panel shows the list at once and the worker fills those rows without
 listing Drive again, then repaints. The cache contains snippet text (not the
 service-account key) and is accessible to the extension, not websites.
@@ -186,8 +189,8 @@ filled primary buttons; **Sync** takes that role while Drive is
 unavailable, because it is the action that helps then. **Collapse all** folds
 every folder and clears the search first. The drive bar shows a state dot and
 `Google Drive • session cache · N snippets` when the list came from the
-session or local cache; the label is kept for compatibility, and the moment of
-the last check with Drive is shown next to it.
+session or local cache, and the moment of the last check with Drive is shown
+next to it.
 
 ## Reading from the cache, writing when you leave
 
@@ -249,14 +252,15 @@ The palette and these rules are checked numerically in
 
 The toolbar icon itself is a toggle: click it to open the side panel, click it
 again to close it (the browser owns that behavior through
-`sidePanel.setPanelBehavior`). Older Chrome keeps opening the panel. The panel
-has no Close button of its own — the toolbar icon is the switch.
+`sidePanel.setPanelBehavior`). The panel has no Close button of its own — the
+toolbar icon is the switch. Chrome/Chromium 141 or newer is required, so the
+toggle is always available.
 
 On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. The same button is a toggle:
-while the panel is open it reads **×** and closes it again.
-Older Chrome keeps the open-only behavior, and the soundness of the click is
-unchanged (the same short-lived capability authorizes either action). The launcher is a deep indigo
+while the panel is open it reads **×** and closes it again. The soundness of
+the click is unchanged: the same short-lived capability authorizes either
+action. The launcher is a deep indigo
 disc with a near-black rim, a white inner ring and a soft halo, so it reads
 at a glance on a light page, on a dark page and on a colourful one. The halo
 stops when the system asks for reduced motion, and the rim grows when the
@@ -289,8 +293,8 @@ not listed in `pastex-sites.json` are not injected or targeted.
 - If configuration is missing or a file in the folder cannot be read, open
   **Config** and reselect the folder. The folder must contain
   `service-account.json`, `pastex-google-drive.json` and `pastex-sites.json`
-  (names are matched by content, so a downloaded key name also works). The
-  worker console can show errors.
+  under exactly those names (the key may also be a file whose content marks it
+  as a service-account key). The worker console can show errors.
 - If Drive says 404, share the folder with the service account email. Token
   errors can indicate a malformed key or a disabled Drive API. Snippets appear
   progressively while loading; a stalled Google request times out and reports

@@ -21,8 +21,27 @@ pastex (2.19.0-1) unstable; urgency=medium
     their canonical names only. A renamed file is reported as missing. The
     service-account key keeps content detection, because Google downloads it
     under a project-specific name.
+  * The project speaks one language: every document, script message and code
+    comment is English. ARSITEKTUR.md became ARCHITECTURE.md, ANALISIS.md
+    became ANALYSIS.md, cara-jalankan-get-linux-mint.md became
+    running-on-linux-mint.md, and lokasi-collapse-urutan.md became
+    where-order-and-collapse-live.md. The old names are gone, not aliased.
+  * One build path: debian/rules and debian/source/format are deleted, because
+    scripts/build-deb.sh packs the .deb with dpkg-deb directly and nothing ever
+    ran debhelper. debian/control no longer Build-Depends on debhelper.
+    tests/test_static.py now fails if that second path comes back.
+  * The local cache now degrades in one stated order when storage.local is
+    full: every stored library complete, then this library alone complete, then
+    this library alone compacted, then session memory only. Before, the compacted
+    copy was tried before dropping another account's snapshot, so a library on
+    screen could lose its bodies while an off-screen library kept its place.
+    Nothing a user notices changes while the snapshot fits.
   * New scripts/reset-pastex-state.sh clears the extension's local storage and
     says so: Drive is never touched.
+  * DEVELOPMENT.md gains rule 6: one language, English. tests/test_language.py
+    fails when Indonesian text returns to a living document, script or shipped
+    module, when a renamed document is left behind as a copy, or when a
+    document link points at a file that no longer exists.
   * New tests/test_development_policy.py fails when shipped code keeps a
     compatibility path, when a persisted shape loses its version, or when the
     policy document stops describing the three classes.
@@ -137,7 +156,7 @@ pastex (2.16.0-1) unstable; urgency=medium
     is not reachable, when sidepanel.html loads a module that does not provide
     a Pastex* global the panel uses, or when the per-item Drive writers come
     back.
-  * ARSITEKTUR.md explains the project to a reader who does not program.
+  * ARCHITECTURE.md explains the project to a reader who does not program.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
 

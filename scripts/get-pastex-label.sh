@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Lihat label Pastex (pastex_index, pastex_order, pastex_collapsed) di Drive.
+# Inspect the label Pastex stores on a Google Drive item (pastex_index).
 #
-# Pemakaian:
-#   ./scripts/get-pastex-label.sh                     # label di folder utama
-#   ./scripts/get-pastex-label.sh <FILE_ID>           # label sebuah berkas/folder
+# Usage:
+#   ./scripts/get-pastex-label.sh                     # label on the library root folder
+#   ./scripts/get-pastex-label.sh <FILE_ID>           # label on any file or folder
 #   ./scripts/get-pastex-label.sh --help
 #
-# Butuh: curl, jq, openssl (semua sudah terpasang di Linux Mint secara bawaan).
-# Kunci service account dibaca dari berkas JSON, tidak pernah ditulis ke disk lain
-# dan tidak pernah dicetak.
+# Requires: curl, jq, openssl (all installed by default on Linux Mint).
+# The service-account key is read from its JSON file; it is never copied
+# elsewhere and never printed.
 
 set -euo pipefail
 
@@ -18,17 +18,17 @@ SCOPE="https://www.googleapis.com/auth/drive.readonly"
 
 usage() {
   cat <<'USAGE'
-Penggunaan: get-pastex-label.sh [opsi] [FILE_ID]
+Usage: get-pastex-label.sh [options] [FILE_ID]
 
-  FILE_ID              id folder/berkas Google Drive (default: folder utama Pastex)
-  -k, --key BERKAS     service-account.json (default: ./service-account.json)
-  -h, --help           tampilkan bantuan ini
+  FILE_ID              Google Drive file/folder id (default: the Pastex root folder)
+  -k, --key FILE       service-account.json (default: ./service-account.json)
+  -h, --help           show this help
 
-Contoh:
-  ./scripts/get-pastex-label.sh -k ~/kunci/service-account.json
-  ./scripts/get-pastex-label.sh -k ~/kunci/service-account.json 17Xk...folderId
+Examples:
+  ./scripts/get-pastex-label.sh -k ~/keys/service-account.json
+  ./scripts/get-pastex-label.sh -k ~/keys/service-account.json 17Xk...folderId
 
-Keluaran: properti (label) mentah, lalu pastex_index yang sudah dirapikan.
+Output: the raw properties (labels), then the decoded pastex_index.
 USAGE
 }
 
@@ -36,13 +36,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -k|--key) KEY_FILE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    -*) echo "Opsi tidak dikenal: $1" >&2; usage >&2; exit 2 ;;
+    -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) FILE_ID="$1"; shift ;;
   esac
 done
 
 for tool in curl jq openssl; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "Butuh '$tool'. Pasang: sudo apt install $tool" >&2; exit 1; }
+  command -v "$tool" >/dev/null 2>&1 || { echo "Required tool '$tool' is missing. Install it: sudo apt install $tool" >&2; exit 1; }
 done
 
 if [ -z "$KEY_FILE" ]; then
@@ -51,9 +51,9 @@ if [ -z "$KEY_FILE" ]; then
   done
 fi
 [ -n "$KEY_FILE" ] && [ -f "$KEY_FILE" ] || {
-  echo "Berkas kunci tidak ditemukan. Tunjuk dengan: -k /path/service-account.json" >&2; exit 1; }
+  echo "No key file found. Point at one with: -k /path/service-account.json" >&2; exit 1; }
 
-# Tanpa id, folder utama dibaca dari pastex-google-drive.json bila ada di sekitar.
+# Without an id, the root folder is read from pastex-google-drive.json nearby.
 if [ -z "$FILE_ID" ]; then
   for candidate in pastex-google-drive.json ./pastex-google-drive.json; do
     [ -f "$candidate" ] || continue
@@ -66,13 +66,13 @@ if [ -z "$FILE_ID" ]; then
   done
 fi
 [ -n "$FILE_ID" ] || {
-  echo "ID folder tidak diberikan dan tidak ditemukan di pastex-google-drive.json." >&2
-  echo "Pakai: $0 -k kunci.json <FOLDER_ID>" >&2; exit 1; }
+  echo "No folder id was given and none was found in pastex-google-drive.json." >&2
+  echo "Use: $0 -k key.json <FOLDER_ID>" >&2; exit 1; }
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
-# --- tanda tangan JWT (RS256) dengan openssl -------------------------------
+# --- JWT signature (RS256) with openssl -----------------------------------
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
 header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
@@ -93,24 +93,24 @@ token="$(curl --fail --silent --show-error \
   --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer' \
   --data-urlencode "assertion=$assertion" \
   https://oauth2.googleapis.com/token | jq -r '.access_token // empty')"
-[ -n "$token" ] || { echo "Gagal mendapat token akses. Periksa kunci dan Drive API." >&2; exit 1; }
+[ -n "$token" ] || { echo "Could not obtain an access token. Check the key and the Drive API." >&2; exit 1; }
 
-# --- baca properti ---------------------------------------------------------
+# --- read the properties ---------------------------------------------------
 body="$(curl --fail --silent --show-error -H "Authorization: Bearer $token" \
   "https://www.googleapis.com/drive/v3/files/$(printf '%s' "$FILE_ID" | jq -sRr @uri)?fields=id,name,mimeType,properties")" || {
-  echo "Permintaan gagal. Pastikan folder dibagikan ke: $(jq -r '.client_email' "$KEY_FILE")" >&2; exit 1; }
+  echo "The request failed. Make sure the folder is shared with: $(jq -r '.client_email' "$KEY_FILE")" >&2; exit 1; }
 
-echo "Berkas : $(printf '%s' "$body" | jq -r '.name // "?"')  ($(printf '%s' "$body" | jq -r '.id'))"
-echo "Properti mentah:"
-printf '%s' "$body" | jq '.properties // {}' 
+echo "Item     : $(printf '%s' "$body" | jq -r '.name // "?"')  ($(printf '%s' "$body" | jq -r '.id'))"
+echo "Raw properties:"
+printf '%s' "$body" | jq '.properties // {}'
 
 index="$(printf '%s' "$body" | jq -r '.properties.pastex_index // empty')"
 echo
 if [ -z "$index" ]; then
-  echo "pastex_index tidak ada di objek ini."
-  echo "Kalau ini folder utama, urutan/lipat mungkin masih memakai label lama"
-  echo "per-item (pastex_order / pastex_collapsed) pada tiap berkas."
+  echo "This item has no pastex_index label."
+  echo "On the root folder that means the library is shown in Drive's own order"
+  echo "with every folder open; Pastex writes the label on the next reorder or fold."
 else
-  echo "pastex_index (dirapikan):"
+  echo "pastex_index (decoded):"
   printf '%s' "$index" | jq . 2>/dev/null || printf '%s\n' "$index"
 fi

@@ -13,11 +13,11 @@
  * background checks while the user is away.
  *
  * storage.local is bounded, so the write degrades in stages instead of failing
- * silently: the complete snapshot of this library first, then the same
- * snapshot with each body kept once, then only the newest snapshot. The panel
- * counts the rows that still need a body so they can be filled while the
- * machine is idle. A library that does not fit at all falls back to the
- * worker's session memory, as before.
+ * silently, and the order is fixed by one rule — give up the other libraries
+ * before the bodies of this one: every stored library complete, then this
+ * library alone complete, then this library alone compacted (each body stored
+ * once), then nothing (session memory only). The panel counts the rows that
+ * still need a body so they can be filled while the machine is idle.
  *
  * Verified text bodies are addressed by the SHA-256 of their content and
  * survive tree invalidations, so an explicit refresh does not re-download
@@ -209,25 +209,40 @@
     }
 
     // The local quota is shared by every snapshot and by whatever else the
-    // extension stores, so a write may not fit. Three candidates are tried in
-    // order: the complete snapshot, then the same snapshot with the bodies'
-    // text kept only once, then only the newest snapshot. A complete snapshot
-    // is never replaced by a degraded one, so a small library cannot be
-    // knocked out of the cache by a large one.
+    // extension stores, so a write may not fit. The rule is one sentence:
+    // **give up the other libraries before you give up the bodies of this one**,
+    // and give up a body only when nothing else is left. Four candidates are
+    // tried in this order, and the first one that fits is kept:
+    //
+    //   1. every stored library, this one complete;
+    //   2. this library alone, complete — the other libraries are dropped
+    //      first because they are not on screen;
+    //   3. this library alone, compacted (each body stored once, no inline
+    //      copy on a row) — every row still describes itself, and the missing
+    //      bodies are refilled by fill() while the machine is idle;
+    //   4. nothing: the worker's session memory holds the library until the
+    //      next read.
+    //
+    // A complete snapshot is therefore never replaced by a compacted one while
+    // the complete one still fits, and a small library cannot be knocked out of
+    // the cache by a large one.
     async function writeLocal(key, snap) {
       var store = localStore();
       if (!store) return;
-      try {
-        var all = await localAll();
-        all[key] = snap;
-        pruneEntries(all);
-        await store.set({ [LKEY]: all });
-      } catch (ignored) {
-        // The candidate with the fewest bytes that still describes the library
-        // the same way.
-        try { await store.set({ [LKEY]: { [key]: compactSnapshot(snap) } }); }
-        catch (ignoredAgain) { try { await store.set({ [LKEY]: { [key]: snap } }); } catch (ignoredThird) { /* session memory only */ } }
+      var candidates = [
+        function (all) { all[key] = snap; return all; },
+        function () { return { [key]: snap }; },
+        function () { return { [key]: compactSnapshot(snap) }; },
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        try {
+          var all = candidates[i](await localAll());
+          pruneEntries(all);
+          await store.set({ [LKEY]: all });
+          return;
+        } catch (ignored) { /* try the next, smaller candidate */ }
       }
+      /* session memory only */
     }
 
     // The inline text of a text node duplicates texts[hash]; the loader reads

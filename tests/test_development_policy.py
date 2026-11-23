@@ -96,19 +96,43 @@ def test_unknown_state_is_rebuilt_not_guessed():
     )
 
 
+# Words that mean a release takes something away from a user who already has
+# Pastex installed. Any of them in the newest changelog entry requires a
+# BREAKING: line next to it.
+REMOVAL_WORDS = (
+    "deleted", "removed", "dropped", "ignored", "renamed", "replaced",
+    "no longer", "reset", "discarded", "migrated",
+)
+
+
 def test_breaking_changes_are_announced_in_the_changelog():
-    """Anything that resets what a user sees is a BREAKING entry."""
-    entry = (ROOT / "extension" / "README.md").read_text(encoding="utf-8")
+    """Anything that takes something away is a BREAKING entry, not a footnote."""
     assert "BREAKING" in (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8")
 
     changelog = (ROOT / "debian" / "changelog").read_text(encoding="utf-8")
     latest = changelog.split("\n -- ", 1)[0]
-    # The release that dropped the per-item labels must say so.
-    if "per-item" in latest or "pastex_order" in latest:
-        assert "BREAKING:" in latest, (
-            "a release that drops stored state must carry a BREAKING: line"
+    lower = latest.lower()
+    removals = [word for word in REMOVAL_WORDS if word in lower]
+    assert not removals or "BREAKING:" in latest, (
+        "the newest changelog entry removes something "
+        f"({', '.join(removals)}) without a BREAKING: line explaining what a "
+        "user may notice. See DEVELOPMENT.md rule 5."
+    )
+
+
+def test_every_breaking_line_names_what_the_user_loses():
+    """"BREAKING:" alone is not an entry: it must say what happens."""
+    changelog = (ROOT / "debian" / "changelog").read_text(encoding="utf-8")
+    latest = changelog.split("\n -- ", 1)[0]
+    paragraphs = re.split(r"\n  \* ", latest)
+    for paragraph in paragraphs:
+        if "BREAKING:" not in paragraph:
+            continue
+        body = paragraph.split("BREAKING:", 1)[1].strip()
+        assert len(body.split()) >= 8, (
+            "a BREAKING: line must say what was dropped and what the user sees: "
+            f"{body!r}"
         )
-    assert entry  # the extension README is still the user-facing reference
 
 
 def test_policy_document_states_the_three_classes():
