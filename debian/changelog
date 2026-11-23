@@ -18,6 +18,9 @@ pastex (2.20.0-1) unstable; urgency=medium
     multi-row move is available from the selection bar.
   * The side panel repaints after an edit that was made from a dialog, so a
     moved row appears in its new folder at once instead of after a reload.
+  * Fixed: a queued write that Drive refuses for good was dropped in silence,
+    so the panel kept showing an edit that would never land. The status line
+    now says what Drive refused.
 
  -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 23 Nov 2026 23:43:00 +0000
 
