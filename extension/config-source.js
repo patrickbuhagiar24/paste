@@ -1,137 +1,206 @@
-/* Read configuration from a folder the user picked once, discovering the
- * three JSON files by content rather than by a manifest of Drive links.
- * Only the directory handle is persisted (IndexedDB); the downloaded JSON and
- * the service-account key stay in memory.
- * Files are memoized per folder so repeated opens, mutations and allowlist
- * checks do not re-read the same three JSON files. */
+/* Read configuration from a folder the user picked once, then keep the parsed
+ * JSON in persistent storage so later reads never touch the folder again.
+ *
+ * Why: only the side panel has a user gesture and a folder handle. The
+ * background worker reads configuration from an offscreen document, which is
+ * not allowed to use File System Access handles ("The request is not allowed by
+ * the user agent or the platform in the current context"). So the panel scans
+ * the folder once, stores the result, and everything afterwards reads the cache.
+ * The folder is a source of configuration, never its storage. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexConfigSource = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
   var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", ACCOUNT = "service-account.json";
-  var FOLDER = "folder ";
+  var FOLDER = "folder ", CACHE = "pastex-config-cache";
+  var MAX_BYTES = 256 * 1024;
 
-  function create(store, discovery, sites, manifest) {
-    var cache = { config: null, configKey: "", sites: null, sitesKey: "" };
+  function create(store, discovery, sites, cacheStore) {
+    var memoized = { config: null, configKey: "", sites: null, sitesKey: "" };
     var inFlight = new Map();
 
-    function requireFolder(source) {
-      if (!source || source.kind !== "folder" || !source.handle || typeof source.handle.values !== "function")
+    function storage() {
+      if (!cacheStore || typeof cacheStore.get !== "function" || typeof cacheStore.set !== "function")
+        throw new Error("Configuration storage is unavailable.");
+      return cacheStore;
+    }
+
+    async function readCache() {
+      // chrome.storage.get(key) resolves to an OBJECT keyed by the key, so the
+      // record has to be unwrapped. Reading it as the record itself makes
+      // `files` undefined on every later open.
+      var result = await storage().get(CACHE);
+      var record = result && typeof result === "object" ? result[CACHE] : null;
+      return record && typeof record === "object" ? record : null;
+    }
+
+    async function writeCache(files, name) {
+      await storage().set({ [CACHE]: {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        folder: name || "",
+        files: files,
+      } });
+    }
+
+    async function clearCache() {
+      await storage().set({ [CACHE]: null });
+      memoized.config = null; memoized.configKey = "";
+      memoized.sites = null; memoized.sitesKey = "";
+      inFlight.clear();
+    }
+
+    /* Scan only the surface of the chosen folder: entries that are files and
+     * end in .json. Subfolders are skipped without being opened. */
+    async function scanFolder(handle) {
+      if (!handle || typeof handle.values !== "function")
         throw new Error("Choose a configuration folder in Config first.");
-      return source;
-    }
-
-    function keyOf(source) {
-      return JSON.stringify([source.kind, source.name || "", source.signature || ""]);
-    }
-
-    async function memo(kind, key, force, load) {
-      if (!force && cache[kind] && cache[kind + "Key"] === key) return cache[kind];
-      var slot = kind + ":" + key;
-      if (!force && inFlight.has(slot)) return inFlight.get(slot);
-      var promise = (async function () {
-        var value = await load();
-        cache[kind] = value;
-        cache[kind + "Key"] = key;
-        return value;
-      })();
-      if (!force) inFlight.set(slot, promise);
-      try { return await promise; }
-      finally { if (inFlight.get(slot) === promise) inFlight.delete(slot); }
-    }
-
-    /* Read the folder once and hand the JSON files to the discovery step,
-     * which identifies them by content: a service-account key carries
-     * "type": "service_account", the others carry folder_id/folder_url and
-     * allowed_sites. Nested folders and non-JSON files are ignored. */
-    async function folderFiles(source) {
-      var handle = source.handle;
-      var top = [];
+      var raw = {};
       for await (var entry of handle.values()) {
         if (entry.kind !== "file") continue;
         if (!/\.json$/i.test(entry.name || "")) continue;
-        // `let` keeps one binding per iteration: `text()` must close over this
-        // file, not over whichever file the loop ended on.
-        let file;
+        var file;
         try { file = await entry.getFile(); } catch (err) { continue; }
-        top.push({
-          name: file.name || entry.name,
-          size: file.size,
-          webkitRelativePath: (source.name || "configuration") + "/" + (file.name || entry.name),
-          text: function () { return file.text(); },
-        });
+        var text;
+        try { text = await file.text(); } catch (err) { continue; }
+        if (text.length > MAX_BYTES) continue;
+        var value;
+        try { value = JSON.parse(text.replace(/^\uFEFF/, "")); } catch (err) { continue; }
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        raw[file.name || entry.name] = value;
       }
-      if (!top.length) throw new Error("No .json files found in the selected folder.");
-      var found = await discovery.discover(top);
-      return found;
+      if (!Object.keys(raw).length) throw new Error("No usable .json files in the folder.");
+      return raw;
     }
 
-    async function readConfigFrom(source, force) {
-      var active = requireFolder(source);
-      return memo("config", keyOf(active), !!force, async function () {
-        var found = await folderFiles(active);
-        var drive = found.files[DRIVE], sa = found.files[ACCOUNT];
-        var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
-        if (!id && drive && typeof drive.folder_url === "string") {
-          var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
-          id = match ? match[1] : "";
-        }
-        var validId = /^[A-Za-z0-9_-]+$/.test(id);
-        var validSa = sa && sa.type === "service_account" && typeof sa.client_email === "string" && sa.client_email.trim() &&
-          typeof sa.private_key === "string" && sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 && sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+    /* Identify the three files by their contents, so names do not matter and
+     * a key downloaded under a project-specific name still works. */
+    function identify(raw) {
+      var files = {}, sources = {};
+      var keys = Object.keys(raw);
+      var named = function (name) { return raw[name]; };
+      var viaContent = function (test) {
+        for (var i = 0; i < keys.length; i++) if (test(raw[keys[i]])) return keys[i];
+        return "";
+      };
+      var driveName = keys.indexOf(DRIVE) !== -1 ? DRIVE :
+        keys.indexOf("google-drive.json") !== -1 ? "google-drive.json" :
+        viaContent(function (v) { return typeof v.folder_id === "string" || typeof v.folder_url === "string"; });
+      if (driveName) { files[DRIVE] = named(driveName); sources[DRIVE] = driveName; }
+
+      var sitesName = keys.indexOf(SITES) !== -1 ? SITES :
+        keys.indexOf("sites.json") !== -1 ? "sites.json" :
+        viaContent(function (v) { return Array.isArray(v.allowed_sites); });
+      if (sitesName) { files[SITES] = named(sitesName); sources[SITES] = sitesName; }
+
+      var accountName = keys.indexOf(ACCOUNT) !== -1 ? ACCOUNT :
+        viaContent(function (v) { return v.type === "service_account"; });
+      if (accountName) { files[ACCOUNT] = named(accountName); sources[ACCOUNT] = accountName; }
+      return { files: files, sources: sources };
+    }
+
+    function validate(found) {
+      var drive = found.files[DRIVE], sa = found.files[ACCOUNT], sitesFile = found.files[SITES];
+      var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
+      if (!id && drive && typeof drive.folder_url === "string") {
+        var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
+        id = match ? match[1] : "";
+      }
+      var validId = /^[A-Za-z0-9_-]+$/.test(id);
+      var validSa = sa && sa.type === "service_account" && typeof sa.client_email === "string" && sa.client_email.trim() &&
+        typeof sa.private_key === "string" && sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 && sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+      if (!validId) throw new Error("Add a pastex-google-drive.json with a valid folder_id to the folder.");
+      if (!validSa) throw new Error("Add a valid service-account.json key to the folder.");
+      if (!sitesFile || !Array.isArray(sitesFile.allowed_sites))
+        throw new Error(SITES + ": allowed_sites must be an array.");
+      sites.parse(sitesFile.allowed_sites); // Invalid lists fail closed everywhere.
+      return { folderId: id, client_email: sa.client_email, private_key: sa.private_key, allowedSites: sitesFile.allowed_sites };
+    }
+
+    /* Called by the panel after the user picks a folder. Scans the surface,
+     * validates, and only then replaces the cache: a broken folder never
+     * wipes a working configuration. */
+    async function chooseFolder(handle) {
+      var found = identify(await scanFolder(handle));
+      validate(found);
+      await writeCache(found.files, handle.name || "");
+      memoized.config = null; memoized.configKey = "";
+      memoized.sites = null; memoized.sitesKey = "";
+      return { drive: FOLDER + DRIVE, account: FOLDER + ACCOUNT, sites: FOLDER + SITES };
+    }
+
+    /* All later reads come from the cache; the folder is not used again. */
+    async function readConfigFrom(force) {
+      var record = await readCache();
+      if (!record) throw new Error("Choose a configuration folder in Config first.");
+      var key = record.savedAt + ":" + record.folder;
+      return memo("config", key, !!force, async function () {
+        var v = validate({ files: record.files, sources: {} });
         return {
-          drive: validId ? { folderId: id } : null,
-          driveError: validId ? "" : "The selected folder needs a " + DRIVE + " with a valid folder_id.",
-          serviceAccount: validSa ? { client_email: sa.client_email, private_key: sa.private_key } : null,
-          serviceAccountError: validSa ? "" : "The selected folder needs a valid " + ACCOUNT + " key.",
-          sources: found.sources,
+          drive: { folderId: v.folderId },
+          driveError: "",
+          serviceAccount: { client_email: v.client_email, private_key: v.private_key },
+          serviceAccountError: "",
+          sources: {},
         };
       });
     }
 
-    async function readSitesFrom(source, force) {
-      var active = requireFolder(source);
-      return memo("sites", keyOf(active), !!force, async function () {
-        var found = await folderFiles(active);
-        var data = found.files[SITES];
-
-        if (!data || !Array.isArray(data.allowed_sites))
-          throw new Error(SITES + ": allowed_sites must be an array.");
-        sites.parse(data.allowed_sites); // Invalid lists fail closed everywhere.
-        return { allowedSites: data.allowed_sites, source: FOLDER + SITES };
+    async function readSitesFrom(force) {
+      var record = await readCache();
+      if (!record) throw new Error("Choose a configuration folder in Config first.");
+      var key = record.savedAt + ":" + record.folder;
+      return memo("sites", key, !!force, async function () {
+        var v = validate({ files: record.files, sources: {} });
+        return { allowedSites: v.allowedSites, source: FOLDER + SITES };
       });
     }
 
-    /* Accept a folder handle chosen by the user, verify it, and only then
-     * persist it. A broken folder never replaces a working configuration. */
-    async function chooseFolder(handle) {
-      if (!handle || typeof handle.values !== "function")
-        throw new Error("Choose a configuration folder in Config first.");
-      var descriptor = { kind: "folder", handle: handle, name: handle.name || "" };
-      var results = await Promise.all([
-        readConfigFrom(descriptor, true),
-        readSitesFrom(descriptor, true),
-      ]);
-      var drive = results[0], allowed = results[1];
-      if (!drive.drive) throw new Error(drive.driveError);
-      if (!drive.serviceAccount) throw new Error(drive.serviceAccountError);
-      // Persist only the handle, never the file contents or the key.
-      await store.set(descriptor);
-      return { drive: FOLDER + DRIVE, account: FOLDER + ACCOUNT, sites: allowed.source };
+    function memo(kind, key, force, load) {
+      if (!force && memoized[kind] && memoized[kind + "Key"] === key) return memoized[kind];
+      var slot = kind + ":" + key;
+      if (!force && inFlight.has(slot)) return inFlight.get(slot);
+      var promise = (async function () {
+        var value = await load();
+        memoized[kind] = value;
+        memoized[kind + "Key"] = key;
+        return value;
+      })();
+      if (!force) inFlight.set(slot, promise);
+      try { return promise; }
+      finally { inFlight.get(slot) === promise && inFlight.delete(slot); }
     }
 
-    function invalidate() {
-      cache.config = null; cache.configKey = "";
-      cache.sites = null; cache.sitesKey = "";
-      inFlight.clear();
+    /* Status for the panel: tells the user which files are in use. */
+    async function describe() {
+      var record = await readCache();
+      if (!record) return { configured: false, folder: "", savedAt: "" };
+      var found = identify(record.files || {});
+      return {
+        configured: true,
+        folder: record.folder || "",
+        savedAt: record.savedAt || "",
+        missing: [DRIVE, SITES, ACCOUNT].filter(function (name) { return !found.files[name]; }),
+      };
     }
 
     return {
       chooseFolder: chooseFolder,
-      invalidate: invalidate,
-      readConfig: async function (force) { return readConfigFrom(await store.get(), force); },
-      readSites: async function (force) { return readSitesFrom(await store.get(), force); },
+      clearCache: clearCache,
+      describe: describe,
+      invalidate: clearCache,
+      readCached: async function (force) {
+        var config = await readConfigFrom(!!force);
+        var allowed = await readSitesFrom(!!force);
+        return {
+          drive: { folderId: config.drive.folderId },
+          serviceAccount: config.serviceAccount,
+          allowedSites: allowed.allowedSites,
+        };
+      },
+      readConfig: readConfigFrom,
+      readSites: readSitesFrom,
     };
   }
   return { create: create };

@@ -48,13 +48,24 @@ no Drive link is ever shared.
    ignored. Files are validated before the choice is accepted; if anything is
    invalid, the previous configuration is kept.
 
-Chrome stores only the **folder handle** in extension IndexedDB, never the
-file contents or the service-account key. Pastex reads the files into memory on
-demand, and the handle keeps working across restarts (Chrome may ask once to
-restore access). Because nothing is published to Drive, the key is never
-exposed by a shared link. Snippet text is cached separately in
-`chrome.storage.local`, keyed by a SHA-256 hash of the configuration;
-credentials are never written there.
+Only the **surface** of the folder is scanned: files ending in `.json` are
+read, subfolders are skipped without being entered, and a `.json` file that does
+not parse is ignored rather than failing the whole folder.
+
+Configuration is then **cached**, not re-read. The panel scans the folder once,
+validates it, and stores the parsed JSON under `pastex-config-cache` in
+`chrome.storage.local`. The side panel and the background worker both read that
+cache afterwards, so opening Pastex later never opens the folder again, not even
+after a browser restart. Choosing a new folder replaces the cache; a folder that
+fails validation leaves the previous cache untouched.
+
+This is why the worker needs no offscreen document: a File System Access handle
+is not usable outside the page that holds it, and asking for one from an
+extension document fails with *"The request is not allowed by the user agent or
+the platform in the current context."* Nothing publishes configuration to Drive,
+so the service-account key never leaves the machine and cannot leak through a
+shared link. Snippet text is cached separately, keyed by a SHA-256 hash of the
+configuration.
 
 After modifying site JSON, open **Config** again and reselect the folder to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
@@ -302,8 +313,9 @@ Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site launcher; `storage` provides the temporary session
 cache; `alarms` and `idle` drive the background synchronization that runs only
 while the user is away; `clipboardWrite` is the fallback on approved sites;
-`offscreen` reads the configuration folder in an extension document;
-`fileSystemAccess` keeps that folder grant across restarts. HTTP/HTTPS host
+`fileSystemAccess` lets the side panel's folder picker read the chosen
+directory; the grant is used once, then the parsed configuration is cached in
+`storage`. HTTP/HTTPS host
 permission covers dynamic user-approved sites and the Google API endpoints;
 Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

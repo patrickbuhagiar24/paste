@@ -7,9 +7,11 @@
  *    open when the extension was installed or updated.
  */
 
-importScripts("sites.js", "config-client.js", "drive.js", "hash.js", "library.js", "queue.js", "cache.js");
+importScripts("sites.js", "config-cache-reader.js", "drive.js", "hash.js", "library.js", "queue.js", "cache.js");
 
-var PastexConfig = PastexConfigClient;
+// Configuration is read from the cache the panel wrote when it scanned the
+// chosen folder. No offscreen document and no folder handle is involved.
+var PastexConfig = PastexConfigCacheReader.create(chrome.storage.local);
 
 var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto, chrome.storage.local);
 var deferredQueue = PastexQueue.create(chrome.storage.local);
@@ -783,11 +785,13 @@ function panelToggleSupported() {
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
-    // New links mean a new library: the next read is a full sync. A queue
-    // that points at the old folder must not be replayed into the new one.
+    // A new configuration means a new library: the next read is a full sync.
+    // A queue that points at the old folder must not be replayed into the new
+    // one. The cached configuration itself is KEPT: the panel has just written
+    // it, and it is the only source the worker has.
     libraryCache.configurationChanged();
     deferredQueue.clear().catch(function () {});
-    var refreshed = PastexConfig.invalidate ? PastexConfig.invalidate() : Promise.resolve();
+    var refreshed = Promise.resolve();
     Promise.resolve(refreshed).catch(function () {}).then(function () { return configureSites(); }).then(function () { sendResponse({ ok: true }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;

@@ -1,3 +1,29 @@
+pastex (2.15.0-1) unstable; urgency=medium
+
+  * Fixed "Could not read the library: The request is not allowed by the user
+    agent or the platform in the current context." The background worker asked
+    an offscreen document for configuration, and that document tried to use the
+    user's folder handle. File System Access handles are not usable there.
+  * Configuration is now read once from the folder and cached. The panel scans
+    the chosen folder when it is picked, stores the parsed JSON in
+    chrome.storage.local, and both the panel and the worker read that cache.
+    The folder is a source of configuration, never its storage: later reads do
+    not open it at all, so a browser restart needs no folder grant.
+  * Only the surface of the folder is scanned. Subfolders are skipped without
+    being entered, non-.json files are ignored, and JSON that does not parse is
+    skipped instead of failing the whole folder.
+  * Removed the offscreen configuration reader (config-reader.html/.js and
+    config-client.js). The worker imports config-cache-reader.js instead, so
+    "offscreen" is no longer needed for configuration.
+  * Re-selecting a folder no longer wipes the cached configuration: the worker
+    keeps what the panel just wrote and only resets the library and queue.
+  * Status messages under the buttons are shorter and plainer.
+  * Fixed two storage bugs found while porting: chrome.storage.get() resolves
+    to an object keyed by the requested name, but both readers treated that
+    wrapper as the record, so `files` was undefined on every later open.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+
 pastex (2.14.0-1) unstable; urgency=medium
 
   * Configuration now comes from a folder on disk, not a manifest of Drive
