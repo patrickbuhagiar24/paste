@@ -44,6 +44,7 @@ def test_manifest_permissions_are_minimal_and_documented():
         "clipboardWrite",
         "offscreen",
         "storage",
+        "fileSystemAccess",
     }
     # Broad host permissions enable dynamic registration for user-chosen sites;
     # content scripts themselves are registered only for the allowlist.
@@ -193,9 +194,9 @@ def test_no_remote_code_or_eval_in_extension_sources():
 
 
 def test_https_is_only_used_for_google_apis():
-    # Drive links are configuration inputs; the links themselves are validated
-    # to this host in config-manifest.js before any request is made.
-    allowed = {"www.googleapis.com", "oauth2.googleapis.com", "drive.google.com"}
+    # Configuration now comes from a local folder; the only Google hosts are
+    # the Drive API and its token endpoint.
+    allowed = {"www.googleapis.com", "oauth2.googleapis.com"}
     for path in sorted(EXT.glob("*.js")):
         for host in re.findall(r"https://([^/'\"\s]+)", path.read_text(encoding="utf-8")):
             assert host in allowed, f"{path.name} talks to {host}"
@@ -421,8 +422,8 @@ def test_extension_readme_documents_setup_and_signing():
         "IndexedDB",
         "pastex-google-drive.json",
         "service-account.json",
-        "The file picker opens directly",
-        "only the three download URLs",
+        "A folder picker opens directly",
+        "only the **folder handle**",
     ):
         assert required in readme, f"README misses {required!r}"
 
@@ -459,11 +460,13 @@ def test_configuration_comes_only_from_a_user_selected_manifest():
     assert 'id="choose-folder"' not in html
     script = (EXT / "sidepanel.js").read_text()
     assert '$("btn-config").addEventListener' in script
-    assert "showOpenFilePicker({" in script
-    assert "showDirectoryPicker" not in (EXT / "sidepanel.js").read_text()
-    assert "config-manifest.js" in html
-    assert "config-manifest.js" in (EXT / "config-reader.html").read_text()
-    assert "PastexManifest" in (EXT / "config-reader.js").read_text()
+    # Configuration is a folder of JSON files discovered by content.
+    assert "showDirectoryPicker({" in script
+    assert "showOpenFilePicker" not in script
+    assert "config-manifest.js" not in html
+    assert "config-manifest.js" not in (EXT / "config-reader.html").read_text()
+    assert "PastexManifest" not in (EXT / "config-reader.js").read_text()
+    assert "chooseFolder" in script
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
     assert "indexedDB" in (EXT / "handle-store.js").read_text()
     assert "nativeMessaging" not in _manifest()["permissions"]

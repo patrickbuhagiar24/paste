@@ -68,12 +68,15 @@ function panelHarness(fail, options = {}) {
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element("fragment"), addEventListener() {} };
   const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library, PastexConfigImport: ConfigImport,
     PastexConfigSource: { create: () => ({
-      chooseManifestText: async (text) => { imports.push(text); return { drive: "linked drive.json", account: "linked account.json", sites: "linked sites.json" }; },
+      chooseFolder: async (handle) => {
+        imports.push(handle.name);
+        return { drive: "folder drive.json", account: "folder account.json", sites: "folder sites.json" };
+      },
     }) },
-    PastexHandleStore: {}, PastexSites: {}, PastexManifest: {},
-    showOpenFilePicker: async (opts) => {
+    PastexHandleStore: {}, PastexSites: {},
+    showDirectoryPicker: async (opts) => {
       pickerCalls++;
-      return options.manifestPicker ? options.manifestPicker(opts) : [{ getFile: async () => ({ name: "config.json", text: async () => "{}" }) }];
+      return options.folderPicker ? options.folderPicker(opts) : { name: "my-config" };
     },
     confirm: () => options.confirm !== false, setTimeout, clearTimeout,
     addEventListener() {}};
@@ -193,7 +196,7 @@ test("side panel edits the cache and queues the Drive write instead of calling D
   assert.ok(messages.some((m) => m.type === "pastex-panel-local-edit"));
 });
 
-test("Config opens the JSON file picker immediately", async () => {
+test("Config opens the folder picker immediately", async () => {
   const { elements, pickerCalls } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
@@ -292,18 +295,18 @@ test("clipboard fallback runs only when no editable field is focused", async () 
   assert.match(elements.status.textContent, /copied/);
 });
 
-test("manifest picker loads one JSON with links and refreshes sites and Drive", async () => {
+test("folder picker scans one folder and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
   await elements["btn-config"].listeners.click();
-  assert.deepEqual(imports, ["{}"]);
+  assert.deepEqual(imports, ["my-config"]);
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements.status.textContent, /Using manifest config\.json/);
-  assert.match(elements.status.textContent, /linked drive\.json/);
+  assert.match(elements.status.textContent, /Using folder my-config/);
+  assert.match(elements.status.textContent, /folder drive\.json/);
 });
 
-test("canceling the manifest picker leaves configuration unchanged", async () => {
-  const { elements, imports } = panelHarness(false, { manifestPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
+test("canceling the folder picker leaves configuration unchanged", async () => {
+  const { elements, imports } = panelHarness(false, { folderPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
   await elements["btn-config"].listeners.click();
   assert.equal(imports.length, 0);
   assert.match(elements.status.textContent, /unchanged/);

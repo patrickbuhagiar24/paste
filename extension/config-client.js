@@ -17,7 +17,7 @@
   async function read(operation, force) {
     await ensureDocument();
     var response = await chrome.runtime.sendMessage({ target: "pastex-config-reader", operation: operation, force: !!force });
-    if (!response || !response.ok) throw new Error((response && response.error) || "Configuration reader unavailable; open Config and choose the manifest again.");
+    if (!response || !response.ok) throw new Error((response && response.error) || "Configuration reader unavailable; open Config and choose the folder again.");
     return response.data;
   }
   root.PastexConfigClient = {

@@ -2,91 +2,121 @@
 const assert = require("node:assert/strict");
 const Discovery = require("../config-import.js");
 const Sites = require("../sites.js");
-const Manifest = require("../config-manifest.js");
 const { create } = require("../config-source.js");
 
 const account = { type: "service_account", client_email: "a@example.com", private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n" };
-function driveLink(id) { return "[file](https://drive.google.com/file/d/" + id + "/view?usp=sharing)"; }
-function manifestText() {
-  return JSON.stringify({
-    "pastex-google-drive.json": driveLink("drive1"),
-    "pastex-sites.json": driveLink("sites1"),
-    "service-account.json": driveLink("key1"),
-  });
+
+/* A File System Access style directory handle: async iterator over entries,
+ * each file entry yielding a File with text(). */
+function fileEntry(name, contents) {
+  return { kind: "file", name: name, getFile: async () => ({ name: name, size: contents.length, text: async () => contents }) };
 }
-function manifestBodies() {
+function dirHandle(name, files, folders) {
+  const entries = Object.keys(files).map((n) => fileEntry(n, files[n])).concat(folders || []);
+  return { kind: "directory", name: name, values: async function* () { for (const e of entries) yield e; } };
+}
+function goodFiles() {
   return {
-    [Manifest.downloadUrl("drive1")]: JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/linkedroot" }),
-    [Manifest.downloadUrl("sites1")]: JSON.stringify({ allowed_sites: ["https://example.org"] }),
-    [Manifest.downloadUrl("key1")]: JSON.stringify(account),
+    "pastex-google-drive.json": JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/rootfolder" }),
+    "pastex-sites.json": JSON.stringify({ allowed_sites: ["https://example.org"] }),
+    "service-account.json": JSON.stringify(account),
   };
 }
-function manifestHarness(bodies, initial) {
-  let stored = initial;
+function harness(files, folders) {
+  let stored;
   const store = { get: async () => stored, set: async (value) => { stored = value; } };
-  const fetchImpl = async (url) => {
-    if (!(url in bodies)) throw new Error("unexpected URL " + url);
-    return { ok: true, status: 200, headers: { get: () => undefined }, text: async () => bodies[url] };
-  };
-  return { source: create(store, Discovery, Sites, Manifest, fetchImpl), get stored() { return stored; } };
+  return { source: create(store, Discovery, Sites), get stored() { return stored; }, handle: dirHandle("config", files, folders) };
 }
 
-test("a link manifest stores only URLs and loads all three configurations", async () => {
-  const h = manifestHarness(manifestBodies());
-  const info = await h.source.chooseManifestText(manifestText());
+test("a chosen folder is discovered by content and stores only the handle", async () => {
+  const h = harness(goodFiles());
+  const info = await h.source.chooseFolder(h.handle);
   assert.deepEqual(info, {
-    drive: "linked pastex-google-drive.json",
-    account: "linked service-account.json",
-    sites: "linked pastex-sites.json",
+    drive: "folder pastex-google-drive.json",
+    account: "folder service-account.json",
+    sites: "folder pastex-sites.json",
   });
-  assert.equal(h.stored.kind, "manifest");
-  assert.deepEqual(Object.keys(h.stored.files), Manifest.NAMES);
-  assert.ok(!JSON.stringify(h.stored).includes("private_key"));
-  assert.equal((await h.source.readConfig()).drive.folderId, "linkedroot");
+  assert.equal(h.stored.kind, "folder");
+  assert.equal(h.stored.handle, h.handle);
+  assert.ok(!JSON.stringify(Object.keys(h.stored)).includes("private_key"));
+  assert.equal((await h.source.readConfig()).drive.folderId, "rootfolder");
   assert.deepEqual((await h.source.readSites()).allowedSites, ["https://example.org"]);
 });
 
-test("invalid linked sites fail closed without replacing a working manifest", async () => {
-  const h = manifestHarness(manifestBodies());
-  await h.source.chooseManifestText(manifestText());
+test("files are detected regardless of name order, extra files and nested folders", async () => {
+  const files = goodFiles();
+  files["notes.txt"] = "ignore me";
+  files["random.json"] = JSON.stringify({ hello: "world" });
+  const h = harness(files, [dirHandle("nested", goodFiles())]);
+  await h.source.chooseFolder(h.handle);
+  assert.equal((await h.source.readConfig()).drive.folderId, "rootfolder");
+});
+
+test("the service-account key is found even when Google renamed it", async () => {
+  const files = goodFiles();
+  delete files["service-account.json"];
+  files["my-project-1a2b3c.json"] = JSON.stringify(account);
+  const h = harness(files);
+  await h.source.chooseFolder(h.handle);
+  assert.equal((await h.source.readConfig()).serviceAccount.client_email, "a@example.com");
+});
+
+test("two service-account keys are rejected when the name is not the expected one", async () => {
+  // Discovery only scans other JSON names when service-account.json is absent.
+  const files = goodFiles();
+  delete files["service-account.json"];
+  files["alpha-key.json"] = JSON.stringify(account);
+  files["beta-key.json"] = JSON.stringify(account);
+  const h = harness(files);
+  await assert.rejects(h.source.chooseFolder(h.handle), /More than one service-account key/);
+});
+
+test("invalid sites fail closed without replacing a working folder", async () => {
+  const h = harness(goodFiles());
+  await h.source.chooseFolder(h.handle);
   const before = h.stored;
-  const bodies = manifestBodies();
-  bodies[Manifest.downloadUrl("sites1")] = JSON.stringify({ allowed_sites: ["<all_urls>"] });
-  const broken = manifestHarness(bodies, before);
-  await assert.rejects(broken.source.chooseManifestText(manifestText()), /Invalid site origin/);
-  assert.equal(broken.stored, before);
-  await assert.rejects(broken.source.readSites(), /Invalid site origin/);
+  const files = goodFiles();
+  files["pastex-sites.json"] = JSON.stringify({ allowed_sites: ["<all_urls>"] });
+  const broken = harness(files);
+  broken.source = create({ get: async () => before, set: async () => { throw new Error("must not store"); } }, Discovery, Sites);
+  await assert.rejects(broken.source.chooseFolder(broken.handle), /Invalid site origin/);
+  assert.equal(broken.stored, undefined, "a broken folder must not be persisted");
 });
 
-test("a missing or malformed manifest is rejected before any request", async () => {
-  const h = manifestHarness(manifestBodies());
-  await assert.rejects(h.source.readConfig(), /Choose a configuration manifest/);
-  await assert.rejects(h.source.chooseManifestText("{"), /not valid JSON/);
-  assert.equal(h.stored, undefined);
+test("a folder without the required files is rejected with a clear message", async () => {
+  // Only sites present: the folder_id check fails first.
+  const partial = harness({ "pastex-sites.json": JSON.stringify({ allowed_sites: [] }) });
+  await assert.rejects(partial.source.chooseFolder(partial.handle),
+    /needs a pastex-google-drive\.json with a valid folder_id/);
+  // Folder id present but no key.
+  const noKey = harness({
+    "pastex-google-drive.json": JSON.stringify({ folder_id: "rootfolder" }),
+    "pastex-sites.json": JSON.stringify({ allowed_sites: [] }),
+  });
+  await assert.rejects(noKey.source.chooseFolder(noKey.handle), /needs a valid service-account\.json key/);
+  const empty = harness({});
+  await assert.rejects(empty.source.chooseFolder(empty.handle), /No \.json files found/);
 });
 
-test("linked files are downloaded in parallel and memoized per manifest", async () => {
-  const bodies = manifestBodies();
-  let stored;
-  const store = { get: async () => stored, set: async (value) => { stored = value; } };
-  const calls = [];
-  let active = 0, max = 0;
-  const fetchImpl = async (url) => {
-    calls.push(url);
-    active++; max = Math.max(max, active);
-    await new Promise(setImmediate);
-    active--;
-    return { ok: true, status: 200, headers: { get: () => undefined }, text: async () => bodies[url] };
-  };
-  const source = create(store, Discovery, Sites, Manifest, fetchImpl);
-  await source.chooseManifestText(manifestText());
-  assert.equal(calls.length, 3);
-  assert.equal(max, 3, "the three linked files must not be fetched sequentially");
+test("reading before choosing a folder explains what to do", async () => {
+  const h = harness(goodFiles());
+  await assert.rejects(h.source.readConfig(), /Choose a configuration folder in Config first/);
+  await assert.rejects(h.source.readSites(), /Choose a configuration folder in Config first/);
+});
+
+test("a read folder is memoized until invalidated", async () => {
+  const h = harness(goodFiles());
+  await h.source.chooseFolder(h.handle);
+  let scans = 0;
+  const counting = dirHandle("config", goodFiles());
+  // Assign the method on the object (not via shorthand) so `kind` survives.
+  counting.values = async function* () { scans++; yield* dirHandle("config", goodFiles()).values(); };
+  const source = create({ get: async () => ({ kind: "folder", handle: counting, name: "config" }), set: async () => {} }, Discovery, Sites);
   await source.readConfig();
   await source.readSites();
   await source.readConfig();
-  assert.equal(calls.length, 3, "repeat reads must use the in-memory linked files");
+  assert.equal(scans, 2, "the second sites read must reuse the memoized scan");
   source.invalidate();
   await source.readConfig();
-  assert.equal(calls.length, 5, "invalidation refetches only the two config links");
+  assert.equal(scans, 3, "invalidation forces a fresh scan");
 });

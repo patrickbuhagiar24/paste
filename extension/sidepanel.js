@@ -10,8 +10,7 @@
 
   var Store = window.PastexStore;
   var Config = window.PastexConfigSource.create(
-    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites,
-    window.PastexManifest, typeof fetch === "undefined" ? null : fetch
+    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites
   );
 
   var tree = [];
@@ -500,7 +499,7 @@
       return;
     }
     if (response && response.reason === "site-not-allowed") {
-      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration manifest.", "error");
+      setStatus("Site not allowed. Check pastex-sites.json in the selected configuration folder.", "error");
       return;
     }
     if (!response || response.reason !== "no-editable") {
@@ -692,7 +691,7 @@
     await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
-  // --- configuration: one JSON manifest with links ---
+  // --- configuration: one folder containing the three JSON files ---
 
   async function applyConfiguration(load) {
     var button = $("btn-config");
@@ -726,19 +725,16 @@
   }
 
   $("btn-config").addEventListener("click", function () {
-    if (typeof window.showOpenFilePicker !== "function") {
-      setStatus("This browser does not support selecting a manifest file.");
+    if (typeof window.showDirectoryPicker !== "function") {
+      setStatus("This browser does not support selecting a configuration folder.");
       return;
     }
-    // The picker must be called directly from the user gesture.
+    // The picker must be called directly from the user gesture. The folder is
+    // scanned for the three JSON files by content; no manifest is read.
     return applyConfiguration(async function () {
-      var handles = await window.showOpenFilePicker({
-        multiple: false,
-        types: [{ description: "JSON manifest", accept: { "application/json": [".json"] } }],
-      });
-      var file = await handles[0].getFile();
-      var found = await Config.chooseManifestText(await file.text());
-      return { found: found, label: "Using manifest " + file.name };
+      var handle = await window.showDirectoryPicker({ mode: "read", id: "pastex-config" });
+      var found = await Config.chooseFolder(handle);
+      return { found: found, label: "Using folder " + (handle.name || "configuration") };
     });
   });
 

@@ -1,3 +1,24 @@
+pastex (2.14.0-1) unstable; urgency=medium
+
+  * Configuration now comes from a folder on disk, not a manifest of Drive
+    links. Click Config, pick the folder, and the three JSON files are
+    discovered by content: the key by "type": "service_account", the others by
+    folder_id/folder_url and allowed_sites. Names and extra files do not
+    matter, and nested folders are ignored.
+  * Nothing has to be shared publicly any more. The service-account key never
+    leaves the user's computer, so it cannot leak through a shared Drive link.
+    Only the snippets folder is shared, with the service account, as Editor.
+  * Chrome stores only the folder handle (IndexedDB). To keep that grant
+    across browser restarts the extension now declares fileSystemAccess.
+  * Removed config-manifest.js: there are no Drive links to parse or download.
+  * Fixed a file-identity bug found while porting: the folder scan used a
+    function-scoped `var file` inside the loop, so every entry's text() closure
+    read the last file in the folder.
+  * Docs, examples and tests follow the folder flow; cek-izin-tautan.sh and
+    related link-based guides are superseded.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 21 Nov 2026 00:00:00 +0000
+
 pastex (2.13.3-1) unstable; urgency=medium
 
   * A browser start with an empty queue no longer reads Drive. The 3-second

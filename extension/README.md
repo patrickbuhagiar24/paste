@@ -2,26 +2,28 @@
 
 Pastex is a browser extension for text snippets stored directly in Google
 Drive. It operates on **only the sites you choose**. Configure Pastex with one
-JSON manifest that points to the three configuration files below. The
-extension fetches those links when it needs configuration; it does not copy
-credentials into a configuration directory. Google Drive and a working
-internet connection are required.
+folder containing the three configuration files described below; the extension
+reads that folder when it needs configuration and never publishes the files.
+Google Drive and a working internet connection are required.
 
 ## Install
 
 Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 116 or newer is required.
 
-## Set up the configuration manifest
+## Set up the configuration folder
+
+Configuration is a **folder of JSON files on your computer**, not a manifest of
+Drive links. Click **Config** once, pick the folder, and Pastex discovers the
+three files by their contents. Nothing in the folder needs to be public, and
+no Drive link is ever shared.
 
 1. Enable the **Drive API** in Google Cloud, create a service account and
-   download its JSON key. Share the snippets folder with its `client_email` as
-   an Editor. Upload the key as `service-account.json`.
-   **Security warning:** the key must be downloadable by the browser for this
-   link-based flow to work. If the Drive link is public, anyone with the link
-   has your service-account private key. Use a restricted, short-lived key and
-   rotate it immediately if the link leaks. Do not use a link you cannot
-   afford to expose.
-2. Upload `pastex-google-drive.json`, for example:
+   download its JSON key. **Share the snippets folder with its `client_email`
+   as an Editor** — that grant is the only thing that lets Pastex read and
+   write snippets. Save the key in the configuration folder as
+   `service-account.json` (a key downloaded under a project-specific name is
+   also detected).
+2. Add `pastex-google-drive.json` to the same folder:
 
    ```json
    {"folder_url": "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"}
@@ -29,7 +31,7 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
 
    Alternatively use `{"folder_id": "YOUR_FOLDER_ID"}`. When both are set,
    the ID wins.
-3. Upload `pastex-sites.json`, for example:
+3. Add `pastex-sites.json` to the same folder:
 
    ```json
    {"allowed_sites": ["https://example.com", "https://*.example.org"]}
@@ -38,26 +40,23 @@ Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/pa
    An empty list allows no sites. Use HTTP(S) origins only, without paths,
    ports, credentials or global wildcards. Wildcard subdomains include the
    base domain. If missing, invalid or inaccessible, the allowlist fails closed.
-4. Open the side panel and click **Config**. The file picker opens directly;
-   select a local JSON manifest file with exactly these three keys:
+4. Open the side panel and click **Config**. A folder picker opens directly;
+   select the folder containing the three files. Every `.json` file in that
+   folder is read and identified by content — a key carries
+   `"type": "service_account"`, the others carry `folder_id`/`folder_url` and
+   `allowed_sites` — so names and extra files do not matter. Nested folders are
+   ignored. Files are validated before the choice is accepted; if anything is
+   invalid, the previous configuration is kept.
 
-   ```json
-   {
-     "pastex-google-drive.json": "https://drive.google.com/file/d/DRIVE_FILE_ID/view?usp=sharing",
-     "pastex-sites.json": "https://drive.google.com/file/d/SITES_FILE_ID/view?usp=sharing",
-     "service-account.json": "https://drive.google.com/file/d/KEY_FILE_ID/view?usp=sharing"
-   }
-   ```
+Chrome stores only the **folder handle** in extension IndexedDB, never the
+file contents or the service-account key. Pastex reads the files into memory on
+demand, and the handle keeps working across restarts (Chrome may ask once to
+restore access). Because nothing is published to Drive, the key is never
+exposed by a shared link. Snippet text is cached separately in
+`chrome.storage.local`, keyed by a SHA-256 hash of the configuration;
+credentials are never written there.
 
-   Markdown-wrapped links such as `[file](https://drive.google.com/file/d/ID/view)` are also accepted. Only HTTPS `drive.google.com/file/d/…/view` and `drive.google.com/open?id=…` links are allowed; folder URLs, other hosts and local paths are rejected. All three files are downloaded and validated before the manifest is accepted. If any is invalid, the previous configuration is kept.
-
-Chrome stores only the three download URLs in extension IndexedDB, never the
-downloaded JSON or the service-account key. Pastex fetches them into memory on
-demand. The links keep working across restarts as long as they stay downloadable.
-Snippet text is cached separately in `chrome.storage.local`, keyed by a
-SHA-256 hash of the configuration; credentials are never written there.
-
-After modifying site JSON, open **Config** again and reselect the manifest to
+After modifying site JSON, open **Config** again and reselect the folder to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
 insertion requests re-check the current allowlist. The in-page launcher checks the allowlist on focus and refreshes that authorization while the field stays focused; it expires after 30 seconds. Changes to Drive
 configuration are picked up on refresh. The service-account key is not logged,
@@ -144,8 +143,9 @@ same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
-Old configuration files remain untouched. To use them, upload copies and put
-their links in a manifest; Pastex no longer reads or writes the old files.
+Old configuration files remain untouched. To use them, copy the three JSON
+files into a local folder and pick that folder in **Config**; Pastex no longer
+reads or writes the old files.
 
 Before upgrading, sync any browser-only snippets to Drive using the previous
 version and verify them in Google Drive. The new version does not read, migrate,
@@ -168,7 +168,7 @@ the last check with Drive is shown next to it.
 
 ## Reading from the cache, writing when you leave
 
-Reading never touches Google Drive. The first time a configuration manifest is
+Reading never touches Google Drive. The first time a configuration folder is
 loaded, the library is downloaded once and stored whole — every folder, every
 snippet body — and every later open is served from that snapshot, so the list
 appears instantly even when Drive is slow. Later changes arrive from the
@@ -244,7 +244,7 @@ to insert it; its row has **Rename**, **Edit**, and **Delete** actions. The
 complete snippet text is inserted verbatim, including newlines and trailing
 spaces, into textareas and editable fields; a single-line input cannot display
 line breaks. The allowlist is cached for 30 seconds so a click does not have to
-re-download the linked configuration; reselecting the manifest refreshes it
+re-read the configuration folder; reselecting the folder refreshes it
 immediately. If no editable field is focused on an allowed page, the text is
 copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
 not listed in `pastex-sites.json` are not injected or targeted.
@@ -263,11 +263,11 @@ not listed in `pastex-sites.json` are not injected or targeted.
 - `getcwd() failed: No such file or directory` during apt means your terminal's
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
-- If configuration is missing or a linked file cannot be downloaded, open
-  **Config** and reselect the manifest. Each link must be an HTTPS
-  `drive.google.com/file/d/…/view` URL that downloads without a sign-in; HTML
-  confirmation pages are reported as invalid JSON. The worker console can show
-  errors.
+- If configuration is missing or a file in the folder cannot be read, open
+  **Config** and reselect the folder. The folder must contain
+  `service-account.json`, `pastex-google-drive.json` and `pastex-sites.json`
+  (names are matched by content, so a downloaded key name also works). The
+  worker console can show errors.
 - If Drive says 404, share the folder with the service account email. Token
   errors can indicate a malformed key or a disabled Drive API. Snippets appear
   progressively while loading; a stalled Google request times out and reports
@@ -302,6 +302,8 @@ Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site launcher; `storage` provides the temporary session
 cache; `alarms` and `idle` drive the background synchronization that runs only
 while the user is away; `clipboardWrite` is the fallback on approved sites;
-`offscreen` reads configuration and downloads manifest links in an extension document. HTTP/HTTPS host permission covers dynamic user-approved sites,
-the Google API endpoints and the manifest's Drive links; Chrome displays this as access to all sites even
+`offscreen` reads the configuration folder in an extension document;
+`fileSystemAccess` keeps that folder grant across restarts. HTTP/HTTPS host
+permission covers dynamic user-approved sites and the Google API endpoints;
+Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

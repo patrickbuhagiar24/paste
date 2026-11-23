@@ -216,7 +216,7 @@ async function runIdleSync(assumeIdle) {
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
-    if (/configure a|choose a configuration manifest/i.test(message)) nextSyncAt = Date.now() + CONFIG_RETRY_MS;
+    if (/configure a|choose a configuration folder|add a pastex-google-drive/i.test(message)) nextSyncAt = Date.now() + CONFIG_RETRY_MS;
     else console.warn("Pastex background sync skipped:", message);
   } finally { idleSyncRunning = false; }
 }

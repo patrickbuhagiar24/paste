@@ -148,11 +148,16 @@ Google Chrome (`.deb` resmi dari Google) tidak punya masalah ini.
 
 Ekstensi belum berguna sebelum tiga berkas konfigurasi disiapkan. Urutannya (detail di [`extension/README.md`](../extension/README.md)):
 
-1. Aktifkan **Drive API**, buat service account, unduh kuncinya sebagai `service-account.json`.
-2. Bagikan folder snippet ke `client_email` akun layanan itu sebagai **Editor**.
-3. Siapkan `pastex-google-drive.json` berisi `{"folder_id": "..."}`.
-4. Siapkan `pastex-sites.json` berisi situs yang diizinkan.
-5. Unggah ketiganya ke Drive, lalu klik **Config** di panel dan pilih manifest JSON yang menautkan ketiganya.
+1. Aktifkan **Drive API**, buat service account, unduh kuncinya.
+2. Bagikan **folder snippet** ke `client_email` akun layanan itu sebagai **Editor**.
+3. Buat satu folder di komputer Anda dan taruh tiga berkas di dalamnya:
+   `service-account.json`, `pastex-google-drive.json` (`{"folder_id": "..."}`),
+   dan `pastex-sites.json` (`{"allowed_sites": [...]}`).
+4. Klik **Config** di panel, lalu pilih **folder** itu. Ketiga berkas dikenali
+   dari isinya, jadi namanya tidak harus persis dan berkas lain boleh ada.
+
+Tidak ada yang perlu diunggah ke Drive dan tidak ada tautan yang perlu
+dibagikan: kunci akun layanan tidak pernah keluar dari komputer Anda.
 
 ### Membangun dari kode (pengembangan saja)
 
