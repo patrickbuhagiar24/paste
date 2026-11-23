@@ -506,3 +506,143 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content
     assert 'typeof node.text === "string" ? node.text : ""' in script
+
+
+# --- the built .deb is a well-formed Debian package ------------------------
+#
+# These tests build the package the same way CI does and inspect the result,
+# because the guarantees are about the *archive*, not the script's text:
+#   - md5sums makes `dpkg -V` able to notice a corrupted file;
+#   - Installed-Size lets apt size the install;
+#   - changelog.Debian.gz is what `apt changelog pastex` reads;
+#   - SOURCE_DATE_EPOCH makes the archive reproducible, so the published
+#     checksums.txt can be verified by rebuilding.
+
+DPKG_DEB = shutil.which("dpkg-deb")
+needs_dpkg = pytest.mark.skipif(DPKG_DEB is None, reason="dpkg-deb is not installed")
+
+
+def _build_deb(tmp_path, key, name="out.deb"):
+    """Build the package twice from a copy-free checkout; return the .deb path."""
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "SOURCE_DATE_EPOCH": "1700000000",
+        "PASTEX_CRX_KEY": str(key),
+    }
+    version = _manifest()["version"]
+    out = ROOT / "dist" / f"pastex_{version}-1_all.deb"
+    subprocess.run(["bash", str(ROOT / "scripts" / "build-deb.sh")], cwd=ROOT, env=env,
+                   check=True, capture_output=True)
+    target = tmp_path / name
+    shutil.copy2(out, target)
+    return target
+
+
+def _control(deb, field):
+    return subprocess.run([DPKG_DEB, "-f", str(deb), field],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _control_member(deb, member):
+    """Read one file out of the control area by name."""
+    ctrl = subprocess.run([DPKG_DEB, "--ctrl-tarfile", str(deb)],
+                          capture_output=True, check=True).stdout
+    tar = subprocess.run(["tar", "-xOf", "-", "./" + member], input=ctrl,
+                         capture_output=True, check=True)
+    return tar.stdout
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_ships_md5sums_that_match_the_payload(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    sums = _control_member(deb, "md5sums").decode()
+    assert sums.strip(), "the package has no md5sums"
+    # Every line is "<32 hex>  <path>", with no leading "./" (dpkg's format).
+    for line in sums.splitlines():
+        digest, path = line.split("  ", 1)
+        assert re.fullmatch(r"[0-9a-f]{32}", digest), line
+        assert not path.startswith("./"), f"md5sums path is not root-relative: {path}"
+        assert not path.startswith("DEBIAN/"), f"md5sums covers the control area: {path}"
+
+    # The digests must actually verify against the unpacked payload.
+    extract = tmp_path / "root"
+    subprocess.run([DPKG_DEB, "-x", str(deb), str(extract)], check=True)
+    check = subprocess.run(["md5sum", "-c", "-"], cwd=extract, input=sums,
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert "FAILED" not in check.stdout
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_declares_installed_size_and_multi_arch(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    size = _control(deb, "Installed-Size")
+    assert size.isdigit() and int(size) > 0, f"Installed-Size is {size!r}"
+    # The payload really is that large (within a KiB per directory).
+    extract = tmp_path / "root"
+    subprocess.run([DPKG_DEB, "-x", str(deb), str(extract)], check=True)
+    actual = int(subprocess.run(["du", "-sk", str(extract)], capture_output=True,
+                                text=True, check=True).stdout.split()[0])
+    assert abs(int(size) - actual) <= 8, f"declared {size} KiB, payload is {actual} KiB"
+    assert _control(deb, "Multi-Arch") == "foreign"
+    assert _control(deb, "Provides") == "paste-teks"
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_ships_the_changelog_apt_changelog_reads(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    listed = subprocess.run([DPKG_DEB, "-c", str(deb)], capture_output=True,
+                            text=True, check=True).stdout
+    assert "usr/share/doc/pastex/changelog.Debian.gz" in listed
+    # It must be the project changelog, not an empty placeholder.
+    text = subprocess.run(["sh", "-c",
+                           f"dpkg-deb --fsys-tarfile '{deb}' | tar -xOf - "
+                           "./usr/share/doc/pastex/changelog.Debian.gz | gzip -dc"],
+                          check=True, capture_output=True).stdout.decode()
+    assert text.startswith("pastex ("), text[:80]
+    assert "urgency=" in text
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_build_is_reproducible(tmp_path):
+    """Same checkout + same key + same SOURCE_DATE_EPOCH = same bytes."""
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    first = _build_deb(tmp_path, key, "first.deb")
+    second = _build_deb(tmp_path, key, "second.deb")
+    assert first.read_bytes() == second.read_bytes(), (
+        "two builds of the same checkout differ; the published checksums could "
+        "not be verified by rebuilding"
+    )
+
+
+def test_build_deb_pins_timestamps_and_builds_the_control_summary():
+    script = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    # Reproducibility: the timestamp comes from the environment, never from now.
+    assert "SOURCE_DATE_EPOCH" in script
+    assert 'git log -1 --format=%ct' in script
+    assert 'touch --no-dereference --date="@$SOURCE_DATE_EPOCH"' in script
+    assert "--uniform-compression" in script
+    # Both generated members are produced, not assumed.
+    assert "DEBIAN/md5sums" in script
+    assert "changelog.Debian.gz" in script
+    assert 'du -sk --exclude=DEBIAN' in script
+    # deb822 has no comment syntax: a "#" line would become a bogus field.
+    heredoc = script.split('cat > "$STAGE/DEBIAN/control"', 1)[1]
+    body = heredoc.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+    for line in body.splitlines():
+        assert not line.startswith("#"), f"comment inside the control file: {line!r}"

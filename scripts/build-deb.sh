@@ -10,6 +10,11 @@
 # stable key: pass its path in PASTEX_CRX_KEY (release builds use the
 # PASTEX_CRX_PRIVATE_KEY CI secret). Without it an ephemeral key is generated and
 # the build gets a fresh id — fine for testing, not for release.
+#
+# The archive is reproducible: every timestamp comes from SOURCE_DATE_EPOCH
+# (the last commit time by default), so two builds of the same checkout with
+# the same key are byte-identical and the published checksums.txt can be
+# verified by rebuilding.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,6 +23,18 @@ PKG="pastex"
 ARCH="all"
 STAGE="build/deb"
 OUT="dist/${PKG}_${VERSION}-1_${ARCH}.deb"
+
+# Debian's reproducible-builds convention. dpkg-deb and gzip both honour it, and
+# the staging tree below is touched to match, so the ar and tar headers are fixed.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH="$(git log -1 --format=%ct 2>/dev/null || true)"
+  # No git (release tarball, shallow export): a fixed date beats "now".
+  SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-315532800}"
+fi
+case "$SOURCE_DATE_EPOCH" in
+  ''|*[!0-9]*) echo "error: SOURCE_DATE_EPOCH must be a unix timestamp" >&2; exit 2 ;;
+esac
+export SOURCE_DATE_EPOCH
 
 CRX_KEY="${PASTEX_CRX_KEY:-}"
 if [ -z "$CRX_KEY" ] && [ -f debian/crx-key.pem ]; then
@@ -60,10 +77,20 @@ done
 
 install -m 644 extension/README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
+# Debian policy: every package ships its changelog, so `apt changelog pastex`
+# and /usr/share/doc/pastex/changelog.Debian.gz both work. Without it the
+# package's own history never reaches the user (lintian: no-changelog).
+gzip -9 -n -c debian/changelog >"$STAGE/usr/share/doc/$PKG/changelog.Debian.gz"
+chmod 0644 "$STAGE/usr/share/doc/$PKG/changelog.Debian.gz"
 install -m 755 debian/postinst "$STAGE/DEBIAN/postinst"
 install -m 755 debian/postrm "$STAGE/DEBIAN/postrm"
 gzip -9 -n "$STAGE/usr/share/doc/$PKG/README.md" 2>/dev/null || true
 
+# Installed-Size lets apt size the install; Multi-Arch: foreign marks the
+# payload as data (an unpacked extension plus a .crx), so it can satisfy a
+# dependency from any architecture. deb822 has no comments, so these two
+# fields are documented here rather than inside the file.
+#
 # Quoted heredoc on purpose: an unquoted one lets the shell expand backticks and
 # "$" inside the Description, which silently deleted the command text from the
 # published 1.10.0 package. Only the placeholders below are substituted.
@@ -75,9 +102,12 @@ Version: @VERSION@-1
 Section: web
 Priority: optional
 Architecture: @ARCH@
+Installed-Size: @SIZE@
+Multi-Arch: foreign
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
 Conflicts: paste-teks
 Replaces: paste-teks
+Provides: paste-teks
 Recommends: google-chrome-stable | chromium
 Description: One-click text snippet manager for Google Chrome
  Pastex is a Chrome extension (Manifest V3): a snippet library in the
@@ -94,14 +124,33 @@ Description: One-click text snippet manager for Google Chrome
 Homepage: https://github.com/patrickbuhagiar24/paste
 EOF
 
+# Installed size in KiB, excluding the control area, the way dpkg-gencontrol
+# computes it.
+INSTALLED_SIZE="$(du -sk --exclude=DEBIAN "$STAGE" | cut -f1)"
+
 sed -i \
   -e "s|@PKG@|$PKG|g" \
   -e "s|@VERSION@|$VERSION|g" \
   -e "s|@ARCH@|$ARCH|g" \
+  -e "s|@SIZE@|$INSTALLED_SIZE|g" \
   "$STAGE/DEBIAN/control"
+
+# md5sums lets `dpkg -V pastex` notice a corrupted or locally edited file.
+# Paths are relative to the filesystem root, without a leading "./".
+(
+  cd "$STAGE"
+  find . -path ./DEBIAN -prune -o -type f -print |
+    sed 's|^\./||' |
+    LC_ALL=C sort |
+    while IFS= read -r file; do md5sum "$file"; done >DEBIAN/md5sums
+)
+chmod 0644 "$STAGE/DEBIAN/md5sums"
+
+# One timestamp for the whole tree: the only reason two builds used to differ.
+find "$STAGE" -depth -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} +
 
 mkdir -p dist
 printf '%s\n' "$EXT_ID" >dist/pastex-id.txt
-dpkg-deb --build --root-owner-group "$STAGE" "$OUT"
+dpkg-deb --build --root-owner-group --uniform-compression "$STAGE" "$OUT"
 echo "OK: $OUT"
 dpkg-deb --info "$OUT"

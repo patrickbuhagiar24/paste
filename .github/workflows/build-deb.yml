@@ -78,6 +78,8 @@ jobs:
       - name: Build the Debian package
         env:
           CRX_SIGNING_SECRET: ${{ secrets.PASTEX_CRX_PRIVATE_KEY }}
+          # SOURCE_DATE_EPOCH is deliberately NOT set here: build-deb.sh derives
+          # it from the commit, so the same ref always builds the same bytes.
         run: |
           set -euo pipefail
           if [ -n "$CRX_SIGNING_SECRET" ]; then
@@ -91,6 +93,18 @@ jobs:
             echo "::warning::PASTEX_CRX_PRIVATE_KEY is not configured; using an ephemeral id for this test build."
           fi
           ./scripts/build-deb.sh
+
+      - name: Lint the package
+        run: |
+          set -o pipefail
+          sudo apt-get install -y lintian
+          # Errors fail the build. The warnings we knowingly keep (the CRX is
+          # not an ELF payload) are listed here instead of hidden globally.
+          if ! lintian --fail-on error dist/*.deb 2>&1 | tee lintian.log; then
+            grep -E '^E:' lintian.log | head -n 10 | sed 's/^/::error::/' || true
+            exit 1
+          fi
+          cat lintian.log
 
       - name: Build the APT archive (pool + dists + Release)
         env:

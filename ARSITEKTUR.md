@@ -129,6 +129,8 @@ Ini bagian yang paling berguna saat meminta perbaikan.
 | Pengaturan 3 berkas | `extension/config-source.js` (panel) dan `extension/config-cache-reader.js` (petugas) | Keduanya membaca cache yang sama |
 | Daftar situs | `extension/sites.js` | Aturan ketat, gagal-tertutup |
 | Paket instalasi Linux | `debian/`, `scripts/`, `.github/workflows/build-deb.yml` | Rilis lewat APT, bukan Chrome Web Store |
+| Isi paket `.deb` (berkas apa yang diletakkan di mana) | `scripts/build-deb.sh` | Satu-satunya pembuat paket yang dipakai CI |
+| Pemeriksaan mutu paket sebelum rilis | `tests/test_chrome_extension.py` (bagian "built .deb") + langkah *Lint the package* di workflow | Membangun paket lalu memeriksa isinya |
 | Teks bantuan pengguna | `README.md`, `extension/README.md`, `cara-jalankan-get-linux-mint.md` | |
 
 Aturan penting: **hanya petugas belakang yang boleh menulis ke Drive.** Panel
@@ -149,6 +151,15 @@ Penjaga "tidak ada berkas mati" (`extension/test/dead-code.test.js`) memastikan:
 setiap berkas `.js` yang ikut dipaketkan benar-benar dimuat oleh panel, manifest,
 atau petugas belakang; panel tidak memakai sesuatu yang tidak dimuat; dan tidak
 ada penulis urutan/lipat per-item yang kembali.
+
+## 8b. Apa yang bisa diperiksa pengguna setelah memasang
+
+| Perintah | Artinya |
+| --- | --- |
+| `dpkg -V pastex` | Membandingkan berkas di disk dengan daftar sidik jari di dalam paket. **Tidak ada keluaran = semua utuh.** |
+| `apt changelog pastex` | Menampilkan riwayat versi yang dikirim di dalam paket. |
+| `dpkg-deb -f … Installed-Size` | Berapa ruang yang dipesan apt sebelum memasang. |
+| bangun ulang dari tag yang sama | Menghasilkan berkas `.deb` **identik byte-per-byte**, jadi angka `checksums.txt` bisa diverifikasi sendiri. |
 
 ## 9. Kesalahan yang mudah terjadi (dan gejalanya)
 

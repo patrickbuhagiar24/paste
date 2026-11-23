@@ -66,6 +66,32 @@ The published source explicitly scopes the verified key to this repository. No u
 
 That is the whole installation. `apt update` reports `Hit:… https://patrickbuhagiar24.github.io/paste mint InRelease`, which proves the metadata is signed and verified.
 
+## Verifying an installed package
+
+```bash
+dpkg -V pastex            # lists any shipped file that changed; silence is good
+apt changelog pastex      # the packaged changelog.Debian.gz
+dpkg-deb -f /var/cache/apt/archives/pastex_*.deb Installed-Size   # size apt reserved
+```
+
+`dpkg -V` compares the files on disk with the `md5sums` list inside the
+package, so a corrupted or locally edited extension file shows up as a line
+starting with `??5??????`.
+
+Builds are **reproducible**: the same commit with the same CRX key produces a
+byte-identical `.deb`, because every timestamp comes from `SOURCE_DATE_EPOCH`
+(the commit time by default). The `checksums.txt` attached to a release can
+therefore be checked by rebuilding from the tag:
+
+```bash
+git checkout vX.Y.Z
+PASTEX_CRX_KEY=/path/to/release-key.pem ./scripts/build-deb.sh
+sha256sum dist/pastex_*_all.deb      # must equal the published checksum
+```
+
+CI also runs `lintian --fail-on error` on the package before publishing, so
+packaging errors stop the build instead of reaching the archive.
+
 ## Releases and verification
 
 Pushes to `main` publish the signed APT archive. Pushing a `vX.Y.Z` tag after

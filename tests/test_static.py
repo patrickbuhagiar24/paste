@@ -24,6 +24,21 @@ def test_build_deb_recommends_matches_debian_control():
         assert control == script, f"{field}: control={control} build-deb={script}"
 
 
+def test_both_packaging_paths_agree_on_relationship_fields():
+    """debian/control and build-deb.sh build the same package, so the fields
+    that describe it must not drift (the description is checked separately)."""
+    control = (ROOT / "debian" / "control").read_text()
+    script = (ROOT / "scripts" / "build-deb.sh").read_text()
+    body = script.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+    for field in ("Multi-Arch", "Conflicts", "Replaces", "Provides", "Recommends"):
+        from_control = _control_field(control, field)
+        from_script = _control_field(body, field)
+        assert from_control == from_script, (
+            f"{field}: control={from_control} build-deb={from_script}"
+        )
+    assert _control_field(control, "Multi-Arch") == ["foreign"]
+
+
 def test_browser_is_recommended_and_desktop_tools_are_gone():
     """2.x ships a Chrome extension: `apt install pastex` suggests a browser
     and no longer pulls the desktop clipboard stack."""
@@ -192,6 +207,24 @@ def test_install_script_is_marked_development_only():
     text = (ROOT / "scripts" / "install.sh").read_text()
     assert "DEVELOPMENT ONLY" in text
     assert "development-only local install" in text
+
+
+def test_ci_lints_the_package_and_pins_the_build_timestamp():
+    """lintian catches the packaging mistakes a hand-rolled build misses, and
+    SOURCE_DATE_EPOCH keeps the published checksums reproducible."""
+    workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
+    assert "lintian --fail-on error" in workflow
+    lint = workflow.split("- name: Lint the package", 1)
+    assert len(lint) == 2, "the workflow does not lint the .deb"
+    # It must run before publishing, and must not swallow errors.
+    assert lint[1].index("lintian") < workflow.index("Publish verification artifacts")
+    assert "exit 1" in lint[1]
+    # The build timestamp is pinned by the script, never "now", and CI must not
+    # override it with an invented constant.
+    script = (ROOT / "scripts" / "build-deb.sh").read_text()
+    assert "SOURCE_DATE_EPOCH" in script
+    build = workflow.split("- name: Build the Debian package", 1)[1]
+    assert "SOURCE_DATE_EPOCH:" not in build.split("run:", 1)[0]
 
 
 def test_workflow_pins_every_action_to_a_commit():

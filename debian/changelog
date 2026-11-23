@@ -1,3 +1,33 @@
+pastex (2.17.0-1) unstable; urgency=medium
+
+  * The .deb is now a well-formed Debian package, not only a valid archive:
+      - it ships md5sums, so `dpkg -V pastex` can notice a corrupted or
+        locally edited file; the digests are generated from the staged tree
+        and cover every shipped file except the control area
+      - it declares Installed-Size (390 KiB), which apt uses to size the
+        install before downloading
+      - it ships /usr/share/doc/pastex/changelog.Debian.gz, so
+        `apt changelog pastex` shows this file instead of failing
+      - it declares Multi-Arch: foreign, correct for a data-only payload,
+        and Provides: paste-teks alongside the existing Conflicts/Replaces
+  * Builds are reproducible. Two builds of the same commit with the same CRX
+    key now produce a byte-identical .deb: every timestamp comes from
+    SOURCE_DATE_EPOCH (the commit time by default), the staging tree is
+    touched to match, gzip keeps "-n", and dpkg-deb runs with
+    --uniform-compression. Previously the two archives differed only in tar
+    timestamps, which made the published checksums.txt impossible to verify
+    by rebuilding.
+  * debian/control carries the same Multi-Arch/Provides fields, and a test
+    keeps both packaging paths in step.
+  * CI lints the package with `lintian --fail-on error` before publishing;
+    lintian's error classes are packaging bugs, not style, and now fail the
+    build instead of reaching the archive.
+  * Five new tests build the package and inspect it: md5sums verifies against
+    the unpacked payload, Installed-Size matches du, the changelog is the real
+    project changelog, and two consecutive builds compare byte for byte.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 23 Nov 2026 00:00:00 +0000
+
 pastex (2.16.0-1) unstable; urgency=medium
 
   * Remove every layer the product no longer runs. A module that no page or
