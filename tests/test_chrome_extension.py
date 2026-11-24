@@ -110,8 +110,10 @@ def test_the_order_and_the_collapse_state_live_in_one_label():
     drive = (EXT / "drive.js").read_text(encoding="utf-8")
     library = (EXT / "library.js").read_text(encoding="utf-8")
     background = (EXT / "background.js").read_text(encoding="utf-8")
-    assert "INDEX_NAME" in drive, "the index is one file in the library folder"
-    assert "readIndexFile" in library and "parseIndex" in library
+    # The index is one file named by the configuration link, so it is found by
+    # its id and never by listing the folder.
+    assert "readIndexFile" in drive and "indexId" in drive
+    assert "indexFileId" in library and "parseIndex" in library
     assert "PastexDrive.writeIndexFile" in background
     assert "PastexDrive.setOrder" not in background, "the order is not written per item"
 
@@ -426,15 +428,16 @@ def test_extension_readme_documents_setup_and_signing():
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
         "pastex-config-cache",
-        "pastex-google-drive.json",
-        "pastex-oauth.json",
+        "pastex-storage.json",
+        "pastex-folder",
+        "pastex-index",
         "A folder picker opens directly",
         "Configuration is then **cached**",
     ):
         assert required in readme, f"README misses {required!r}"
     # The guide must be complete enough to create the client without guessing.
     for step in ("Enable the Drive API", "Create the OAuth client", "Web application",
-                 "Publish the consent screen", "pastex-oauth.json"):
+                 "Publish the consent screen", "client_id"):
         assert step in readme, f"OAuth guide misses {step!r}"
 
 
@@ -504,7 +507,9 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
     drive = (EXT / "drive.js").read_text(encoding="utf-8")
     assert "launchWebAuthFlow" in drive, "the token comes from Chrome's sign-in window"
     assert "accounts.google.com/o/oauth2/v2/auth" in drive
-    assert "auth/drive.file" in drive, "only the narrow scope is requested"
+    assert "auth/drive.item" in drive, "only the per-item scope is requested"
+    assert "drive.file" not in drive, "the old scope is gone"
+    assert "auth/drive\"" not in drive and "auth/drive.readonly" not in drive
     # A public client has no secret, and a service account no longer exists.
     for gone in ("private_key", "client_email", "service_account", "jwt", "JWT",
                  "grant-type:jwt-bearer", "client_secret"):
@@ -513,10 +518,12 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
         text = path.read_text(encoding="utf-8")
         assert "service-account.json" not in text, f"{path.name} still reads a key file"
         assert "parseServiceAccount" not in text, f"{path.name} still parses a key"
-    # The configuration folder holds a public client id, never a credential.
+    # The configuration folder holds a public client id, never a credential, and
+    # it is one file of Drive links.
     source = (EXT / "config-source.js").read_text(encoding="utf-8")
-    assert "pastex-oauth.json" in source
+    assert "pastex-storage.json" in source
     assert "client_id" in source
+    assert "pastex-folder" in source and "pastex-index" in source and "pastex-sites" in source
     # No script in the repository signs in a service account any more.
     for script in sorted((ROOT / "scripts").glob("*.sh")):
         assert "jwt-bearer" not in script.read_text(encoding="utf-8"), script.name
@@ -545,7 +552,7 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "Snippets loaded from session cache." not in script
     # The central index is the only writer of order and collapse state; the
     # per-item labels are read-only history.
-    assert "INDEX_NAME" in (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "readIndexFile" in (EXT / "drive.js").read_text(encoding="utf-8")
     assert "PastexDrive.setOrder" not in script
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content

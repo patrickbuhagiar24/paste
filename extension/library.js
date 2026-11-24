@@ -108,22 +108,41 @@
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
-    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "Add a pastex-oauth.json to the configuration folder.");
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-storage.json to the configuration folder.");
+    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "Add a pastex-storage.json with a client_id.");
     // A token for the signed-in account, signed in with the client id this
-    // installation put in pastex-oauth.json. The first call of a session may
+    // installation put in pastex-storage.json. The first call of a session may
     // show Google's page, which is why it is interactive.
     var token = await drive.getAuthToken({ clientId: config.oauth.client_id, interactive: true });
     var rootId = config.drive.folderId;
     var folder = await drive.getFolder(token, rootId);
-    if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive ID is not a folder.");
-    var stored = await drive.readIndexFile(token, rootId);
+    if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive folder link does not point at a folder.");
+    // The order and collapse file is named by the configuration, so reading it
+    // is one GET and no listing: the tree listing below is the only listing.
+    var stored = await drive.readIndexFile(token, config.drive.indexId || "");
     return {
       token: token, rootId: rootId, modifiedTime: folder.modifiedTime || "",
-      // The id of the index file is passed on so the next write edits that file
-      // instead of listing the folder again.
-      indexFileId: stored.id, index: parseIndex(stored.index),
+      // Carried on so the next write edits the same file instead of creating a
+      // second one, and so a link that did not exist yet is filled in once.
+      indexFileId: stored.id || config.drive.indexId || "", index: parseIndex(stored.index),
     };
+  }
+
+  // The site list may be inline in pastex-storage.json or live in a file of its
+  // own: a link is fetched with the same token as everything else.
+  async function readSites(native, drive, token) {
+    var config = await native.readConfig();
+    if (config.sites && config.sites.allowedSites) return config.sites.allowedSites;
+    var fileId = config.sites && config.sites.fileId;
+    if (!fileId) throw new Error("pastex-storage.json needs a pastex-sites link or an inline array.");
+    var text = await drive.downloadText(token, fileId);
+    var data;
+    try { data = JSON.parse(text); } catch (ignored) {
+      throw new Error("The pastex-sites file is not valid JSON.");
+    }
+    if (!data || !Array.isArray(data.allowed_sites))
+      throw new Error("The pastex-sites file needs an allowed_sites array.");
+    return data.allowed_sites;
   }
 
   // Limit network requests, not recursion: folders can be traversed in
@@ -131,6 +150,8 @@
   // Cached text bodies are keyed by the SHA-256 of their content; files
   // inside a collapsed folder are left deferred until the folder is opened.
   async function loadTree(drive, token, rootId, onUpdate, options, session) {
+    // Declared per listing: the file to skip is the one the configuration named.
+    var indexFileId = (session && session.indexFileId) || "";
     options = options || {};
     session = session || {};
     var savedBodies = options.bodies || {};
@@ -256,9 +277,11 @@
           onCursor: function (cursor) { cursors[folderId] = cursor || ""; },
         });
       });
-      // The index file is Pastex's own metadata, not a snippet: it is never a
-      // row, never ordered and never downloaded as text.
-      files = files.filter(function (file) { return file.name !== drive.INDEX_NAME; });
+      // Pastex's own index file is metadata, not a snippet: it is never a row,
+      // never ordered and never downloaded as text. It is known by the link the
+      // configuration holds, not by its name, so a copy someone keeps in the
+      // folder under another name still appears as a normal file.
+      if (indexFileId) files = files.filter(function (file) { return file.id !== indexFileId; });
       files = orderByIndex(files, index, folderId);
       var jobs = [];
       files.forEach(function (file) {
@@ -441,6 +464,6 @@
       signatures: result.signatures, index: result.index, cursors: result.cursors };
   }
 
-  return { connect: connect, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
+  return { connect: connect, readSites: readSites, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
     cloneIndex: cloneIndex };
 });

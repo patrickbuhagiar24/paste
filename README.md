@@ -16,18 +16,19 @@ and **↻ Sync** sends waiting changes by hand.
 
 Pastex reaches Drive as **you**, through Google OAuth: no service account and no
 key file. Each installation registers one OAuth client and records its public
-client ID in `pastex-oauth.json`; the [step-by-step guide in the extension
+client ID in the configuration file; the [step-by-step guide in the extension
 README](extension/README.md#create-the-google-oauth-client) covers the Google
 Cloud project, the consent screen, the redirect URL and the client ID, in about
 ten minutes. Because the token belongs to your account, the files Pastex creates
 are yours, sit in your own Drive storage, and open normally in Drive.
 
-In **Config**, pick a local folder holding `pastex-google-drive.json`,
-`pastex-sites.json` and `pastex-oauth.json`. Pastex reads that folder once,
-validates every file, and then works from its own cache; nothing in the folder is
-ever uploaded or published, and it contains no credential. See
-[the extension README](extension/README.md) for the three files and their
-contents.
+In **Config**, pick a local folder holding one file, `pastex-storage.json`, which
+names the library folder, the order/collapse file and the site list by their
+**shared Drive links**. Pastex reads that file once, validates every link, and
+then works from its own cache; nothing in the folder is ever uploaded or
+published, and it contains no credential. See
+[the extension README](extension/README.md#set-up-the-configuration-folder) for
+the keys and the link shapes that are accepted.
 
 ## Install on Linux Mint through APT only
 

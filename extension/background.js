@@ -237,7 +237,7 @@ async function runIdleSync(assumeIdle) {
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
-    if (/configure a|choose a configuration folder|add a pastex-google-drive|add a pastex-oauth|Google sign-in/i.test(message))
+    if (/configure a|choose a configuration folder|add a pastex-storage|Google sign-in/i.test(message))
       nextSyncAt = Date.now() + CONFIG_RETRY_MS;
     else console.warn("Pastex background sync skipped:", message);
   } finally { idleSyncRunning = false; }
@@ -322,7 +322,15 @@ function invalidatePatterns() { cachedPatterns = null; cachedPatternsAt = 0; }
 async function allowedSitePatterns(force) {
   if (!force && cachedPatterns && Date.now() - cachedPatternsAt < PATTERN_TTL_MS) return cachedPatterns;
   var data = await PastexConfig.readSites(!!force);
-  var patterns = PastexSites.parse(data.allowedSites);
+  // The list is either inline in pastex-storage.json or in a file the link
+  // names; a link is fetched with the same sign-in, so one configuration file
+  // can point at a shared allowlist.
+  var allowedSites = data.allowedSites;
+  if (!allowedSites) {
+    var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
+    allowedSites = await PastexLibrary.readSites(PastexConfig, PastexDrive, session.token);
+  }
+  var patterns = PastexSites.parse(allowedSites);
   cachedPatterns = patterns;
   cachedPatternsAt = Date.now();
   return patterns;

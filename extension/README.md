@@ -3,9 +3,9 @@
 Pastex is a browser extension for text snippets stored directly in Google
 Drive, accessed as **you** through Google OAuth — no service account and no key
 file. It operates on **only the sites you choose**. Configure Pastex with one
-folder containing the three configuration files described below; the extension
-reads that folder when it needs configuration and never publishes the files.
-Google Drive and a working internet connection are required.
+file of Drive links, `pastex-storage.json`, described below; the extension reads
+it when it needs configuration and never publishes it. Google Drive and a
+working internet connection are required.
 
 ## Install
 
@@ -52,8 +52,9 @@ You need, once, about ten minutes:
    screen*: choose **External** (or **Internal** if the client is only for one
    Workspace organisation), set the app name (`Pastex`), your e-mail as the
    support address, and your e-mail as the developer contact. Save.
-   Add the scope `https://www.googleapis.com/auth/drive.file` — Pastex asks for
-   nothing else. This scope is classified by Google as **non-sensitive**, so it
+   Add the scope `https://www.googleapis.com/auth/drive.item` — Pastex asks for
+   nothing else. It is the per-item scope: access reaches the items the links in
+   `pastex-storage.json` name, not the rest of Drive. This scope is classified by Google as **non-sensitive**, so it
    needs no verification review and no security assessment.
 
 5. **Create the OAuth client.** *APIs & Services → Credentials → Create
@@ -76,12 +77,8 @@ You need, once, about ten minutes:
    users you listed may sign in. *In production* with a non-sensitive scope
    needs no review.
 
-7. **Record the client ID in the configuration folder** as
-   `pastex-oauth.json`:
-
-   ```json
-   {"client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"}
-   ```
+7. **Note the client ID.** It goes into `client_id` in the configuration file
+   described in the next section.
 
 That is the whole Google side. Nothing is shared with an e-mail address, no
 folder has to be handed over, and no credential is stored on disk: the grant
@@ -90,49 +87,58 @@ hour.
 
 ## Set up the configuration folder
 
-Configuration is a **folder of JSON files on your computer**, not a manifest of
-Drive links. Click **Config** once, pick the folder, and Pastex reads the
-three files by name. Nothing in the folder needs to be public, and
-no Drive link is ever shared.
+Configuration is **one file of Drive links on your computer**. Click **Config**
+once, pick the folder holding it, and Pastex reads it. Nothing needs to be
+public, and no file in the folder is a credential.
 
-1. Create the library folder in your own Drive (or inside a Shared Drive) and
-   copy its ID from the URL:
-   `https://drive.google.com/drive/folders/YOUR_FOLDER_ID`.
-2. Add `pastex-google-drive.json` to the configuration folder on your computer:
+Create `pastex-storage.json`:
 
-   ```json
-   {"folder_url": "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"}
-   ```
+```json
+{
+  "pastex-folder": "https://drive.google.com/drive/folders/YOUR_LIBRARY_FOLDER_ID",
+  "pastex-index": "https://drive.google.com/file/d/YOUR_INDEX_FILE_ID/view",
+  "pastex-sites": ["https://example.com", "https://*.example.org"],
+  "client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"
+}
+```
 
-   Alternatively use `{"folder_id": "YOUR_FOLDER_ID"}`. When both are set,
-   the ID wins.
-3. Add `pastex-sites.json` to the same folder:
+| Key | Points at | Notes |
+| --- | --- | --- |
+| `pastex-folder` | the library folder in Drive | the snippets and folders Pastex manages |
+| `pastex-index` | the order/collapse file | the id is read, never the listing; if the link does not open, the library still loads in Drive's order |
+| `pastex-sites` | the site allowlist | either an inline array (as above) or a link to a JSON file holding `{"allowed_sites": [...]}` |
+| `client_id` | the OAuth client from the guide above | public, not a secret |
 
-   ```json
-   {"allowed_sites": ["https://example.com", "https://*.example.org"]}
-   ```
+**The links are the ones Drive's Share button gives you.** Every shape is
+accepted and reduced to the id the API needs:
 
-   An empty list allows no sites. Use HTTP(S) origins only, without paths,
-   ports, credentials or global wildcards. Wildcard subdomains include the
-   base domain. If missing, invalid or inaccessible, the allowlist fails closed.
-4. Add `pastex-oauth.json` with the client ID from the guide above.
-5. Open the side panel and click **Config**. A folder picker opens directly;
-   select the folder containing the three files. Every `.json` file in that
-   folder is read, and the three canonical names are the three files Pastex
-   uses — `pastex-google-drive.json`, `pastex-sites.json` and
-   `pastex-oauth.json`. Extra files are ignored, and a file with another name is
-   not guessed at: it is reported as missing. Nested folders are ignored. Files
-   are validated before the choice is accepted; if anything is invalid, the
-   previous configuration is kept.
+```
+1AbCdEfGhIjKlMnOpQrStUv                                    (a bare id)
+https://drive.google.com/drive/folders/1AbCdEf...          (folder link)
+https://drive.google.com/drive/u/0/folders/1AbCdEf...?usp=sharing
+https://drive.google.com/file/d/1AbCdEf.../view            (file link)
+https://drive.google.com/open?id=1AbCdEf...                (?id= link)
+```
 
-   The check reports **every** problem at once and names the files: a missing
-   file is reported as missing (`pastex-oauth.json is missing`), while a
-   present but unusable one is reported separately
-   (`pastex-google-drive.json has no usable folder_id or folder_url`). Fix them
-   all, then pick the folder again — the picker does not have to be repeated
-   after each single fix.
+A link that is none of those is reported by key name, not guessed at.
 
-6. The first read opens Google's sign-in window once. Choose the Google account
+The allowlist takes HTTP(S) origins only, without paths, ports, credentials or
+global wildcards; wildcard subdomains include the base domain. An empty list
+allows no sites, and a missing, invalid or unreadable list fails closed.
+
+Then:
+
+1. Open the side panel and click **Config**.
+2. Pick the folder holding `pastex-storage.json`. A folder picker opens directly
+   from the click. The file must carry that exact name. Any other `.json` file in the
+   folder is ignored, and a renamed file is reported as missing rather than
+   guessed at. Nested folders are ignored.
+3. Every problem is reported at once and named by key, so one pick is enough to
+   see everything: `pastex-storage.json needs a pastex-folder link to the
+   library folder`, `needs an pastex-index link to the order/collapse file`,
+   `needs the client_id of a Google OAuth client`. Fix them all, then pick the
+   folder again.
+4. The first read opens Google's sign-in window once. Choose the Google account
    that owns the library folder and accept. Every later read is silent: Pastex
    asks Chrome for a token without a page, and the page only appears again if
    you signed out or withdrew access in your Google account.
@@ -387,10 +393,14 @@ not listed in `pastex-sites.json` are not injected or targeted.
 - `getcwd() failed: No such file or directory` during apt means your terminal's
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
-- If configuration is missing or a file in the folder cannot be read, open
+- If configuration is missing or the file in the folder cannot be read, open
   **Config** and reselect the folder. The folder must contain
-  `pastex-google-drive.json`, `pastex-sites.json` and `pastex-oauth.json` under
-  exactly those names. The worker console can show errors.
+  `pastex-storage.json` under exactly that name. The worker console can show
+  errors.
+- If the order and the folded folders were forgotten, the `pastex-index` link
+  probably points at a file the signed-in account cannot open; the library then
+  loads in Drive's order with every folder open, and the next reorder writes the
+  file again.
 - If Drive says 404, check the folder ID and that the signed-in account can see
   that folder. Token errors can mean a deleted OAuth client or a disabled Drive
   API. Snippets appear progressively while loading; a stalled Google request

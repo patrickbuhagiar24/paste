@@ -451,7 +451,7 @@
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
-      if (/HTTP (401|403|404)\b|invalid_grant|pastex-oauth\.json|pastex-google-drive\.json/i.test(err.message || "")) {
+      if (/HTTP (401|403|404)\b|invalid_grant|pastex-storage\.json/i.test(err.message || "")) {
         tree = []; rootId = ""; ready = false; fromCache = false;
       } else {
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
@@ -819,7 +819,7 @@
     await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
-  // --- configuration: one folder containing the three JSON files ---
+  // --- configuration: one file of Drive links ---
 
   async function applyConfiguration(load, note) {
     var button = $("btn-config");
@@ -859,7 +859,7 @@
       return;
     }
     // The picker must be called directly from the user gesture. The folder is
-    // scanned for the three JSON files by content; no manifest is read.
+    // scanned for the one canonical file; no manifest is read.
     return applyConfiguration(async function () {
       // The redirect URL is derived from the extension id, so the only place it
       // can be read is a running installation. Saying it here is what makes the

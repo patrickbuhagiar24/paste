@@ -85,18 +85,23 @@ There are three triggers, no more:
 Pastex **never** downloads while the user is typing or has the panel open. That
 is why the panel feels instant.
 
-## 5. Configuration: three files in one folder
+## 5. Configuration: one file of links
 
-The user presses **Config** once and picks **one folder** containing three
-files:
+The user presses **Config** once and picks **one folder** containing one file,
+`pastex-storage.json`:
 
-| File | Contents | Analogy |
+| Key | Contents | Analogy |
 | --- | --- | --- |
-| `pastex-google-drive.json` | the Drive folder id or link | **warehouse address** |
-| `pastex-oauth.json` | the public OAuth client id of this installation | **who you are** |
-| `pastex-sites.json` | the list of sites allowed to use Pastex | **guest list** |
+| `pastex-folder` | the shared link of the Drive library folder | **warehouse address** |
+| `pastex-index` | the shared link of the order/collapse file | **the map on the wall** |
+| `pastex-sites` | the site list, inline or as a link | **guest list** |
+| `client_id` | the public OAuth client id of this installation | **who you are** |
 
-All three must carry those exact names; nothing is identified by its content.
+The file must carry that exact name; nothing is identified by its content. Each
+link is reduced to the id the API needs, so the value can be whatever Drive's
+Share button produced (a bare id, a `/folders/<id>` link, a `/file/d/<id>/view`
+link or an `?id=<id>` link). Because the index is named, reading the order costs
+one GET instead of a listing.
 After the folder is picked, its contents are **copied into Pastex's memory**, so
 the folder is never opened again (not even after the browser restarts). When
 something is wrong, Pastex reports **every** problem at once and the previous
@@ -179,7 +184,7 @@ second way** of doing the same thing. What that means for a user:
 | --- | --- |
 | Order and folded folders | May return to Drive's order with folders open. Arrange them again once. |
 | The snippet files in Google Drive | **Never** touched. Always intact, readable by any other app. |
-| Configuration file names | Must be exact: `pastex-google-drive.json`, `pastex-sites.json`, `pastex-oauth.json`. |
+| Configuration file name | Must be exact: `pastex-storage.json`. |
 | Browser requirement | Chrome/Chromium 141 or newer. |
 
 If the panel looks odd after an update during development, run

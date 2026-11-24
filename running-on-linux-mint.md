@@ -19,7 +19,7 @@ In short:
 | The extension ID | `chrome://extensions` (Developer mode) |
 | A Google Cloud project with the Drive API enabled | <https://console.cloud.google.com> |
 | An OAuth client of type **Web application** whose *Authorized redirect URI* is `https://<extension-id>.chromiumapp.org/` | *APIs & Services → Credentials* |
-| `pastex-oauth.json` holding that client ID | written by you, in the configuration folder |
+| `client_id` holding that client ID | written by you, in `pastex-storage.json` |
 
 There is no client secret: an extension is a public client, and Google hands the
 token straight back to Chrome. If the redirect URL is wrong, Google answers
@@ -68,11 +68,12 @@ fingerprint check, is in the [project README](README.md).
 
 | Message | Meaning |
 | --- | --- |
-| `pastex-google-drive.json is missing` | the file is not in the chosen folder, or it was renamed |
-| `pastex-sites.json: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
+| `pastex-storage.json is missing` | the file is not in the chosen folder, or it was renamed |
+| `pastex-sites: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
 | `Folder has problems: …` | the folder was rejected; the previous configuration is still active |
 | `Google does not recognise this extension's redirect URL` | copy the quoted URL into the OAuth client's *Authorized redirect URIs* |
-| `pastex-oauth.json is missing` | the client ID file is absent or renamed |
+| `... needs a pastex-folder link` | that key is empty or is not a Drive link |
+| `... needs the client_id of a Google OAuth client` | the client ID is missing or malformed |
 | `Your Google account is out of Drive storage` | free space in Drive, or use a folder in a Shared Drive |
 | `interaction_required` / `access_denied` | sign-in was cancelled; choose **↻ Sync** and accept once |
 

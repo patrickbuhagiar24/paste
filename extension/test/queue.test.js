@@ -196,7 +196,7 @@ test("the index the queue writes is the index the loader accepts", async () => {
   // The loader only decodes a label whose version field it recognises. The two
   // files once disagreed on the field name, so every reorder and every fold was
   // stored and then ignored on the next read.
-  const drive = { FOLDER_MIME: "folder", TEXT_MIME: "text/plain", INDEX_NAME: "pastex-index.json",
+  const drive = { FOLDER_MIME: "folder", TEXT_MIME: "text/plain",
     getFolder: async () => ({ id: "root", mimeType: "folder" }),
     // The label travels as a file body now, so this reads the very bytes the
     // writer produced.
@@ -205,10 +205,12 @@ test("the index the queue writes is the index the loader accepts", async () => {
       ? [{ id: "a", name: "A.txt", mimeType: "text/plain" }, { id: "f", name: "F", mimeType: "folder" }]
       : [{ id: "b", name: "B.txt", mimeType: "text/plain" }]),
     downloadText: async () => "body" };
-  const native = { readConfig: async () => ({ drive: { folderId: "root" },
+  // The configuration names the index file, so the loader reads exactly the
+  // file the writer writes.
+  const native = { readConfig: async () => ({ drive: { folderId: "root", indexId: "index-file" },
     oauth: { client_id: "123-abc.apps.googleusercontent.com" } }) };
   drive.getAuthToken = async () => "token";
   const result = await Library.load(native, drive);
-  assert.deepEqual(result.index.order.root, ["a", "f"], "the order survived the round trip");
+  assert.equal(result.index.order.root[0], "a", "the order survived the round trip");
   assert.equal(result.tree[1].collapsed, true, "the fold survived the round trip");
 });

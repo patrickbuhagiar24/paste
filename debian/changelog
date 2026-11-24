@@ -1,3 +1,32 @@
+pastex (2.24.0-1) unstable; urgency=medium
+
+  * BREAKING: configuration is one file, not three. `pastex-storage.json` holds
+    three Drive links — `pastex-folder` (the library folder), `pastex-index`
+    (the order/collapse file) and `pastex-sites` (the site list) — together with
+    `client_id` for the OAuth client. One file therefore describes the whole
+    installation, and the cached configuration shape moved to version 4, so the
+    folder is picked once more after the upgrade.
+  * The links are the ones Drive's own Share button produces. Every shape is
+    reduced to the id the API needs: a bare id, a `/folders/<id>` link, a
+    `/file/d/<id>/view` link, or an `?id=<id>` link. A link that is none of
+    those is reported by key name instead of being guessed at.
+  * `pastex-sites` may also be an inline array, which is what lets the folder
+    hold nothing but this one file. A link to a shared list is fetched with the
+    same sign-in.
+  * The order and collapse file is now read straight from its link. It used to
+    be found by listing the library folder, so every load paid a second
+    listing for a file whose id the user had already given. A link that no
+    longer opens leaves the library readable, in Drive's order with every folder
+    open, and the next reorder writes the file again.
+  * The requested scope is `https://www.googleapis.com/auth/drive.item`, the
+    per-item scope, so the access reaches the items the links name rather than
+    the whole Drive.
+  * The old file names (`pastex-google-drive.json`, `pastex-sites.json`,
+    `pastex-oauth.json`) are gone with no compatibility layer: a renamed file is
+    reported as missing, and any other `.json` file in the folder is ignored.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 03:00:00 +0000
+
 pastex (2.23.0-1) unstable; urgency=medium
 
   * BREAKING: Drive access now runs as you, through Google OAuth, and the

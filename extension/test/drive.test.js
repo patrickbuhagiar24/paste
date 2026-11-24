@@ -40,7 +40,7 @@ function textResponse(text, status) {
 // --- the OAuth handshake ---------------------------------------------------
 //
 // The token comes from Google's sign-in page through Chrome, using the client
-// id this installation recorded in pastex-oauth.json. There is no key file and
+// id this installation recorded in pastex-storage.json. There is no key file and
 // no client secret: the extension is a public client and its bundle is public.
 
 const CLIENT = "123456789012-abcdefghijklmnop.apps.googleusercontent.com";
@@ -82,7 +82,7 @@ test("a Drive token comes from Google's sign-in page, never from a key file", as
   assert.equal(url.searchParams.get("client_id"), CLIENT);
   assert.equal(url.searchParams.get("redirect_uri"), REDIRECT);
   assert.equal(url.searchParams.get("response_type"), "token");
-  assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive.file");
+  assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive.item");
   assert.equal(url.searchParams.get("state").length, 32);
   // Even an interactive request tries silently first: Chrome's worker restarts
   // often, and a grant Google already holds needs no page.
@@ -145,7 +145,7 @@ test("a sign-in failure is reported, not swallowed", async () => {
     Drive.getAuthToken({ identity: fakeIdentity(() => REDIRECT + "#access_token=stolen&state=other"), clientId: mine }),
     /did not match this request/);
   await assert.rejects(Drive.getAuthToken({ identity: {}, clientId: mine }), /sign-in window is unavailable/);
-  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(granted) }), /pastex-oauth\.json/);
+  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(granted) }), /pastex-storage\.json/);
 });
 
 test("an unregistered redirect URL is named in the error", async () => {
@@ -194,8 +194,10 @@ test("signing out revokes the token at Google and forgets it here", async () => 
   assert.equal(identity.asked.length, 2);
 });
 
-test("the requested scope covers only the files Pastex itself uses", () => {
-  assert.equal(Drive.SCOPES, "https://www.googleapis.com/auth/drive.file");
+test("the requested scope covers only the items the user handed to Pastex", () => {
+  // The per-item scope, not the account-wide drive scope: the links in
+  // pastex-storage.json are what grant the access.
+  assert.equal(Drive.SCOPES, "https://www.googleapis.com/auth/drive.item");
 });
 
 test("listChildren follows pagination", async () => {
@@ -253,23 +255,52 @@ test("a listing reports the cursor of its last page", async () => {
   assert.equal(cursor, "next");
 });
 
-test("the index is a file in the library, not a folder property", async () => {
-  // A Drive custom property is limited to 124 bytes including its key, so the
-  // index never fitted there: two rows already overflowed it and every write
-  // was refused. It is stored as its own small file instead.
-  const fetchImpl = stubFetch(async (url) => {
-    if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
-      return jsonResponse({ id: "index-file", modifiedTime: "2026-01-01T00:00:00.000Z" });
-    }
-    return jsonResponse({ files: [] });
-  });
+test("the index is read straight from its link, with no listing", async () => {
+  // The configuration names the index file, so reading it is one GET. It used to
+  // be found by listing the library folder, which cost a second listing on every
+  // load for a file whose id the user already knew.
+  const fetchImpl = stubFetch(async () => textResponse(JSON.stringify({ v: 2, order: { root: ["b", "a"] }, collapsed: { f: "1" } })));
+  const stored = await Drive.readIndexFile("tok", "index-file", fetchImpl);
+  assert.equal(stored.id, "index-file");
+  assert.deepEqual(stored.index, { v: 2, order: { root: ["b", "a"] }, collapsed: { f: "1" } });
+  assert.equal(fetchImpl.calls.length, 1);
+  const url = new URL(fetchImpl.calls[0].url);
+  assert.equal(url.pathname, "/drive/v3/files/index-file");
+  assert.equal(url.searchParams.get("alt"), "media");
+});
+
+test("an index link that no longer opens leaves the library readable", async () => {
+  for (const status of [403, 404]) {
+    const fetchImpl = stubFetch(async () => jsonResponse({ error: { message: "not found" } }, status));
+    const stored = await Drive.readIndexFile("tok", "index-file", fetchImpl);
+    assert.deepEqual(stored, { id: "", index: null, missing: true },
+      "a deleted or unshared index file is metadata drift, not a failed load");
+  }
+});
+
+test("an index write edits the linked file, and creates it only when there is no link", async () => {
   const index = { v: 2, order: { root: ["b", "a"] }, collapsed: { f: "1" } };
-  const id = await Drive.writeIndexFile("tok", "root", index, fetchImpl);
-  assert.equal(id, "index-file");
-  const create = fetchImpl.calls.find((call) => call.options.method === "POST");
-  assert.ok(create.options.body.includes(Drive.INDEX_NAME), "the index file has its own name");
-  assert.ok(create.options.body.includes(JSON.stringify(index)));
-  assert.equal(Drive.setIndex, undefined, "there is no property writer any more");
+  const body = JSON.stringify(index);
+
+  // With a link: one media PATCH to that file.
+  const linked = stubFetch(async () => jsonResponse({ id: "index-file" }));
+  assert.equal(await Drive.writeIndexFile("tok", "index-file", "root", index, linked), "index-file");
+  assert.equal(linked.calls.length, 1);
+  const patch = linked.calls[0];
+  assert.equal(patch.options.method, "PATCH");
+  assert.ok(patch.url.includes("/files/index-file"));
+  assert.ok(patch.url.includes("uploadType=media"));
+  assert.equal(patch.options.body, body, "the whole label is written, unclipped");
+
+  // Without a link: one multipart POST into the library folder, whose new id is
+  // reported back so the session edits that file from then on.
+  const created = stubFetch(async () => jsonResponse({ id: "new-index" }));
+  assert.equal(await Drive.writeIndexFile("tok", "", "root", index, created), "new-index");
+  const post = created.calls[0];
+  assert.equal(post.options.method, "POST");
+  assert.ok(post.url.startsWith("https://www.googleapis.com/upload/drive/v3/files"));
+  assert.ok(post.options.body.includes("pastex-index.json"));
+  assert.ok(post.options.body.includes(body));
 });
 
 test("the index no longer has to fit in 124 bytes, which is what refused every reorder", async () => {
@@ -281,22 +312,9 @@ test("the index no longer has to fit in 124 bytes, which is what refused every r
   const body = JSON.stringify(index);
   assert.ok(body.length > 124, "the label is far larger than a property can hold");
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
-  await Drive.writeIndexFile("tok", "root", index, fetchImpl, { id: "index-file" });
-  const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
-  assert.equal(patch.options.body, body, "the whole label is written, unclipped");
-});
-
-test("an existing index file is updated in place instead of adding a second one", async () => {
-  const fetchImpl = stubFetch(async (url) => {
-    if (url.includes("alt=media")) return { ok: true, status: 200, headers: { get: () => "text/plain" }, text: async () => "{}" };
-    return jsonResponse({ id: "index-file" });
-  });
-  const index = { v: 2, order: {}, collapsed: {} };
-  await Drive.writeIndexFile("tok", "root", index, fetchImpl, { id: "index-file" });
-  const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
-  assert.ok(patch.url.includes("/files/index-file"));
-  assert.ok(patch.url.includes("uploadType=media"));
-  assert.equal(patch.options.body, JSON.stringify(index));
+  await Drive.writeIndexFile("tok", "index-file", "root", index, fetchImpl);
+  assert.equal(fetchImpl.calls[0].options.body, body);
+  assert.equal(Drive.setIndex, undefined, "there is no property writer any more");
 });
 
 test("the root folder is read with its timestamp", async () => {
@@ -390,7 +408,7 @@ test("writing the index keeps shared-drive support", async () => {
   const fetchImpl = stubFetch(async (url) => (url.startsWith("https://www.googleapis.com/upload/")
     ? jsonResponse({ id: "index-file" })
     : jsonResponse({ files: [] })));
-  await Drive.writeIndexFile("tok", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl, { id: "index-file" });
+  await Drive.writeIndexFile("tok", "index-file", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl);
   const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
   assert.equal(new URL(patch.url).searchParams.get("supportsAllDrives"), "true");
 });
@@ -402,9 +420,9 @@ test("no per-item order or collapse writer is exported any more", () => {
   assert.equal(Drive.setCollapsed, undefined);
 });
 
-test("a known index file costs one write, not a listing first", async () => {
+test("a linked index file costs one write, not a listing first", async () => {
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
-  await Drive.writeIndexFile("tok", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl, { id: "index-file" });
-  assert.equal(fetchImpl.calls.length, 1, "the id from the last read is reused");
+  await Drive.writeIndexFile("tok", "index-file", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl);
+  assert.equal(fetchImpl.calls.length, 1, "the id from the link is reused");
   assert.equal(fetchImpl.calls[0].options.method, "PATCH");
 });

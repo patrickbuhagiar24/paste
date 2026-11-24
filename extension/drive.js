@@ -27,10 +27,10 @@
   var AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
   var REVOKE_URL = "https://oauth2.googleapis.com/revoke";
   var UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3";
-  // drive.file covers exactly the files and folders this extension created or
-  // that the user handed to it, which is everything Pastex needs. The full
-  // drive scope would also let it read unrelated files, so it is not requested.
-  var SCOPES = "https://www.googleapis.com/auth/drive.file";
+  // The narrow, per-item scope: it reaches only the files and folders the user
+  // handed to Pastex through the links in pastex-storage.json, not the rest of
+  // Drive. The full drive scope would reach everything and is not requested.
+  var SCOPES = "https://www.googleapis.com/auth/drive.item";
   var FOLDER_MIME = "application/vnd.google-apps.folder";
   var TEXT_MIME = "text/plain";
   var REQUEST_TIMEOUT_MS = 20000;
@@ -64,7 +64,7 @@
   //
   // The client id is not compiled into the extension: this project is
   // self-hosted, so each installation brings its own OAuth client, recorded in
-  // pastex-oauth.json (see the guide in README.md).
+  // pastex-storage.json (see the guide in README.md).
 
   function identityApi(overrides) {
     var api = (overrides && overrides.identity) || (typeof chrome !== "undefined" && chrome && chrome.identity);
@@ -172,7 +172,7 @@
   async function getAuthToken(options) {
     options = options || {};
     var clientId = String(options.clientId || "").trim();
-    if (!clientId) throw new Error("Add pastex-oauth.json with the client_id of a Google OAuth client.");
+    if (!clientId) throw new Error("Add pastex-storage.json with the client_id of a Google OAuth client.");
     var cached = cachedToken(clientId);
     if (cached) return cached;
     var api = identityApi(options);
@@ -342,13 +342,6 @@
     return files;
   }
 
-  // The root folder carries the labels of the library. Its custom properties
-  // cannot: Drive allows 124 bytes per property including the key, and the
-  // index names every folder and every id, so two rows already overflow it and
-  // every reorder or fold was refused with HTTP 400. The index therefore lives
-  // in one small JSON file next to the snippets (see INDEX_NAME).
-  var INDEX_NAME = "pastex-index.json";
-
   async function getFolder(token, folderId, fetchImpl) {
     return driveFetch(token, "/files/" + encodeURIComponent(folderId), {
       query: { fields: "id,name,mimeType,modifiedTime,properties" }, fetchImpl: fetchImpl,
@@ -366,30 +359,42 @@
     });
   }
 
-  // The order and the collapse state of the whole library live in one file in
-  // the library folder, so a reorder or a collapse costs one small write
-  // instead of one write per item. The file is created on the first write and
-  // replaced afterwards, and it is never one of the snippet files: it is the
-  // one name the reader skips when it lists the library.
-  async function readIndexFile(token, rootId, fetchImpl) {
-    var files = await listChildren(token, rootId, fetchImpl);
-    var found = null;
-    files.forEach(function (file) { if (!found && file.name === INDEX_NAME) found = file; });
-    if (!found) return { id: "", index: null };
-    var raw = await readFileText(token, found.id, fetchImpl);
+  // The order and the collapse state of the whole library live in one file, and
+  // the configuration names it directly (the pastex-index link in
+  // pastex-storage.json). Reading it is one GET: no listing is needed to find
+  // it, so a folder listing costs one request instead of two.
+  //
+  // It cannot live in the root folder's custom properties: Drive allows 124
+  // bytes per property including the key, and the index names every folder and
+  // every id, so two rows already overflow it and every reorder or fold was
+  // refused with HTTP 400.
+  async function readIndexFile(token, indexId, fetchImpl) {
+    if (!indexId) return { id: "", index: null };
+    var raw;
+    try {
+      raw = await readFileText(token, indexId, fetchImpl);
+    } catch (err) {
+      // A link to a file that is gone or no longer readable is not a listing
+      // failure: the library still opens, in Drive's own order with every
+      // folder open, and the next reorder writes the file again.
+      if (/HTTP (403|404)\b/.test(String(err && err.message))) return { id: "", index: null, missing: true };
+      throw err;
+    }
     var data = null;
     try { data = JSON.parse(raw); } catch (ignored) { data = null; }
-    return { id: found.id, index: data };
+    return { id: indexId, index: data };
   }
 
-  async function writeIndexFile(token, rootId, index, fetchImpl, known) {
+  async function writeIndexFile(token, indexId, rootId, index, fetchImpl) {
     var body = JSON.stringify(index);
-    var current = known && known.id ? known.id : (await readIndexFile(token, rootId, fetchImpl)).id;
-    if (current) {
-      await updateText(token, current, body, fetchImpl);
-      return current;
+    if (indexId) {
+      await updateText(token, indexId, body, fetchImpl);
+      return indexId;
     }
-    var made = await uploadNew(token, rootId, INDEX_NAME, body, fetchImpl, true);
+    // No link was configured. The file is created in the library folder and its
+    // new id is reported back so the rest of the session edits it instead of
+    // creating a second one.
+    var made = await uploadNew(token, rootId, "pastex-index.json", body, fetchImpl, true);
     return (made && made.id) || "";
   }
 
@@ -491,7 +496,6 @@
     downloadText: downloadText,
     renameFile: renameFile,
     moveFile: moveFile,
-    INDEX_NAME: INDEX_NAME,
     readIndexFile: readIndexFile,
     writeIndexFile: writeIndexFile,
     trashFile: trashFile,

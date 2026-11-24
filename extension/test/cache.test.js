@@ -8,7 +8,7 @@ function setup() {
   const data = {};
   const localData = {};
   let calls = 0;
-  const config = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
+  const config = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const storage = {
     async get(key) { return { [key]: data[key] }; },
     async set(values) { Object.assign(data, structuredClone(values)); },
@@ -53,7 +53,7 @@ test("the cache is read without Drive and survives a worker restart, keyed by ac
   assert.equal((await b.get(false)).tree[0].id, "4");
   assert.equal((await b.get(false)).tree[0].id, "4");
   x.config.oauth = null;
-  await assert.rejects(b.get(false), /pastex-oauth\.json/);
+  await assert.rejects(b.get(false), /pastex-storage\.json/);
   assert.equal(x.data[Cache.KEY], undefined);
 });
 
@@ -396,7 +396,7 @@ test("a changed node signature refreshes the snapshot without disturbing the pan
 
 function nestedWorld() {
   const data = {}, localData = {};
-  const config = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
+  const config = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const area = (store) => ({
     async get(key) { return { [key]: store[key] }; },
     async set(values) { Object.assign(store, structuredClone(values)); },
@@ -409,7 +409,7 @@ function nestedWorld() {
     getAuthToken: async () => "token",
     getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root" }),
     // Order and collapse live in the index file, not on the folder.
-    readIndexFile: async () => ({ id: "", index: null }),
+    readIndexFile: async (token, indexId) => ({ id: indexId || "", index: null }),
     listChildren: async (token, parent) => {
       listings++;
       return parent === "root"

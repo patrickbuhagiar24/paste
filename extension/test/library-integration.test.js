@@ -9,12 +9,21 @@ function json(data) {
 function text(data) {
   return { ok: true, status: 200, headers: { get: () => "text/plain" }, text: async () => data };
 }
-// Configuration as the panel caches it: a library folder plus the OAuth client
-// of this extension. No key file is involved anywhere.
+// Configuration as the panel caches it: one file of links, reduced to ids. The
+// index link is what makes reading the order one GET instead of a listing.
+const INDEX_ID = "index";
 const oauthConfig = {
   readConfig: async () => ({
-    drive: { folderId: "root" },
+    drive: { folderId: "root", indexId: INDEX_ID },
     oauth: { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
+  }),
+};
+const noIndexConfig = {
+  readConfig: async () => ({
+    drive: { folderId: "root", indexId: "" },
+    oauth: { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
   }),
 };
 
@@ -36,13 +45,14 @@ test("Drive library signs in and lists and loads a shared folder through the API
     throw new Error("Unexpected API request: " + target);
   };
   try {
-    const result = await Library.load(oauthConfig, Drive);
+    const result = await Library.load(noIndexConfig, Drive);
     assert.equal(result.tree[0].name, "Synced");
     assert.equal(result.tree[0].text, "Hello from Drive");
     assert.equal(signIns, 1, "one sign-in per session");
-    // folder, the index listing (none yet), the library listing, the body.
-    assert.equal(calls.length, 4);
-    assert.equal(calls[2].searchParams.get("includeItemsFromAllDrives"), "true");
+    // folder, the library listing, the body: the index is named by the
+    // configuration and costs no request of its own when there is no link yet.
+    assert.equal(calls.length, 3);
+    assert.equal(calls[1].searchParams.get("includeItemsFromAllDrives"), "true");
   } finally {
     globalThis.fetch = previousFetch;
     Drive.getAuthToken = previousToken;
@@ -70,10 +80,11 @@ test("a second load lists and downloads only the branch that changed", async () 
     if (target.pathname === "/drive/v3/files" && target.searchParams.get("q")) {
       const parent = target.searchParams.get("q").match(/'([^']+)' in parents/)[1];
       listings.push(parent);
-      // The index is a plain file in the library folder; it is never a row.
+      // The index is a plain file in the library folder. It is skipped because
+      // the configuration names it, not because of its name.
       if (parent === "root") {
         return json({ files: [
-          { id: "index", name: Drive.INDEX_NAME, mimeType: "text/plain", modifiedTime: "i1" },
+          { id: INDEX_ID, name: "pastex-index.json", mimeType: "text/plain", modifiedTime: "i1" },
           ...(files[parent] || []),
         ] });
       }
@@ -98,16 +109,16 @@ test("a second load lists and downloads only the branch that changed", async () 
     // The central index of the root folder decides the order.
     assert.deepEqual(first.tree.map((node) => node.id), ["top", "folder"]);
     assert.deepEqual(downloads.sort(), ["inside", "top"]);
-    assert.deepEqual(listings.sort(), ["folder", "root", "root"], "the changed folder and the two root listings");
+    assert.deepEqual(listings.sort(), ["folder", "root"], "one listing per folder");
 
     listings.length = 0; downloads.length = 0;
     const second = await Library.load(native, Drive, undefined, {
       tree: first.tree, bodies: first.bodies, texts: first.texts,
       metadata: first.metadata, signatures: first.signatures,
     });
-    // Reading the index costs one listing of the root; the tree itself only
-    // needs the root listed again, and the unchanged folder is reused.
-    assert.deepEqual(listings.sort(), ["root", "root"], "only the root is listed again");
+    // The index is one GET by its link, so the tree only needs the root listed
+    // again and the unchanged folder is reused.
+    assert.deepEqual(listings.sort(), ["root"], "only the root is listed again");
     assert.deepEqual(downloads, [], "no body is downloaded again");
     assert.equal(second.tree[1].children[0].text, "Inside body");
 
@@ -119,8 +130,8 @@ test("a second load lists and downloads only the branch that changed", async () 
       tree: second.tree, bodies: second.bodies, texts: second.texts,
       metadata: second.metadata, signatures: second.signatures,
     });
-    assert.deepEqual(listings.sort(), ["folder", "root", "root"],
-      "the index costs one root listing, the tree needs the other");
+    assert.deepEqual(listings.sort(), ["folder", "root"],
+      "the changed branch is listed, and the index costs no listing");
     assert.deepEqual(downloads, ["inside"], "only the changed body is downloaded again");
     assert.equal(third.tree[0].text, "Top body");
     assert.equal(third.tree[1].children[0].text, "Inside body");

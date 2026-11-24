@@ -12,12 +12,16 @@
   else root.PastexConfigSource = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
-  var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", OAUTH = "pastex-oauth.json";
+  // One file, three links. A link is what Drive's own Share button gives you, so
+  // the configuration can be written without knowing which id belongs to what.
+  var STORAGE = "pastex-storage.json";
+  var LINK_FOLDER = "pastex-folder", LINK_SITES = "pastex-sites", LINK_INDEX = "pastex-index";
+  var CLIENT = "client_id";
   var FOLDER = "folder ", CACHE = "pastex-config-cache";
   // The cached configuration shape is versioned. A record with another version
   // is treated as absent, which asks the user to pick the folder again instead
   // of decoding an unknown shape. See DEVELOPMENT.md.
-  var CACHE_VERSION = 3;
+  var CACHE_VERSION = 4;
   var MAX_BYTES = 256 * 1024;
 
   function create(sites, cacheStore) {
@@ -72,65 +76,78 @@
       return raw;
     }
 
-    /* Identify the three files. All three carry canonical names: a rename is
-     * not supported, it is a configuration the user fixes once (DEVELOPMENT.md:
-     * no compatibility layer for names). Only pastex-sites.json and
-     * pastex-google-drive.json are shared with anyone else, and
-     * pastex-oauth.json holds the client id of this installation, which is why
-     * it is never shared: it is bound to one extension id. */
+    /* Identify the one configuration file. It carries a canonical name: a
+     * rename is not supported, it is a configuration the user fixes once
+     * (DEVELOPMENT.md: no compatibility layer for names). Any other .json file
+     * in the folder is ignored, so the folder may hold notes or backups. */
     function identify(raw) {
       var files = {}, sources = {};
-      if (Object.prototype.hasOwnProperty.call(raw, DRIVE)) {
-        files[DRIVE] = raw[DRIVE];
-        sources[DRIVE] = DRIVE;
-      }
-      if (Object.prototype.hasOwnProperty.call(raw, SITES)) {
-        files[SITES] = raw[SITES];
-        sources[SITES] = SITES;
-      }
-      if (Object.prototype.hasOwnProperty.call(raw, OAUTH)) {
-        files[OAUTH] = raw[OAUTH];
-        sources[OAUTH] = OAUTH;
+      if (Object.prototype.hasOwnProperty.call(raw, STORAGE)) {
+        files[STORAGE] = raw[STORAGE];
+        sources[STORAGE] = STORAGE;
       }
       return { files: files, sources: sources };
     }
 
-    /* Check every file and report all the problems at once. A user who has to
+    /* A Drive link, reduced to the id the API needs. Only the shapes Drive's
+     * Share button and address bar produce are accepted: a bare id, a
+     * /folders/<id> link, a /file/d/<id>/view link, or an ?id=<id> link. Anything
+     * else is a typo the user can see, not something to guess at. */
+    function idFromLink(value) {
+      var text = typeof value === "string" ? value.trim() : "";
+      if (!text) return "";
+      if (/^[A-Za-z0-9_-]{10,}$/.test(text)) return text;
+      var folder = /\/folders\/([A-Za-z0-9_-]{10,})/.exec(text);
+      if (folder) return folder[1];
+      var file = /\/file\/d\/([A-Za-z0-9_-]{10,})/.exec(text);
+      if (file) return file[1];
+      var query = /[?&]id=([A-Za-z0-9_-]{10,})/.exec(text);
+      if (query) return query[1];
+      return "";
+    }
+
+    /* Check the file and report all the problems at once. A user who has to
      * pick the folder again after each single error is being told one third of
-     * what is wrong, so missing and malformed files are collected, not thrown
-     * one by one. */
+     * what is wrong, so every problem is collected, not thrown one by one. */
     function problems(found) {
       var files = found.files || {};
-      var drive = files[DRIVE], oauth = files[OAUTH], sitesFile = files[SITES];
+      var storage = files[STORAGE];
       var list = [];
 
-      var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
-      if (!id && drive && typeof drive.folder_url === "string") {
-        var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
-        id = match ? match[1] : "";
+      if (!storage) {
+        list.push(STORAGE + " is missing");
+        return { list: list, value: null };
       }
-      var validId = /^[A-Za-z0-9_-]+$/.test(id);
-      if (!drive) list.push(DRIVE + " is missing");
-      else if (!validId) list.push(DRIVE + " has no usable folder_id or folder_url");
 
-      // A Google OAuth client id looks like
-      // 123456789012-abcdefghijklmnop.apps.googleusercontent.com
-      var clientId = oauth && typeof oauth.client_id === "string" ? oauth.client_id.trim() : "";
+      var folderId = idFromLink(storage[LINK_FOLDER]);
+      var indexId = idFromLink(storage[LINK_INDEX]);
+      if (!folderId) list.push(STORAGE + " needs a " + LINK_FOLDER + " link to the library folder");
+      if (!indexId) list.push(STORAGE + " needs an " + LINK_INDEX + " link to the order/collapse file");
+
+      // The OAuth client of this installation lives in the same file: one file
+      // describes the whole setup, and none of it is a secret.
+      var clientId = typeof storage[CLIENT] === "string" ? storage[CLIENT].trim() : "";
       var validClient = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
-      if (!oauth) list.push(OAUTH + " is missing");
-      else if (!validClient) list.push(OAUTH + " needs the client_id of a Google OAuth client (type Web application)");
+      if (!clientId) list.push(STORAGE + " needs the " + CLIENT + " of a Google OAuth client");
+      else if (!validClient) list.push(STORAGE + " needs the " + CLIENT + " of a Google OAuth client (type Web application)");
 
-      if (!sitesFile) list.push(SITES + " is missing");
-      else if (!Array.isArray(sitesFile.allowed_sites)) list.push(SITES + " needs an allowed_sites array");
-      else {
-        try { sites.parse(sitesFile.allowed_sites); }
-        catch (err) { list.push(SITES + ": " + (err.message || err)); }
+      // sites may also be an inline list, so a single file can describe the whole
+      // installation; a link to a shared list is treated exactly like the id.
+      var sitesValue = storage[LINK_SITES];
+      var sitesId = idFromLink(sitesValue);
+      var inline = Array.isArray(sitesValue) ? sitesValue : null;
+      if (!sitesId && !inline) {
+        list.push(STORAGE + " needs a " + LINK_SITES + " link to the site list or an inline array");
+      } else if (inline) {
+        try { sites.parse(inline); }
+        catch (err) { list.push(STORAGE + ": " + (err.message || err)); }
       }
 
       return {
         list: list,
-        value: validId && validClient && sitesFile && Array.isArray(sitesFile.allowed_sites) ?
-          { folderId: id, clientId: clientId, allowedSites: sitesFile.allowed_sites } : null,
+        value: folderId && indexId && validClient && (sitesId || inline) ?
+          { folderId: folderId, indexId: indexId, clientId: clientId,
+            sitesId: sitesId, allowedSites: inline } : null,
       };
     }
 
@@ -150,7 +167,7 @@
       await writeCache(found.files, handle.name || "");
       memoized.config = null; memoized.configKey = "";
       memoized.sites = null; memoized.sitesKey = "";
-      return { drive: FOLDER + DRIVE, oauth: FOLDER + OAUTH, sites: FOLDER + SITES };
+      return { storage: FOLDER + STORAGE };
     }
 
     /* All later reads come from the cache; the folder is not used again. */
@@ -161,10 +178,13 @@
       return memo("config", key, !!force, async function () {
         var v = validate({ files: record.files, sources: {} });
         return {
-          drive: { folderId: v.folderId },
+          drive: { folderId: v.folderId, indexId: v.indexId },
           driveError: "",
           oauth: { client_id: v.clientId },
           oauthError: "",
+          // The site list is either a link to fetch or an array already read
+          // from the one configuration file.
+          sites: { fileId: v.sitesId || "", allowedSites: v.allowedSites || null },
           sources: {},
         };
       });
@@ -176,7 +196,8 @@
       var key = record.savedAt + ":" + record.folder;
       return memo("sites", key, !!force, async function () {
         var v = validate({ files: record.files, sources: {} });
-        return { allowedSites: v.allowedSites, source: FOLDER + SITES };
+        if (v.allowedSites) return { allowedSites: v.allowedSites, fileId: "", source: FOLDER + STORAGE };
+        return { allowedSites: null, fileId: v.sitesId, source: FOLDER + STORAGE };
       });
     }
 

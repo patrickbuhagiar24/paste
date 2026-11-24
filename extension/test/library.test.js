@@ -7,8 +7,9 @@ function fakeDrive() {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
     getAuthToken: async () => "token",
     getFolder: async () => ({ id: "root", mimeType: "application/vnd.google-apps.folder" }),
-    // The index is its own file now; this library has no index yet.
-    readIndexFile: async () => ({ id: "", index: null }),
+    // The index is its own file, named by the configuration; this library has
+    // no index yet.
+    readIndexFile: async (token, indexId) => ({ id: indexId || "", index: null }),
     listChildren: async (token, parent) => parent === "root" ? [
       { id: "folder", name: "Folder", mimeType: "application/vnd.google-apps.folder" },
       { id: "empty", name: "Empty", mimeType: "application/vnd.google-apps.folder" },
@@ -18,7 +19,11 @@ function fakeDrive() {
     downloadText: async (token, id) => ({ top: "top content", nested: "nested content" })[id],
   };
 }
-const native = { readConfig: async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } }) };
+const native = { readConfig: async () => ({
+  drive: { folderId: "root", indexId: "" },
+  oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+  sites: { fileId: "", allowedSites: ["https://example.org"] },
+}) };
 
 test("Drive library loads nested snippets, contents, ids, and empty folders", async () => {
   const result = await Library.load(native, fakeDrive());
@@ -32,11 +37,11 @@ test("Drive library loads nested snippets, contents, ids, and empty folders", as
 });
 
 test("Drive library reports missing configuration, invalid folder, and fetch errors", async () => {
-  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /pastex-google-drive\.json/);
-  await assert.rejects(Library.load({ readConfig: async () => ({ drive: { folderId: "root" } }) }, fakeDrive()), /pastex-oauth\.json/);
+  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /pastex-storage\.json/);
+  await assert.rejects(Library.load({ readConfig: async () => ({ drive: { folderId: "root" } }) }, fakeDrive()), /client_id/);
   const drive = fakeDrive();
   drive.getFolder = async () => ({ mimeType: "text/plain" });
-  await assert.rejects(Library.load(native, drive), /not a folder/);
+  await assert.rejects(Library.load(native, drive), /does not point at a folder/);
   const offline = fakeDrive();
   offline.listChildren = async () => { throw new Error("permission denied"); };
   await assert.rejects(Library.load(native, offline), /permission denied/);

@@ -6,8 +6,18 @@ const assert = require("node:assert/strict");
 const Sites = require("../sites.js");
 const { create } = require("../config-source.js");
 
-const oauthFile = { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" };
+const CLIENT = "123456789012-abcdefghijklmnop.apps.googleusercontent.com";
+const FOLDER_LINK = "https://drive.google.com/drive/folders/rootfolder";
+const INDEX_LINK = "https://drive.google.com/file/d/indexfileid/view?usp=sharing";
 
+function storageFile(overrides) {
+  return Object.assign({
+    "pastex-folder": FOLDER_LINK,
+    "pastex-sites": ["https://example.org"],
+    "pastex-index": INDEX_LINK,
+    client_id: CLIENT,
+  }, overrides || {});
+}
 function fileEntry(name, contents) {
   return { kind: "file", name: name, getFile: async () => ({ name: name, size: contents.length, text: async () => contents }) };
 }
@@ -16,11 +26,7 @@ function dirHandle(name, files, folders) {
   return { kind: "directory", name: name, values: async function* () { for (const e of entries) yield e; } };
 }
 function goodFiles() {
-  return {
-    "pastex-google-drive.json": JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/rootfolder" }),
-    "pastex-sites.json": JSON.stringify({ allowed_sites: ["https://example.org"] }),
-    "pastex-oauth.json": JSON.stringify(oauthFile),
-  };
+  return { "pastex-storage.json": JSON.stringify(storageFile()) };
 }
 function memoryStore(initial) {
   let data = initial || {};
@@ -36,20 +42,29 @@ function harness(files, folders) {
   return { source: create(Sites, store), store: store, handle: dirHandle("config", files, folders) };
 }
 
-test("choosing a folder scans it once and stores the parsed files, not the handle", async () => {
+test("choosing a folder scans it once and stores the parsed file, not the handle", async () => {
   const store = memoryStore();
   const source = create(Sites, store);
   const info = await source.chooseFolder(dirHandle("config", goodFiles()));
-  assert.deepEqual(info, {
-    drive: "folder pastex-google-drive.json",
-    oauth: "folder pastex-oauth.json",
-    sites: "folder pastex-sites.json",
-  });
+  assert.deepEqual(info, { storage: "folder pastex-storage.json" });
   const saved = store.peek()["pastex-config-cache"];
   assert.equal(saved.folder, "config");
-  assert.deepEqual(Object.keys(saved.files).sort(), ["pastex-google-drive.json", "pastex-oauth.json", "pastex-sites.json"]);
-  assert.equal(saved.files["pastex-google-drive.json"].folder_url, "https://drive.google.com/drive/folders/rootfolder");
+  assert.deepEqual(Object.keys(saved.files), ["pastex-storage.json"]);
+  // The links are stored as written; they are reduced to ids on every read, so
+  // the stored shape stays exactly what the user typed.
+  assert.equal(saved.files["pastex-storage.json"]["pastex-folder"], FOLDER_LINK);
   assert.ok(!JSON.stringify(saved).includes("getFile"), "a handle must never be stored");
+});
+
+test("the three links are reduced to ids, and one file describes everything", async () => {
+  const store = memoryStore();
+  const source = create(Sites, store);
+  await source.chooseFolder(dirHandle("config", goodFiles()));
+  const config = await source.readConfig();
+  assert.deepEqual(config.drive, { folderId: "rootfolder", indexId: "indexfileid" });
+  assert.equal(config.oauth.client_id, CLIENT);
+  assert.deepEqual(config.sites, { fileId: "", allowedSites: ["https://example.org"] });
+  assert.deepEqual((await source.readSites()).allowedSites, ["https://example.org"]);
 });
 
 test("every later read comes from the cache and never touches the folder again", async () => {
@@ -87,7 +102,8 @@ test("a new browser session reads the cache without a folder handle at all", asy
   const next = create(Sites, store);
   const config = await next.readConfig();
   assert.equal(config.drive.folderId, "rootfolder");
-  assert.equal(config.oauth.client_id, oauthFile.client_id);
+  assert.equal(config.drive.indexId, "indexfileid");
+  assert.equal(config.oauth.client_id, CLIENT);
   assert.deepEqual((await next.readSites()).allowedSites, ["https://example.org"]);
 });
 
@@ -102,39 +118,89 @@ test("only the surface is scanned: subfolders are skipped, not opened", async ()
   const files = goodFiles();
   files["notes.txt"] = "ignored, not .json";
   files["broken.json"] = "{ not json";
+  files["pastex-index.json"] = JSON.stringify({ v: 2, order: {}, collapsed: {} });
   await source.chooseFolder(dirHandle("config", files, [nested]));
 
   assert.equal(nestedOpened, 0, "a subfolder must not be entered");
   const saved = store.peek()["pastex-config-cache"];
   assert.ok(!("notes.txt" in saved.files), "non-JSON files are ignored");
   assert.ok(!("broken.json" in saved.files), "unparseable JSON is ignored");
+  // A stray file that looks like an old configuration is ignored: one canonical
+  // name is the whole contract.
+  assert.deepEqual(Object.keys(saved.files), ["pastex-storage.json"]);
   assert.equal((await source.readConfig()).drive.folderId, "rootfolder");
 });
 
-test("all three files are required under their canonical names", async () => {
-  // No file is recognised by its content any more: a renamed file is a
-  // configuration the user fixes once, not an alias the code guesses at.
-  const files = {
-    "pastex-google-drive.json": JSON.stringify({ folder_id: "fromid" }),
-    "pastex-sites.json": JSON.stringify({ allowed_sites: ["https://a.example"] }),
-    "my-oauth-client.json": JSON.stringify(oauthFile),
-  };
+test("the configuration file is required under its canonical name", async () => {
+  // No file is recognised by its content: a renamed file is a configuration the
+  // user fixes once, not an alias the code guesses at.
+  const files = { "my-storage.json": JSON.stringify(storageFile()) };
   const store = memoryStore();
   const source = create(Sites, store);
-  await assert.rejects(source.chooseFolder(dirHandle("config", files)), /pastex-oauth\.json is missing/);
+  await assert.rejects(source.chooseFolder(dirHandle("config", files)),
+    /pastex-storage\.json is missing/);
 });
 
-test("a renamed drive or sites file is reported as missing, not guessed", async () => {
+test("every link shape Drive produces is accepted, and a bad one is reported", async () => {
+  const open = (link) => storageFile({ "pastex-folder": link });
+  const ids = [];
+  for (const link of [
+    "1AbCdEfGhIjKlMnOpQrStUv",
+    "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv",
+    "https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOpQrStUv?usp=sharing",
+    "https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUv",
+  ]) {
+    const store = memoryStore();
+    const source = create(Sites, store);
+    await source.chooseFolder(dirHandle("config", { "pastex-storage.json": JSON.stringify(open(link)) }));
+    ids.push((await source.readConfig()).drive.folderId);
+  }
+  assert.deepEqual(new Set(ids), new Set(["1AbCdEfGhIjKlMnOpQrStUv"]),
+    "every shape reduces to the same id");
+
   const store = memoryStore();
   const source = create(Sites, store);
   await assert.rejects(
     source.chooseFolder(dirHandle("config", {
-      "my-drive.json": JSON.stringify({ folder_id: "fromid" }),
-      "my-sites.json": JSON.stringify({ allowed_sites: [] }),
-      "pastex-oauth.json": JSON.stringify(oauthFile),
+      "pastex-storage.json": JSON.stringify(open("https://example.com/not-a-drive-link")),
     })),
-    /pastex-google-drive\.json is missing; pastex-sites\.json is missing/
-  );
+    /needs a pastex-folder link to the library folder/);
+});
+
+test("a missing link is reported by key, all at once", async () => {
+  const store = memoryStore();
+  const source = create(Sites, store);
+  const bare = storageFile();
+  delete bare["pastex-index"];
+  delete bare["pastex-sites"];
+  await assert.rejects(source.chooseFolder(dirHandle("config", {
+    "pastex-storage.json": JSON.stringify(bare),
+  })), (err) => {
+    assert.match(err.message, /needs an pastex-index link|needs a pastex-index link/);
+    assert.match(err.message, /pastex-sites link/);
+    return true;
+  });
+});
+
+test("the client id lives in the same file and is checked there", async () => {
+  const store = memoryStore();
+  const source = create(Sites, store);
+  await assert.rejects(source.chooseFolder(dirHandle("config", {
+    "pastex-storage.json": JSON.stringify(storageFile({ client_id: "not-a-client" })),
+  })), /needs the client_id of a Google OAuth client/);
+});
+
+test("a site link is kept for the library to fetch instead of being misread", async () => {
+  const store = memoryStore();
+  const source = create(Sites, store);
+  await source.chooseFolder(dirHandle("config", {
+    "pastex-storage.json": JSON.stringify(storageFile({
+      "pastex-sites": "https://drive.google.com/file/d/sitesfileid/view",
+    })),
+  }));
+  const config = await source.readConfig();
+  assert.deepEqual(config.sites, { fileId: "sitesfileid", allowedSites: null });
+  assert.deepEqual(await source.readSites(), { allowedSites: null, fileId: "sitesfileid", source: "folder pastex-storage.json" });
 });
 
 test("a broken folder never replaces a working configuration", async () => {
@@ -144,7 +210,7 @@ test("a broken folder never replaces a working configuration", async () => {
   const before = JSON.stringify(store.peek());
 
   const broken = goodFiles();
-  broken["pastex-sites.json"] = JSON.stringify({ allowed_sites: ["<all_urls>"] });
+  broken["pastex-storage.json"] = JSON.stringify(storageFile({ "pastex-sites": ["<all_urls>"] }));
   await assert.rejects(source.chooseFolder(dirHandle("broken", broken)), /Invalid site origin/);
   assert.equal(JSON.stringify(store.peek()), before, "the previous cache must survive");
 
@@ -152,33 +218,11 @@ test("a broken folder never replaces a working configuration", async () => {
   assert.equal(JSON.stringify(store.peek()), before);
 });
 
-test("missing pieces are named in the error", async () => {
-  const source = create(Sites, memoryStore());
-  const noDrive = { "pastex-sites.json": JSON.stringify({ allowed_sites: [] }), "pastex-oauth.json": JSON.stringify(oauthFile) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noDrive)), /pastex-google-drive\.json is missing/);
-
-  const noOAuth = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "pastex-sites.json": JSON.stringify({ allowed_sites: [] }) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noOAuth)), /pastex-oauth\.json is missing/);
-
-  const noSites = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "pastex-oauth.json": JSON.stringify(oauthFile) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noSites)), /pastex-sites\.json is missing/);
-});
-
-test("every missing file is reported at once, not one per attempt", async () => {
-  const source = create(Sites, memoryStore());
-  const onlyOAuth = { "pastex-oauth.json": JSON.stringify(oauthFile) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", onlyOAuth)), (err) => {
-    assert.match(err.message, /pastex-google-drive\.json is missing/);
-    assert.match(err.message, /pastex-sites\.json is missing/);
-    return true;
-  });
-});
-
 test("a missing file is never reported as a validation error", async () => {
-  // It used to say "allowed_sites must be an array" for a file that was absent.
   const source = create(Sites, memoryStore());
-  const noSites = { "pastex-google-drive.json": JSON.stringify({ folder_id: "root" }), "pastex-oauth.json": JSON.stringify(oauthFile) };
-  await assert.rejects(source.chooseFolder(dirHandle("config", noSites)), (err) => {
+  await assert.rejects(source.chooseFolder(dirHandle("config", {
+    "pastex-sites.json": "{}",
+  })), (err) => {
     assert.doesNotMatch(err.message, /allowed_sites/);
     assert.match(err.message, /is missing/);
     return true;
@@ -187,15 +231,18 @@ test("a missing file is never reported as a validation error", async () => {
 
 test("a malformed file IS reported separately from a missing one", async () => {
   const source = create(Sites, memoryStore());
-  const malformed = {
-    "pastex-google-drive.json": JSON.stringify({ folder_url: "https://drive.google.com/drive/folders/" }),
-    "pastex-oauth.json": JSON.stringify({ client_id: "not-a-client-id" }),
-    "pastex-sites.json": JSON.stringify({ allowed_sites: ["<all_urls>"] }),
-  };
-  await assert.rejects(source.chooseFolder(dirHandle("config", malformed)), (err) => {
-    assert.match(err.message, /no usable folder_id or folder_url/);
-    assert.match(err.message, /needs the client_id of a Google OAuth client \(type Web application\)/);
+  await assert.rejects(source.chooseFolder(dirHandle("config", {
+    "pastex-storage.json": JSON.stringify(storageFile({
+      "pastex-folder": "",
+      "pastex-index": "",
+      "pastex-sites": ["<all_urls>"],
+      client_id: "",
+    })),
+  })), (err) => {
+    assert.match(err.message, /needs a pastex-folder link/);
+    assert.match(err.message, /needs an pastex-index link|needs a pastex-index link/);
     assert.match(err.message, /Invalid site origin/);
+    assert.match(err.message, /needs the client_id/);
     return true;
   });
 });
@@ -205,4 +252,3 @@ test("reading before choosing a folder explains what to do", async () => {
   await assert.rejects(source.readConfig(), /Choose a configuration folder in Config first/);
   await assert.rejects(source.readSites(), /Choose a configuration folder in Config first/);
 });
-
