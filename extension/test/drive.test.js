@@ -82,7 +82,7 @@ test("a Drive token comes from Google's sign-in page, never from a key file", as
   assert.equal(url.searchParams.get("client_id"), CLIENT);
   assert.equal(url.searchParams.get("redirect_uri"), REDIRECT);
   assert.equal(url.searchParams.get("response_type"), "token");
-  assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive.file");
+  assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive");
   assert.equal(url.searchParams.get("state").length, 32);
   // Even an interactive request tries silently first: Chrome's worker restarts
   // often, and a grant Google already holds needs no page.
@@ -195,11 +195,11 @@ test("signing out revokes the token at Google and forgets it here", async () => 
   assert.equal(identity.asked.length, 2);
 });
 
-test("the requested scope covers only the files the user handed to Pastex", () => {
-  // The per-file scope Google documents, not the account-wide drive scope: the
-  // files Pastex writes and the ones the configuration links name are what
-  // grant the access.
-  assert.equal(Drive.SCOPES, "https://www.googleapis.com/auth/drive.file");
+test("the requested scope is the full Drive scope, and nothing is narrowed", () => {
+  // One scope, exactly as Google publishes it:
+  // https://www.googleapis.com/auth/drive — every file the signed-in account
+  // can open, not only the ones this app created.
+  assert.equal(Drive.SCOPES, "https://www.googleapis.com/auth/drive");
 });
 
 test("listChildren follows pagination", async () => {

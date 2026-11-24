@@ -27,14 +27,14 @@
   var AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
   var REVOKE_URL = "https://oauth2.googleapis.com/revoke";
   var UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3";
-  // `drive.file` is the narrow, per-file scope Google actually publishes: it
-  // reaches only the files and folders Google considers created or opened by
-  // this app — the ones Pastex writes, plus the ones the user hands over through
-  // the links in the configuration file. The account-wide `drive` scope would
-  // reach everything and is not requested. (`drive.item` does not exist in
-  // Google's scope tables, so asking for it made sign-in fail with
-  // `invalid_scope`.)
-  var SCOPES = "https://www.googleapis.com/auth/drive.file";
+  // Full, unrestricted Drive: every file and folder the signed-in account can
+  // open, including the ones it did not create. The narrow `drive.file` scope
+  // sees only what Pastex created or the user opened with it, which left every
+  // folder and snippet that already existed unreadable (Drive answers 404 for a
+  // file the grant cannot see), and `drive.item` is not in Google's scope tables
+  // at all. One scope, no narrowing of our own: the library folder named in the
+  // configuration is a preference, not a boundary.
+  var SCOPES = "https://www.googleapis.com/auth/drive";
   var FOLDER_MIME = "application/vnd.google-apps.folder";
   var TEXT_MIME = "text/plain";
   var REQUEST_TIMEOUT_MS = 20000;

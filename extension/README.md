@@ -52,13 +52,17 @@ You need, once, about ten minutes:
    screen*: choose **External** (or **Internal** if the client is only for one
    Workspace organisation), set the app name (`Pastex`), your e-mail as the
    support address, and your e-mail as the developer contact. Save.
-   Add the scope `https://www.googleapis.com/auth/drive.file` — Pastex asks for
-   nothing else. It is the per-file scope: access reaches the files Pastex
-   creates and the files the links in the configuration file name, not the rest
-   of Drive. This scope is classified by Google as **non-sensitive**, so it
-   needs no verification review and no security assessment. Do not substitute
-   `auth/drive.item`: it is not in Google's scope tables, and sign-in is refused
-   with `invalid_scope`.
+   Add the scope `https://www.googleapis.com/auth/drive` — Pastex asks for that
+   one scope and nothing else. It is the **full** Drive scope: every file and
+   folder the signed-in account can open, not only the ones Pastex created. The
+   narrowing is not done by OAuth but by the configuration: Pastex reads and
+   writes under the folder `pastex-folder` names, and nothing else. Google
+   classifies this scope as **restricted**; while the consent screen is in
+   *Testing* with you as a test user it works without review, but publishing it
+   for other people needs Google's security assessment. Do not substitute a
+   narrower variant: `auth/drive.file` sees only what Pastex itself created (so
+   an existing folder or a snippet uploaded by hand reads as 404), and
+   `auth/drive.item` is not in Google's scope tables at all.
 
 5. **Create the OAuth client.** *APIs & Services → Credentials → Create
    credentials → OAuth client ID*. Application type: **Web application**. Name
@@ -77,8 +81,10 @@ You need, once, about ten minutes:
 6. **Publish the consent screen.** Still under *OAuth consent screen*, click
    *Publish app* and confirm. While the status stays *Testing*, every sign-in
    shows a warning page, the grant expires after seven days, and only the test
-   users you listed may sign in. *In production* with a non-sensitive scope
-   needs no review.
+   users you listed may sign in. *In production* with a restricted scope means
+   Google's verification and security assessment; for a personal or household
+   installation, leaving the app in *Testing* with yourself as a test user is
+   the honest route.
 
 7. **Note the client ID.** It goes into `client_id` in the configuration file
    described in the next section.
@@ -397,14 +403,13 @@ not listed under `pastex-sites` are not injected or targeted.
 - `getcwd() failed: No such file or directory` during apt means your terminal's
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
-- If the status line says *Google Drive cannot see the library folder … (HTTP
-  404 or 403)*, Google answered as if the folder did not exist. With the
-  `auth/drive.file` scope that is the normal answer for a folder the app never
-  created or opened, so check the three causes the message names: the
-  `pastex-folder` link points at the folder itself, the signed-in account can
-  open it in Drive, and the grant is current (pick the configuration file again
-  in **Config**, then press **↻ Sync**). Pastex only ever reads what it created
-  itself and what you open through it.
+- If the status line says *Google Drive cannot open the library folder … (HTTP
+  404 or 403)*, Google answered as if the folder did not exist. The scope is
+  full Drive, so this is about the folder, not about the grant being too narrow:
+  check that the `pastex-folder` link points at the folder itself, that the
+  folder still exists, and that the signed-in account owns it or it was shared
+  with that account. If the grant is stale, pick the configuration file again in
+  **Config** and accept the sign-in, then press **↻ Sync**.
 - If configuration is missing or the file cannot be read, open **Config** and
   pick the file again. Any name works; the keys are what matter, and a missing
   key is named in the status line. The worker console can show errors.

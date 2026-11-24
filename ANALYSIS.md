@@ -291,11 +291,13 @@ writes to Drive and then gives rows their Drive id, and the refusal of
 
 1. **~~The service-account key can be exposed through links.~~** Resolved: the
    service account is gone. Pastex now uses the **OAuth user flow with the
-   `drive.file` scope** — access only to the files Pastex creates and the ones
-   the configuration links name,
-   no key distributed, and a public client id that is worthless on its own. The
-   remaining property to keep is that a cached snapshot never carries the
-   client id.
+   full `drive` scope** — the one scope Google publishes for complete access to
+   the account's Drive, with the library folder in the configuration deciding
+   what Pastex actually touches. No key is distributed, and the public client id
+   is worthless on its own. The remaining property to keep is that a cached
+   snapshot never carries the client id. Note the consequence: the scope is
+   restricted, so publishing the app beyond test users would need Google's
+   security assessment.
 2. **`host_permissions` is too broad** (`http://*/*`, `https://*/*`) purely to
    support dynamic script registration. It could be narrowed with
    `optional_host_permissions` requested per site when the user picks the

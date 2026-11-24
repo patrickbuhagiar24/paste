@@ -72,7 +72,7 @@ fingerprint check, is in the [project README](README.md).
 | `<name> is not valid JSON.` | the picked file does not parse; the name in the message is the file you chose |
 | `pastex-sites: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
 | `Configuration has problems: …` | the file was rejected; the previous configuration is still active |
-| `Google Drive cannot see the library folder … (HTTP 404 or 403)` | the grant reaches only the files Pastex created or opened, so the folder must be a real folder link the signed-in account can open; repick the configuration file, then **↻ Sync** |
+| `Google Drive cannot open the library folder … (HTTP 404 or 403)` | the signed-in account cannot open that folder: the link must be the folder itself, the folder must exist, and the account must own it or have it shared; if the grant is stale, repick the configuration file, then **↻ Sync** |
 | `Google does not recognise this extension's redirect URL` | copy the quoted URL into the OAuth client's *Authorized redirect URIs* |
 | `... needs a pastex-folder link` | that key is empty or is not a Drive link |
 | `... needs the client_id of a Google OAuth client` | the client ID is missing or malformed |

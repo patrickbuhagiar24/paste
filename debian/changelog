@@ -1,3 +1,29 @@
+pastex (2.28.0-1) unstable; urgency=medium
+
+  * BREAKING: the requested scope is now `https://www.googleapis.com/auth/drive`
+    — the full Drive scope, one scope and nothing else. Pastex asks Google for
+    complete access to the signed-in account's Drive, with no narrowing of its
+    own, and the library folder in the configuration stops being a limit on what
+    the token can reach and becomes only what Pastex chooses to read and write.
+  * This is what makes the existing installations readable again: `drive.file`
+    reaches only the files Pastex created or the user opened through it, so a
+    folder made by hand in Drive, a snippet uploaded from a phone, or a file
+    copied into the library folder answered HTTP 404 as if it did not exist.
+    Those files are all readable now, and files added to the library folder from
+    outside Pastex appear in the panel like any other snippet.
+  * The consequence is stated plainly in the README and in SECURITY.md: the
+    scope is classified as restricted by Google, so while the consent screen
+    stays in Testing with you as a test user it works without review, but
+    publishing it for other people requires a security assessment.
+  * Because the scope changed, the grant Google holds no longer matches: accept
+    the sign-in once after the upgrade, and every later read is silent again.
+  * The "cannot see the library folder" message became "cannot open the library
+    folder": with the full scope a 404/403 is about the folder — a wrong id, a
+    deleted folder, or an account that never had it shared — not about the grant
+    being too narrow.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 02:00:00 +0000
+
 pastex (2.27.1-1) unstable; urgency=medium
 
   * A folder the grant cannot see is now explained instead of reported as a raw

@@ -55,8 +55,9 @@ test("Drive library reports missing configuration, invalid folder, and fetch err
     sites: { fileId: "", allowedSites: ["https://example.org"] },
   }) };
   await assert.rejects(Library.load(named, invisible), (err) => {
-    assert.match(err.message, /cannot see the library folder 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ/);
+    assert.match(err.message, /cannot open the library folder 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ/);
     assert.match(err.message, /pastex-folder link is the folder itself/);
+    assert.match(err.message, /shared with this account/);
     assert.match(err.message, /pick your configuration file again/);
     return true;
   });

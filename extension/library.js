@@ -119,18 +119,16 @@
     try {
       folder = await drive.getFolder(token, rootId);
     } catch (err) {
-      // Drive answers 404, not 403, when this grant cannot see the folder: the
-      // `drive.file` scope reaches only the files Pastex created and the files
-      // the user opened with it, so a folder that exists but was never opened
-      // this way looks exactly like a missing one. Which of the two it is would
-      // be a guess, so the message names both causes and the one fix that
-      // covers them.
+      // The full Drive scope reaches every folder the account can open, so a
+      // 404/403 here is about the folder itself, not about the grant being too
+      // narrow: the id is wrong, the folder was deleted, or it belongs to
+      // another account and was never shared with this one.
       if (/HTTP (403|404)\b/.test(String((err && err.message) || ""))) {
-        throw new Error("Google Drive cannot see the library folder " + rootId + " (HTTP 404 or 403). " +
-          "Pastex can reach only the files it created and the files opened with it, so this folder was " +
-          "never opened through Pastex. Check that the pastex-folder link is the folder itself and not a " +
-          "file, that the signed-in Google account can open it, and pick your configuration file again " +
-          "in Config if the grant is stale.");
+        throw new Error("Google Drive cannot open the library folder " + rootId + " (HTTP 404 or 403). " +
+          "The signed-in Google account cannot open it, so check that the pastex-folder link is the " +
+          "folder itself and not a file, that the folder still exists, and that this account owns it or " +
+          "it was shared with this account. If the grant is stale, pick your configuration file again " +
+          "in Config and accept the Google sign-in.");
       }
       throw err;
     }

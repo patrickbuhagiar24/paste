@@ -34,7 +34,12 @@ until the old tokens are useless anyway.
 
 Pastex holds no client secret and stores no credential. The configuration
 file contains only public Drive links and a public client id, so a leaked file
-grants no access beyond what a link already shares. The access token Google issues lives in the worker's
+grants no access beyond what a link already shares. The extension requests the
+full `https://www.googleapis.com/auth/drive` scope, so the access token reaches
+every file the signed-in account can open, not only the ones Pastex created; the
+library folder in the configuration decides what Pastex itself reads and writes.
+That scope is classified as restricted by Google, which is why publishing the
+application beyond its own test users would require a security assessment. The access token Google issues lives in the worker's
 memory for about an hour and is never written to disk; the permission itself
 stays with Google. Signing out revokes the access token at Google. Report
 credential-handling issues privately to the maintainer rather than opening a
