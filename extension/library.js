@@ -115,7 +115,25 @@
     // show Google's page, which is why it is interactive.
     var token = await drive.getAuthToken({ clientId: config.oauth.client_id, interactive: true });
     var rootId = config.drive.folderId;
-    var folder = await drive.getFolder(token, rootId);
+    var folder;
+    try {
+      folder = await drive.getFolder(token, rootId);
+    } catch (err) {
+      // Drive answers 404, not 403, when this grant cannot see the folder: the
+      // `drive.file` scope reaches only the files Pastex created and the files
+      // the user opened with it, so a folder that exists but was never opened
+      // this way looks exactly like a missing one. Which of the two it is would
+      // be a guess, so the message names both causes and the one fix that
+      // covers them.
+      if (/HTTP (403|404)\b/.test(String((err && err.message) || ""))) {
+        throw new Error("Google Drive cannot see the library folder " + rootId + " (HTTP 404 or 403). " +
+          "Pastex can reach only the files it created and the files opened with it, so this folder was " +
+          "never opened through Pastex. Check that the pastex-folder link is the folder itself and not a " +
+          "file, that the signed-in Google account can open it, and pick your configuration file again " +
+          "in Config if the grant is stale.");
+      }
+      throw err;
+    }
     if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive folder link does not point at a folder.");
     // The order and collapse file is named by the configuration, so reading it
     // is one GET and no listing: the tree listing below is the only listing.

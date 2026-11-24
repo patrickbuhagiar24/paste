@@ -397,6 +397,14 @@ not listed under `pastex-sites` are not injected or targeted.
 - `getcwd() failed: No such file or directory` during apt means your terminal's
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
+- If the status line says *Google Drive cannot see the library folder … (HTTP
+  404 or 403)*, Google answered as if the folder did not exist. With the
+  `auth/drive.file` scope that is the normal answer for a folder the app never
+  created or opened, so check the three causes the message names: the
+  `pastex-folder` link points at the folder itself, the signed-in account can
+  open it in Drive, and the grant is current (pick the configuration file again
+  in **Config**, then press **↻ Sync**). Pastex only ever reads what it created
+  itself and what you open through it.
 - If configuration is missing or the file cannot be read, open **Config** and
   pick the file again. Any name works; the keys are what matter, and a missing
   key is named in the status line. The worker console can show errors.

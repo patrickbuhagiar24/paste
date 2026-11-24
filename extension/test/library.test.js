@@ -43,6 +43,23 @@ test("Drive library reports missing configuration, invalid folder, and fetch err
   const drive = fakeDrive();
   drive.getFolder = async () => ({ mimeType: "text/plain" });
   await assert.rejects(Library.load(native, drive), /does not point at a folder/);
+  // A folder this grant cannot see comes back as 404 from Drive, which is not
+  // the same thing as a wrong link. The message has to say both and name the fix.
+  const invisible = fakeDrive();
+  invisible.getFolder = async () => {
+    throw new Error("Drive API GET /files/1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ failed (HTTP 404): File not found: 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ.");
+  };
+  const named = { readConfig: async () => ({
+    drive: { folderId: "1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ", indexId: "" },
+    oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
+  }) };
+  await assert.rejects(Library.load(named, invisible), (err) => {
+    assert.match(err.message, /cannot see the library folder 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ/);
+    assert.match(err.message, /pastex-folder link is the folder itself/);
+    assert.match(err.message, /pick your configuration file again/);
+    return true;
+  });
   const offline = fakeDrive();
   offline.listChildren = async () => { throw new Error("permission denied"); };
   await assert.rejects(Library.load(native, offline), /permission denied/);

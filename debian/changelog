@@ -1,3 +1,19 @@
+pastex (2.27.1-1) unstable; urgency=medium
+
+  * A folder the grant cannot see is now explained instead of reported as a raw
+    Drive error. `auth/drive.file` reaches only the files Pastex created and the
+    files opened through it, and Drive answers 404 — not 403 — when a folder
+    exists but was never opened that way, so "File not found" was the same
+    sentence for a wrong link, a wrong account and a stale grant. The panel now
+    says *Google Drive cannot see the library folder <id> (HTTP 404 or 403)*,
+    states why, and names the three things to check: the `pastex-folder` link
+    points at the folder itself, the signed-in account can open it, and the
+    grant is current (pick the configuration file again, then sync).
+  * The troubleshooting sections of the extension README and the Linux guide
+    carry the same message, so the fix is found without reading the source.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 18:00:00 +0000
+
 pastex (2.27.0-1) unstable; urgency=medium
 
   * BREAKING: the requested scope is `https://www.googleapis.com/auth/drive.file`
