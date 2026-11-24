@@ -148,8 +148,8 @@ echo "        can add children: $(printf '%s' "$body" | jq -r '.capabilities.can
 echo
 
 echo "2. Can it create a folder?"
-out="$(drive POST "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id" \
-  <(printf '%s' "{\"name\":\"pastex-write-check-folder\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"$FOLDER_ID\"]}") )"
+printf '%s' "{\"name\":\"pastex-write-check-folder\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"$FOLDER_ID\"]}" > "$tmpdir/folder.json"
+out="$(drive POST "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id" "$tmpdir/folder.json")"
 status="$(printf '%s' "$out" | tail -n 1)"; body="$(printf '%s' "$out" | sed '$d')"
 report "create a folder" "$status" "$body"
 made_folder="$(printf '%s' "$body" | jq -r '.id // empty' 2>/dev/null)"
@@ -190,8 +190,8 @@ echo
 
 echo "5. Cleaning up what this check created"
 for id in "${created[@]}"; do
-  out="$(drive PATCH "https://www.googleapis.com/drive/v3/files/$id?supportsAllDrives=true&fields=id,trashed" \
-    <(printf '%s' '{"trashed":true}'))"
+  printf '%s' '{"trashed":true}' > "$tmpdir/trash.json"
+  out="$(drive PATCH "https://www.googleapis.com/drive/v3/files/$id?supportsAllDrives=true&fields=id,trashed" "$tmpdir/trash.json")"
   status="$(printf '%s' "$out" | tail -n 1)"
   [ "$status" = "200" ] && echo "  removed $id" || echo "  could not remove $id (HTTP $status)"
 done
