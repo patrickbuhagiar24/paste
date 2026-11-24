@@ -436,7 +436,7 @@ async function applyDriveCommand(session, command) {
       var parent = parents[j] || session.rootId;
       order.order[parent] = (groups[j] || []).slice();
     }
-    await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.rootId, order, undefined, { id: session.indexFileId });
     session.index = order;  // the next write in this flush builds on this one
     return {};
   }
@@ -445,7 +445,7 @@ async function applyDriveCommand(session, command) {
     var next = command.index || {};
     Object.keys(next.order || {}).forEach(function (parent) { merged.order[parent] = next.order[parent]; });
     Object.keys(next.collapsed || {}).forEach(function (id) { merged.collapsed[id] = next.collapsed[id]; });
-    await PastexDrive.setIndex(token, session.rootId, merged, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.rootId, merged, undefined, { id: session.indexFileId });
     // The session follows the label it just wrote, so a later write in the
     // same flush builds on it instead of overwriting it.
     session.index = merged;
@@ -456,7 +456,7 @@ async function applyDriveCommand(session, command) {
     (command.ids || []).filter(Boolean).forEach(function (id) {
       folded.collapsed[id] = command.collapsed ? "1" : "0";
     });
-    await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.rootId, folded, undefined, { id: session.indexFileId });
     session.index = folded;
     return {};
   }
@@ -593,6 +593,7 @@ async function flushSoon(options) {
   if (flushRunning) return { sent: 0, failed: 0 };
   var entries = await deferredQueue.all();
   if (!entries.length) return { sent: 0, failed: 0 };
+  lastFlushRefusals = [];
   flushRunning = true;
   try {
     // One session for the whole flush; the identity cannot change halfway
@@ -617,12 +618,20 @@ function reportFlush(pending) {
   if (pending) console.warn("Pastex: " + pending + " queued write(s) still waiting.");
 }
 
+// What the last flush could not send, and why. A refusal is permanent, so the
+// entry is gone from the queue by the time Sync answers; without this the panel
+// would report a smaller number and leave the user guessing.
+var lastFlushRefusals = [];
+
 // One explicit sync, for the panel's button: send what the queue holds and
 // nothing else. It never reads the library back from Drive.
 async function syncNow() {
   if (siteBusy()) return { flushed: { sent: 0, failed: 0 }, deferred: true, pending: await pendingCount() };
   var flushed = await flushSoon({ readBack: false });
-  return { flushed: flushed, deferred: false, pending: await pendingCount() };
+  // "Sent 3." while three writes were refused is a lie the panel cannot see
+  // through, so the refusals travel back with the count.
+  return { flushed: flushed, deferred: false, pending: await pendingCount(),
+    refused: lastFlushRefusals.slice() };
 }
 
 async function pendingCount() {
@@ -731,6 +740,7 @@ async function sendQueued(entry, session) {
       // so the user sees why the row did not land, and an open panel repaints
       // without the row that Drive does not have.
       console.warn("Pastex: a queued write was refused and dropped:", failure);
+      lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure });
       await deferredQueue.remove([entry.id]);
       await libraryCache.dropLocal(entry);
       notifyPanelsDropped(failure);

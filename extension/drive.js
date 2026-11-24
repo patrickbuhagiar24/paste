@@ -288,8 +288,13 @@
     return files;
   }
 
-  // The root folder carries the labels of the library: its properties hold
-  // the centralized order and collapse index.
+  // The root folder carries the labels of the library. Its custom properties
+  // cannot: Drive allows 124 bytes per property including the key, and the
+  // index names every folder and every id, so two rows already overflow it and
+  // every reorder or fold was refused with HTTP 400. The index therefore lives
+  // in one small JSON file next to the snippets (see INDEX_NAME).
+  var INDEX_NAME = "pastex-index.json";
+
   async function getFolder(token, folderId, fetchImpl) {
     return driveFetch(token, "/files/" + encodeURIComponent(folderId), {
       query: { fields: "id,name,mimeType,modifiedTime,properties" }, fetchImpl: fetchImpl,
@@ -310,35 +315,31 @@
     });
   }
 
-  async function getProperties(token, fileId, fetchImpl) {
-    var data = await driveFetch(token, "/files/" + encodeURIComponent(fileId), {
-      query: { fields: "properties" }, fetchImpl: fetchImpl,
-    });
-    return data && data.properties ? data.properties : {};
+  // The order and the collapse state of the whole library live in one file in
+  // the library folder, so a reorder or a collapse costs one small write
+  // instead of one write per item. The file is created on the first write and
+  // replaced afterwards, and it is never one of the snippet files: it is the
+  // one name the reader skips when it lists the library.
+  async function readIndexFile(token, rootId, fetchImpl) {
+    var files = await listChildren(token, rootId, fetchImpl);
+    var found = null;
+    files.forEach(function (file) { if (!found && file.name === INDEX_NAME) found = file; });
+    if (!found) return { id: "", index: null };
+    var raw = await readFileText(token, found.id, fetchImpl);
+    var data = null;
+    try { data = JSON.parse(raw); } catch (ignored) { data = null; }
+    return { id: found.id, index: data };
   }
 
-  async function patchProperties(token, fileId, values, fetchImpl, known) {
-    // Drive replaces the whole properties map on PATCH; merge first so order
-    // and collapse metadata on the same folder never erase each other. A
-    // caller that already loaded metadata with listChildren can pass it in
-    // and skip the extra GET.
-    var properties = known && typeof known === "object"
-      ? Object.assign({}, known)
-      : await getProperties(token, fileId, fetchImpl);
-    Object.keys(values).forEach(function (key) { properties[key] = values[key]; });
-    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
-      method: "PATCH", contentType: "application/json; charset=UTF-8",
-      query: { fields: "id,properties" },
-      body: JSON.stringify({ properties: properties }), fetchImpl: fetchImpl,
-    });
-  }
-
-  // The order and the collapse state of the whole library live in a single
-  // label on the root folder, so a reorder or a collapse costs one Drive
-  // write instead of one write per item. This is the only writer of order
-  // and collapse state: the old per-item labels are read-only history.
-  async function setIndex(token, rootId, index, fetchImpl, known) {
-    return patchProperties(token, rootId, { pastex_index: JSON.stringify(index) }, fetchImpl, known);
+  async function writeIndexFile(token, rootId, index, fetchImpl, known) {
+    var body = JSON.stringify(index);
+    var current = known && known.id ? known.id : (await readIndexFile(token, rootId, fetchImpl)).id;
+    if (current) {
+      await updateText(token, current, body, fetchImpl);
+      return current;
+    }
+    var made = await uploadNew(token, rootId, INDEX_NAME, body, fetchImpl, true);
+    return (made && made.id) || "";
   }
 
   // Move a file or a folder into another folder. Drive has no move endpoint:
@@ -393,17 +394,25 @@
     );
   }
 
-  async function uploadNew(token, parentId, name, text, fetchImpl) {
+  // A snippet is a .txt file. The index file is the one exception: it is stored
+  // under its own name, so a reader can tell it apart from the snippets.
+  async function uploadNew(token, parentId, name, text, fetchImpl, exactName) {
     var boundary = "pastex-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36);
     var data = await driveFetch(token, "/files", {
       method: "POST",
       upload: true,
       contentType: 'multipart/related; boundary="' + boundary + '"',
       query: { uploadType: "multipart", fields: "id,modifiedTime" },
-      body: multipartBody({ name: name + ".txt", mimeType: TEXT_MIME, parents: [parentId] }, text, boundary),
+      body: multipartBody({ name: exactName ? name : name + ".txt", mimeType: TEXT_MIME, parents: [parentId] }, text, boundary),
       fetchImpl: fetchImpl,
     });
     return data;
+  }
+
+  async function readFileText(token, fileId, fetchImpl) {
+    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
+      query: { alt: "media" }, textResponse: true, fetchImpl: fetchImpl,
+    });
   }
 
   async function updateText(token, fileId, text, fetchImpl) {
@@ -434,7 +443,9 @@
     downloadText: downloadText,
     renameFile: renameFile,
     moveFile: moveFile,
-    setIndex: setIndex,
+    INDEX_NAME: INDEX_NAME,
+    readIndexFile: readIndexFile,
+    writeIndexFile: writeIndexFile,
     trashFile: trashFile,
     createFolder: createFolder,
     uploadNew: uploadNew,

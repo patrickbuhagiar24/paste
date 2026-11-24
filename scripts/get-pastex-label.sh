@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Inspect the label Pastex stores on a Google Drive item (pastex_index).
+# Inspect the order/collapse index Pastex stores in a library folder.
 #
 # Usage:
 #   ./scripts/get-pastex-label.sh                     # label on the library root folder
@@ -18,9 +18,9 @@ SCOPE="https://www.googleapis.com/auth/drive.readonly"
 
 usage() {
   cat <<'USAGE'
-Usage: get-pastex-label.sh [options] [FILE_ID]
+Usage: get-pastex-label.sh [options] [FOLDER_ID]
 
-  FILE_ID              Google Drive file/folder id (default: the Pastex root folder)
+  FOLDER_ID            Google Drive folder id (default: the Pastex root folder)
   -k, --key FILE       service-account.json (default: ./service-account.json)
   -h, --help           show this help
 
@@ -28,7 +28,7 @@ Examples:
   ./scripts/get-pastex-label.sh -k ~/keys/service-account.json
   ./scripts/get-pastex-label.sh -k ~/keys/service-account.json 17Xk...folderId
 
-Output: the raw properties (labels), then the decoded pastex_index.
+Output: the library folder, then the decoded pastex-index.json it contains.
 USAGE
 }
 
@@ -95,22 +95,32 @@ token="$(curl --fail --silent --show-error \
   https://oauth2.googleapis.com/token | jq -r '.access_token // empty')"
 [ -n "$token" ] || { echo "Could not obtain an access token. Check the key and the Drive API." >&2; exit 1; }
 
-# --- read the properties ---------------------------------------------------
-body="$(curl --fail --silent --show-error -H "Authorization: Bearer $token" \
-  "https://www.googleapis.com/drive/v3/files/$(printf '%s' "$FILE_ID" | jq -sRr @uri)?fields=id,name,mimeType,properties")" || {
+# --- read the folder and find its index file -------------------------------
+# The index is a plain file in the library folder, not a folder property: a
+# Drive property is limited to 124 bytes including its key, which the index
+# always exceeds.
+folder="$(curl --fail --silent --show-error -H "Authorization: Bearer $token" \
+  "https://www.googleapis.com/drive/v3/files/$(printf '%s' "$FILE_ID" | jq -sRr @uri)?fields=id,name,mimeType")" || {
   echo "The request failed. Make sure the folder is shared with: $(jq -r '.client_email' "$KEY_FILE")" >&2; exit 1; }
 
-echo "Item     : $(printf '%s' "$body" | jq -r '.name // "?"')  ($(printf '%s' "$body" | jq -r '.id'))"
-echo "Raw properties:"
-printf '%s' "$body" | jq '.properties // {}'
+echo "Folder   : $(printf '%s' "$folder" | jq -r '.name // "?"')  ($(printf '%s' "$folder" | jq -r '.id'))"
 
-index="$(printf '%s' "$body" | jq -r '.properties.pastex_index // empty')"
+listing="$(curl --fail --silent --show-error -H "Authorization: Bearer $token" \
+  --get --data-urlencode "q='$(printf '%s' "$FILE_ID")' in parents and trashed = false" \
+  --data-urlencode 'fields=files(id,name)' \
+  https://www.googleapis.com/drive/v3/files)" || {
+  echo "Could not list the folder." >&2; exit 1; }
+
+index_id="$(printf '%s' "$listing" | jq -r '.files[] | select(.name == "pastex-index.json") | .id' | head -n 1)"
 echo
-if [ -z "$index" ]; then
-  echo "This item has no pastex_index label."
-  echo "On the root folder that means the library is shown in Drive's own order"
-  echo "with every folder open; Pastex writes the label on the next reorder or fold."
+if [ -z "$index_id" ]; then
+  echo "This folder has no pastex-index.json."
+  echo "That means the library is shown in Drive's own order with every folder"
+  echo "open; Pastex writes the file on the next reorder or fold."
 else
-  echo "pastex_index (decoded):"
+  index="$(curl --fail --silent --show-error -H "Authorization: Bearer $token" \
+    "https://www.googleapis.com/drive/v3/files/$index_id?alt=media")" || {
+    echo "Could not read pastex-index.json ($index_id)." >&2; exit 1; }
+  echo "pastex-index.json (decoded):"
   printf '%s' "$index" | jq . 2>/dev/null || printf '%s\n' "$index"
 fi

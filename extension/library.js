@@ -32,19 +32,24 @@
   // builds the label. When the two names disagreed, every write was stored
   // under "version" and every read looked for "v", so each reorder and each
   // fold was thrown away on the next load: one bug, two symptoms.
+  //
+  // The index is stored as its own small file in the library folder. It used to
+  // be a custom property on the root folder, which Drive limits to 124 bytes
+  // per property including the key; two rows already exceeded that, so every
+  // reorder and every fold was refused with HTTP 400 and the panel could only
+  // report "refused". A file has no such limit.
   var INDEX_VERSION = 2;
 
   function emptyIndex() {
     return { order: {}, collapsed: {}, v: INDEX_VERSION };
   }
 
-  // The index is a single label on the root folder. It is the only source of
+  // The index is one file in the library folder, and it is the only source of
   // order and collapse state: there is no per-item fallback any more.
-  function parseIndex(properties) {
-    var raw = properties && properties.pastex_index;
-    if (typeof raw !== "string" || !raw) return emptyIndex();
-    var data;
-    try { data = JSON.parse(raw); } catch (ignored) { return emptyIndex(); }
+  function parseIndex(data) {
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch (ignored) { return emptyIndex(); }
+    }
     if (!data || typeof data !== "object" || data.v !== INDEX_VERSION) return emptyIndex();
     var index = emptyIndex();
     if (data.order && typeof data.order === "object") {
@@ -93,14 +98,12 @@
   }
 
   // The signature of a node describes everything a listing reports about it:
-  // its name, its type, its timestamps, Drive's content checksum and the one
-  // label Pastex writes on the root folder. Two listings with the same
-  // signature describe the same node.
+  // its name, its type, its timestamps and Drive's content checksum. Two
+  // listings with the same signature describe the same node.
   function nodeSignature(file) {
-    var props = (file && file.properties) || {};
     return JSON.stringify([(file && file.id) || "", (file && file.name) || "",
       (file && file.mimeType) || "", (file && file.modifiedTime) || "",
-      (file && file.sha256Checksum) || "", props.pastex_index || ""]);
+      (file && file.sha256Checksum) || ""]);
   }
 
   async function connect(native, drive) {
@@ -112,10 +115,12 @@
     var rootId = config.drive.folderId;
     var folder = await drive.getFolder(token, rootId);
     if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive ID is not a folder.");
-    var properties = folder.properties || {};
+    var stored = await drive.readIndexFile(token, rootId);
     return {
       token: token, rootId: rootId, modifiedTime: folder.modifiedTime || "",
-      properties: properties, index: parseIndex(properties),
+      // The id of the index file is passed on so the next write edits that file
+      // instead of listing the folder again.
+      indexFileId: stored.id, index: parseIndex(stored.index),
     };
   }
 
@@ -249,6 +254,9 @@
           onCursor: function (cursor) { cursors[folderId] = cursor || ""; },
         });
       });
+      // The index file is Pastex's own metadata, not a snippet: it is never a
+      // row, never ordered and never downloaded as text.
+      files = files.filter(function (file) { return file.name !== drive.INDEX_NAME; });
       files = orderByIndex(files, index, folderId);
       var jobs = [];
       files.forEach(function (file) {

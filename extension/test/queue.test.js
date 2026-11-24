@@ -196,8 +196,11 @@ test("the index the queue writes is the index the loader accepts", async () => {
   // The loader only decodes a label whose version field it recognises. The two
   // files once disagreed on the field name, so every reorder and every fold was
   // stored and then ignored on the next read.
-  const drive = { FOLDER_MIME: "folder", TEXT_MIME: "text/plain",
-    getFolder: async () => ({ id: "root", mimeType: "folder", properties: { pastex_index: written } }),
+  const drive = { FOLDER_MIME: "folder", TEXT_MIME: "text/plain", INDEX_NAME: "pastex-index.json",
+    getFolder: async () => ({ id: "root", mimeType: "folder" }),
+    // The label travels as a file body now, so this reads the very bytes the
+    // writer produced.
+    readIndexFile: async () => ({ id: "index-file", index: JSON.parse(written) }),
     listChildren: async (t, id) => (id === "root"
       ? [{ id: "a", name: "A.txt", mimeType: "text/plain" }, { id: "f", name: "F", mimeType: "folder" }]
       : [{ id: "b", name: "B.txt", mimeType: "text/plain" }]),

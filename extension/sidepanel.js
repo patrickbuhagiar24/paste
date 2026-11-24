@@ -931,6 +931,14 @@
       setStatus("Saved. " + result.pending + " waiting to sync.", "ok");
       return;
     }
+    // A refusal is permanent: the write left the queue, so a count alone would
+    // suggest it was sent. The reason is the only useful thing here.
+    var refused = result.refused || [];
+    if (refused.length) {
+      var first = refused[0];
+      setStatus("Drive refused " + refused.length + " change(s): " + first.error, "error");
+      return;
+    }
     if (result.pending) {
       setStatus("Sent " + (result.flushed.sent || 0) + "; " + result.pending + " waiting.", "error");
       return;

@@ -407,7 +407,9 @@ function nestedWorld() {
   const drive = {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
     parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
-    getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root", properties: {} }),
+    getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root" }),
+    // Order and collapse live in the index file, not on the folder.
+    readIndexFile: async () => ({ id: "", index: null }),
     listChildren: async (token, parent) => {
       listings++;
       return parent === "root"

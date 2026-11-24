@@ -12,7 +12,7 @@ themselves. Everything below is written to keep those untouched.
 | Class | Examples | Rule |
 | --- | --- | --- |
 | **Content** | the `.txt` files in the Google Drive folder, their names and folders | **Never** changed, migrated or deleted by a format change. It is the user's data, readable by any app. |
-| **Presentation metadata** | order and collapse state (`pastex_index`), the folder's own labels | **May** be dropped. The worst case is that rows appear in Drive's order again and folders reopen. |
+| **Presentation metadata** | order and collapse state (`pastex-index.json`), the folder's own labels | **May** be dropped. The worst case is that rows appear in Drive's order again and folders reopen. |
 | **Cache** | `pastex.drive.local.v1`, `pastex-config-cache`, the queue | **Always** disposable. Rebuilt from Drive: a cache is never a source of truth. |
 
 A change is acceptable when it only touches the last two rows. It is not
@@ -24,7 +24,7 @@ acceptable when it touches the first row, even if the change looks cosmetic.
    deleted in the same commit. No fallbacks, no feature detection for old
    browser versions, no "still read for older libraries".
 2. **State carries an explicit version.** Every persisted shape has a version
-   number (`pastex_index` → `"v": 2`, `pastex-config-cache` → `version: 2`, the
+   number (`pastex-index.json` → `"v": 2`, `pastex-config-cache` → `version: 2`, the
    queue → its own storage key `pastex.deferred.v1`).
    An unknown version is **discarded and rebuilt**, never guessed at field by
    field.
@@ -70,7 +70,7 @@ case" is the thing that needs justification, not deleting one.
   data is content, stop. If it is metadata or cache, delete instead.
 - Prefer one explicit version check over many defensive `typeof` checks.
 - A stored shape has one writer and one reader, and they must be tested
-  together. `pastex_index` is written by `queue.js` and read by `library.js`;
+  together. The index file is written by `queue.js` and read by `library.js`;
   when the two named the version field differently, every write was discarded
   on the next read and the panel looked as if order and collapse did not save.
   `extension/test/queue.test.js` now writes the label the way the worker does

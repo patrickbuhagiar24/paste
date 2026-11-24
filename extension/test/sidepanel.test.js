@@ -45,10 +45,13 @@ function panelHarness(fail, options = {}) {
     parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
     getFolder: async () => {
       if (fail === true) throw new Error("403 denied");
-      // A test can fold folders through the root label, exactly like Drive.
+      return { mimeType: "folder" };
+    },
+    // A test can fold folders through the index file, exactly like Drive.
+    readIndexFile: async () => {
       const collapsed = {};
       (options.collapsed || []).forEach((id) => { collapsed[id] = "1"; });
-      return { mimeType: "folder", properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed }) } };
+      return { id: "index-file", index: { v: 2, order: {}, collapsed } };
     },
     listChildren: async (token, parent) => records.filter((r) => r.parent === parent && !r.trashed),
     downloadText: async (token, id) => {

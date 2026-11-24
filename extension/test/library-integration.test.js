@@ -34,8 +34,9 @@ test("Drive library signs in and lists and loads a shared folder through the API
     const result = await Library.load({ readConfig: async () => ({ serviceAccount: account, drive: { folderId: "root" } }) }, Drive);
     assert.equal(result.tree[0].name, "Synced");
     assert.equal(result.tree[0].text, "Hello from Drive");
-    assert.equal(calls.length, 4);
-    assert.equal(calls[2].searchParams.get("includeItemsFromAllDrives"), "true");
+    // token, folder, the index listing (none yet), the library listing, the body.
+    assert.equal(calls.length, 5);
+    assert.equal(calls[3].searchParams.get("includeItemsFromAllDrives"), "true");
   } finally {
     Drive.clearTokenCache();
     globalThis.fetch = previousFetch;
@@ -63,15 +64,22 @@ test("a second load lists and downloads only the branch that changed", async () 
     const target = new URL(url);
     if (target.hostname === "oauth2.googleapis.com") return json({ access_token: "token", expires_in: 3600 });
     if (target.pathname === "/drive/v3/files/root") {
-      return json({
-        id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME, modifiedTime: "r1",
-        properties: { pastex_index: JSON.stringify({ v: 2, order: { root: ["top", "folder"] }, collapsed: {} }) },
-      });
+      return json({ id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME, modifiedTime: "r1" });
     }
     if (target.pathname === "/drive/v3/files" && target.searchParams.get("q")) {
       const parent = target.searchParams.get("q").match(/'([^']+)' in parents/)[1];
       listings.push(parent);
+      // The index is a plain file in the library folder; it is never a row.
+      if (parent === "root") {
+        return json({ files: [
+          { id: "index", name: Drive.INDEX_NAME, mimeType: "text/plain", modifiedTime: "i1" },
+          ...(files[parent] || []),
+        ] });
+      }
       return json({ files: files[parent] || [] });
+    }
+    if (target.pathname === "/drive/v3/files/index" && target.searchParams.get("alt") === "media") {
+      return text(JSON.stringify({ v: 2, order: { root: ["top", "folder"] }, collapsed: {} }));
     }
     if (target.pathname === "/drive/v3/files/inside" && target.searchParams.get("alt") === "media") {
       downloads.push("inside");
@@ -90,14 +98,16 @@ test("a second load lists and downloads only the branch that changed", async () 
     // The central index of the root folder decides the order.
     assert.deepEqual(first.tree.map((node) => node.id), ["top", "folder"]);
     assert.deepEqual(downloads.sort(), ["inside", "top"]);
-    assert.deepEqual(listings.sort(), ["folder", "root"]);
+    assert.deepEqual(listings.sort(), ["folder", "root", "root"], "the changed folder and the two root listings");
 
     listings.length = 0; downloads.length = 0;
     const second = await Library.load(native, Drive, undefined, {
       tree: first.tree, bodies: first.bodies, texts: first.texts,
       metadata: first.metadata, signatures: first.signatures,
     });
-    assert.deepEqual(listings, ["root"], "only the root is listed again");
+    // Reading the index costs one listing of the root; the tree itself only
+    // needs the root listed again, and the unchanged folder is reused.
+    assert.deepEqual(listings.sort(), ["root", "root"], "only the root is listed again");
     assert.deepEqual(downloads, [], "no body is downloaded again");
     assert.equal(second.tree[1].children[0].text, "Inside body");
 
@@ -109,7 +119,8 @@ test("a second load lists and downloads only the branch that changed", async () 
       tree: second.tree, bodies: second.bodies, texts: second.texts,
       metadata: second.metadata, signatures: second.signatures,
     });
-    assert.deepEqual(listings.sort(), ["folder", "root"]);
+    assert.deepEqual(listings.sort(), ["folder", "root", "root"],
+      "the index costs one root listing, the tree needs the other");
     assert.deepEqual(downloads, ["inside"], "only the changed body is downloaded again");
     assert.equal(third.tree[0].text, "Top body");
     assert.equal(third.tree[1].children[0].text, "Inside body");

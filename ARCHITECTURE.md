@@ -127,7 +127,7 @@ This is the most useful part when asking for a fix.
 | The ⚡ button on web pages | `extension/content.js` (+ `content.css`) | Only inserts text and asks for permission |
 | The back office (queue, schedule, message rules) | `extension/background.js` | Every write to Drive goes through here |
 | How it talks to Google Drive | `extension/drive.js` | Permission, upload, rename, Trash |
-| Folder layout and order | `extension/library.js` | Order and fold state live in one label, `pastex_index` |
+| Folder layout and order | `extension/library.js` | Order and fold state live in one file, `pastex-index.json` |
 | The fast copy (cache) | `extension/cache.js` | The panel is always served from here |
 | The order book | `extension/queue.js` | Survives a browser restart |
 | The three-file configuration | `extension/config-source.js` (panel) and `extension/config-cache-reader.js` (worker) | Both read the same cache |
@@ -206,9 +206,11 @@ way to do the same thing:
 - **Folder-handle storage (IndexedDB)** and the **separate folder-file scanner**
   — the panel now scans the folder once and stores the result.
 - **Per-item order/fold writers in Drive** — order and fold state are written to
-  a single `pastex_index` label. Older per-item labels are ignored, so a library
+  one file, `pastex-index.json`. Older per-item labels are ignored, so a library
   from a previous version shows up in Drive's order.
-- **Per-item labels as a fallback reader** — `pastex_index` is the only source;
+- **Folder properties as the index** — Drive allows 124 bytes per property, so
+  the index never fitted there and every write was refused.
+- **Per-item labels as a fallback reader** — the index file is the only source;
   an unknown version is discarded and rebuilt.
 - **Support for Chrome before 141** — the panel toggle and `sidePanel.close`
   are assumed, so no capability branch exists.

@@ -33,10 +33,10 @@ chmod +x scripts/get-pastex-label.sh
 ./scripts/get-pastex-label.sh -k ~/keys/service-account.json 1AbCdEfGhIjKlMnOpQrStUv
 ```
 
-The output is the raw `properties` object, then `pastex_index` decoded. If the
-script reports the label is missing, the library is simply being shown in
-Drive's order with every folder open; Pastex writes the label on the next
-reorder or fold.
+The output is the raw `properties` object, then the index file decoded. The
+index lives in `pastex-index.json` inside the library folder; if the script
+reports it is missing, the library is simply being shown in Drive's order with
+every folder open, and Pastex writes the file on the next reorder or fold.
 
 ### The request it makes, in one line
 

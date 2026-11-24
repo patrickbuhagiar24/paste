@@ -155,14 +155,17 @@ to move selected items within their own folders, and **Delete** to move them to
 Drive trash after confirmation. Click the folder arrow to expand or collapse it
 while selecting. Moving is disabled during search; clear the search first.
 Manual order and the collapsed state of the folders are stored together in one
-Google Drive label, `pastex_index`, on the root folder of the library. One
-reorder or one **Collapse all** is therefore a single Drive write instead of
-one write per item, and the structure survives a panel reload, a browser
-restart and a move to another computer using the same Drive folder. Libraries
-that were ordered with earlier versions keep their per-item `pastex_order` and
-`pastex_collapsed` labels, but those labels are **ignored**: the central label
-is the only source of order and collapse state, and a library without one is
-shown in Drive's own order with every folder open. Nothing in the snippets
+small file in the library folder, `pastex-index.json`. One reorder or one
+**Collapse all** is therefore a single Drive write instead of one write per
+item, and the structure survives a panel reload, a browser restart and a move
+to another computer using the same Drive folder. The file is Pastex's own
+metadata: it is never shown as a snippet, and it can be deleted at any time —
+the library then appears in Drive's own order with every folder open. It used
+to be a custom property on the root folder, which Drive limits to 124 bytes
+including the key; two rows already exceeded that, so every reorder and every
+fold was refused. Libraries that were ordered with earlier versions keep their
+per-item `pastex_order` and `pastex_collapsed` labels, but those labels are
+**ignored**: the index file is the only source of order and collapse state. Nothing in the snippets
 themselves changes. Unranked new files follow ranked items in Drive's
 normal order. Concurrent reordering on different devices can overwrite the
 same metadata; refresh before editing shared lists.
@@ -279,6 +282,13 @@ not listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
+- If a **folder** can be created but a **snippet** cannot, the problem is on the
+  Drive side: the same account can add folders but may not own new files. Run
+  `scripts/check-drive-write.sh` in the project (it writes each kind of item
+  once, prints Drive's exact answer and removes what it created). A service
+  account has no storage quota of its own, so a snippet it creates in a personal
+  folder is refused with 403 while a folder it creates works, because the folder
+  belongs to the folder's owner.
 - If APT has installed a newer version but Chrome still displays the older
   extension, fully exit and restart Chrome. Verify the installed package version
   with `dpkg-query -W pastex` and compare it with `chrome://extensions`. As a

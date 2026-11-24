@@ -190,27 +190,61 @@ test("a listing reports the cursor of its last page", async () => {
   assert.equal(cursor, "next");
 });
 
-test("the centralized index is one label on the root folder", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: { keep: "1" } }));
-  const index = { order: { root: ["b", "a"] }, collapsed: { f: "1" } };
-  await Drive.setIndex("tok", "root", index, fetchImpl, { keep: "1" });
-  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
-  const body = JSON.parse(fetchImpl.calls[0].options.body);
-  assert.equal(body.properties.keep, "1", "the other labels of the folder are preserved");
-  assert.deepEqual(JSON.parse(body.properties.pastex_index), index);
+test("the index is a file in the library, not a folder property", async () => {
+  // A Drive custom property is limited to 124 bytes including its key, so the
+  // index never fitted there: two rows already overflowed it and every write
+  // was refused. It is stored as its own small file instead.
+  const fetchImpl = stubFetch(async (url) => {
+    if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files")) {
+      return jsonResponse({ id: "index-file", modifiedTime: "2026-01-01T00:00:00.000Z" });
+    }
+    return jsonResponse({ files: [] });
+  });
+  const index = { v: 2, order: { root: ["b", "a"] }, collapsed: { f: "1" } };
+  const id = await Drive.writeIndexFile("tok", "root", index, fetchImpl);
+  assert.equal(id, "index-file");
+  const create = fetchImpl.calls.find((call) => call.options.method === "POST");
+  assert.ok(create.options.body.includes(Drive.INDEX_NAME), "the index file has its own name");
+  assert.ok(create.options.body.includes(JSON.stringify(index)));
+  assert.equal(Drive.setIndex, undefined, "there is no property writer any more");
 });
 
-test("the root folder is read with its labels and its timestamp", async () => {
+test("the index no longer has to fit in 124 bytes, which is what refused every reorder", async () => {
+  // Two rows with realistic Drive ids already exceeded the 124-byte property
+  // limit, so Drive answered 400 to every reorder and every fold. The file has
+  // no such limit: a library of 400 rows is still one small write.
+  const ids = Array.from({ length: 400 }, (_, i) => "1AbCdEfGhIjKlMnOpQrStUvWxYz0123" + String(i).padStart(4, "0"));
+  const index = { v: 2, order: { "1RootFolderIdAbCdEfGhIjKlMnOpQrStUvW": ids }, collapsed: { [ids[0]]: "1" } };
+  const body = JSON.stringify(index);
+  assert.ok(body.length > 124, "the label is far larger than a property can hold");
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
+  await Drive.writeIndexFile("tok", "root", index, fetchImpl, { id: "index-file" });
+  const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
+  assert.equal(patch.options.body, body, "the whole label is written, unclipped");
+});
+
+test("an existing index file is updated in place instead of adding a second one", async () => {
+  const fetchImpl = stubFetch(async (url) => {
+    if (url.includes("alt=media")) return { ok: true, status: 200, headers: { get: () => "text/plain" }, text: async () => "{}" };
+    return jsonResponse({ id: "index-file" });
+  });
+  const index = { v: 2, order: {}, collapsed: {} };
+  await Drive.writeIndexFile("tok", "root", index, fetchImpl, { id: "index-file" });
+  const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
+  assert.ok(patch.url.includes("/files/index-file"));
+  assert.ok(patch.url.includes("uploadType=media"));
+  assert.equal(patch.options.body, JSON.stringify(index));
+});
+
+test("the root folder is read with its timestamp", async () => {
   const fetchImpl = stubFetch(async () => jsonResponse({
     id: "root", name: "Library", mimeType: "application/vnd.google-apps.folder",
-    modifiedTime: "2026-01-01T00:00:00.000Z", properties: { pastex_index: "{}" },
+    modifiedTime: "2026-01-01T00:00:00.000Z",
   }));
   const folder = await Drive.getFolder("tok", "root", fetchImpl);
   const fields = new URL(fetchImpl.calls[0].url).searchParams.get("fields");
-  assert.match(fields, /properties/);
   assert.match(fields, /modifiedTime/);
   assert.equal(folder.modifiedTime, "2026-01-01T00:00:00.000Z");
-  assert.deepEqual(folder.properties, { pastex_index: "{}" });
 });
 
 test("uploadNew posts multipart, updateText patches media", async () => {
@@ -293,17 +327,13 @@ test("Drive pagination rejects a repeated token instead of loading forever", asy
   await assert.rejects(Drive.listChildren("tok", "root", fetchImpl), /repeated page token/);
 });
 
-test("the central index is one PATCH that preserves other properties", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: { pastex_other: "keep" } }));
-  await Drive.setIndex("tok", "root", { order: { root: ["a"] }, collapsed: {} }, fetchImpl);
-  assert.equal(fetchImpl.calls[1].options.method, "PATCH");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[1].options.body), {
-    properties: {
-      pastex_other: "keep",
-      pastex_index: JSON.stringify({ order: { root: ["a"] }, collapsed: {} }),
-    },
-  });
-  assert.equal(new URL(fetchImpl.calls[1].url).searchParams.get("supportsAllDrives"), "true");
+test("writing the index keeps shared-drive support", async () => {
+  const fetchImpl = stubFetch(async (url) => (url.startsWith("https://www.googleapis.com/upload/")
+    ? jsonResponse({ id: "index-file" })
+    : jsonResponse({ files: [] })));
+  await Drive.writeIndexFile("tok", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl, { id: "index-file" });
+  const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
+  assert.equal(new URL(patch.url).searchParams.get("supportsAllDrives"), "true");
 });
 
 test("no per-item order or collapse writer is exported any more", () => {
@@ -313,11 +343,9 @@ test("no per-item order or collapse writer is exported any more", () => {
   assert.equal(Drive.setCollapsed, undefined);
 });
 
-test("known Drive properties avoid the pre-PATCH GET while preserving other keys", async () => {
-  const fetchImpl = stubFetch(async () => jsonResponse({ id: "root", properties: {} }));
-  await Drive.setIndex("tok", "root", { order: {}, collapsed: {} }, fetchImpl, { pastex_index: "old", pastex_other: "1" });
-  assert.equal(fetchImpl.calls.length, 1, "metadata already loaded with listChildren must not be fetched again");
-  assert.deepEqual(JSON.parse(fetchImpl.calls[0].options.body), {
-    properties: { pastex_index: JSON.stringify({ order: {}, collapsed: {} }), pastex_other: "1" },
-  });
+test("a known index file costs one write, not a listing first", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
+  await Drive.writeIndexFile("tok", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl, { id: "index-file" });
+  assert.equal(fetchImpl.calls.length, 1, "the id from the last read is reused");
+  assert.equal(fetchImpl.calls[0].options.method, "PATCH");
 });

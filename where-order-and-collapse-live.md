@@ -2,25 +2,41 @@
 
 ## Short answer
 
-**There is no file for either.** Both live in a single **label (custom file
-property)** on the **root folder** of your library — the Google Drive folder
-whose id is in `pastex-google-drive.json`.
+**One small file in your library folder: `pastex-index.json`.**
 
-Not a `.json` file, not a `.txt` file, not a hidden file. The label belongs to
-the folder, so it never appears as an item in Drive and never counts as a
-snippet.
+Both facts live in that one file, so it never appears as a snippet row and never
+counts as a snippet. It is Pastex's own metadata: deleting it is harmless, and
+the library simply returns to Drive's own order with every folder open.
 
-## The label used
+## The file
 
-| Label | Attached to | Contents |
+| File | Where | Contents |
 | --- | --- | --- |
-| `pastex_index` | **the root folder** | One JSON string holding the **whole** order and collapse state |
+| `pastex-index.json` | directly inside the library folder | One JSON document holding the **whole** order and collapse state |
 
-Code: `extension/drive.js` → `setIndex()`. It is the **only** writer of order
-and collapse state. The older per-item labels `pastex_order` / `pastex_collapsed`
-are neither written **nor read** any more.
+Code: `extension/drive.js` → `readIndexFile()` / `writeIndexFile()`. They are the
+**only** readers and writer of order and collapse state. The older per-item
+labels `pastex_order` / `pastex_collapsed` are neither written **nor read** any
+more, and neither is the old folder property.
 
-## What `pastex_index` contains
+## Why not a folder property?
+
+Because it cannot fit. A Google Drive custom property is limited to **124 bytes
+per property, including the key name** (`pastex_index` alone is 12 of those
+bytes). Two rows with real Drive ids already produce a longer label:
+
+| Rows | Label size | Limit 124 B |
+| --- | --- | --- |
+| 1 | 118 B | fits |
+| 2 | 154 B | **too long** |
+| 4 | 226 B | **too long** |
+
+So Drive answered `HTTP 400` to every reorder and every fold. The panel stored
+the change locally, could not send it, and — because a 400 is a permanent
+failure — eventually reported it as **refused**. A file has no such limit: the
+same label for 400 rows is written in one request.
+
+## What the file contains
 
 ```json
 {
@@ -37,12 +53,13 @@ are neither written **nor read** any more.
 
 - `v` is the shape version. Any other version is **discarded**, not guessed at.
 - `order` is keyed by **parent folder id**. The `rootId` key means the contents
-  of the root folder; other folders use their own id.
+  of the root folder; other folders use their own id. The root is **not** keyed
+  as `""` — that was a bug that made only subfolders orderable.
 - `collapsed` is keyed by **folder id**, with `"1"` (folded) or `"0"` (open).
 
-## Why one label instead of one per item?
+## Why one file instead of one entry per item?
 
-Reorder and fold share a single label, so:
+Reorder and fold share one document, so:
 
 - one reorder is **one** Drive write, not one write per row;
 - one fold/unfold is **one** write;
@@ -50,26 +67,26 @@ Reorder and fold share a single label, so:
 
 ## If this is an older library
 
-Older versions stored order and collapse **per item**. Those labels are now
-**ignored**: `parseIndex()` reads only `pastex_index` on the root folder, and
-when it is missing or carries an unknown version the library is shown in
-Drive's order with every folder open. There is no migration and no per-item
-read — see `DEVELOPMENT.md` ("state carries a version").
+Older versions stored order and collapse **per item**, then in a folder property.
+Both are now **ignored**: the reader only looks at `pastex-index.json`, and when
+it is missing or carries an unknown version the library is shown in Drive's
+order with every folder open. There is no migration and no per-item read — see
+`DEVELOPMENT.md` ("state carries a version").
 
-The practical effect for a library arranged before 2.19: the manual order and
-the folded folders return to their defaults, while **the snippet contents do
-not change at all**.
+The practical effect: the manual order and the folded folders return to their
+defaults, while **the snippet contents do not change at all**.
 
 ## How to look at it yourself in Drive
 
 1. Open your library folder at <https://drive.google.com>.
-2. Right-click the folder → **Details** (or the info panel).
-3. Look under **Properties** — `pastex_index` holds the JSON above.
+2. Find `pastex-index.json` in the list of files.
+3. Open or download it — that is the JSON above.
 
 Through the API:
 
 ```
-GET https://www.googleapis.com/drive/v3/files/<ROOT_FOLDER_ID>?fields=properties
+GET https://www.googleapis.com/drive/v3/files/<ROOT_FOLDER_ID>?q=name='pastex-index.json'
+GET https://www.googleapis.com/drive/v3/files/<INDEX_FILE_ID>?alt=media
 ```
 
 Or with the script in this repository:
@@ -80,10 +97,10 @@ Or with the script in this repository:
 
 ## Notes
 
-- The label is **metadata**, not file content, so Drive does not count it as a
-  file and it does not appear in file search.
-- Because it sits on the root folder, **changing the configured folder** means
-  using a different set of order/collapse data; the old one stays intact in its
-  own folder.
-- `"1"`/`"0"` are used instead of `true`/`false` because Drive properties only
-  hold strings.
+- Because it is a file, it **does** appear in a plain Drive listing. Pastex
+  filters it out by name, so it is never shown as a row.
+- It is not a snippet: Pastex never edits it as text and never counts it.
+- Changing the configured folder means using a different index file; the old
+  one stays intact in its own folder.
+- `"1"`/`"0"` are used instead of `true`/`false` to keep the document stable
+  across versions.

@@ -1,3 +1,26 @@
+pastex (2.21.0-1) unstable; urgency=medium
+
+  * Fixed: a reorder or a fold could never be saved. The index was stored as a
+    custom property on the root folder, and Drive limits a property to 124 bytes
+    including its key name; the key alone is 12 of those, so two rows already
+    overflowed it and Drive answered HTTP 400. The panel kept the change in its
+    own cache and eventually reported it as "refused". This is why order and
+    collapse looked broken while creating a folder worked.
+  * BREAKING: the index moved to one small file in the library folder,
+    pastex-index.json. The old folder property is not read any more; a library
+    ordered with 2.20 or earlier falls back to Drive's order with every folder
+    open until the next reorder or fold writes the file. Snippet files are
+    untouched and pastex-index.json is never shown as a snippet.
+  * The Sync button now reports a refused write with Drive's own message
+    instead of a smaller count, so a permanent refusal is visible immediately.
+  * New: scripts/check-drive-write.sh writes one folder, one snippet and one
+    index file into the library and prints Drive's exact answer for each. It
+    tells a permission or quota problem apart from a Pastex problem and removes
+    what it created. This answers the case where a folder can be created but a
+    snippet cannot.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 00:25:00 +0000
+
 pastex (2.20.0-1) unstable; urgency=medium
 
   * BREAKING: a pastex_index label written by 2.19.0 is discarded and rebuilt.

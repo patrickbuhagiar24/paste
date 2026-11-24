@@ -77,7 +77,11 @@ test("the retired handle and import layers stay retired", () => {
 
 test("Drive exposes one writer for order and collapse state", () => {
   const Drive = require("../drive.js");
-  assert.equal(typeof Drive.setIndex, "function");
+  // One writer, and it writes the index file: no per-item writer and no folder
+  // property writer, so there is exactly one place the state can live.
+  assert.equal(typeof Drive.writeIndexFile, "function");
+  assert.equal(typeof Drive.readIndexFile, "function");
+  assert.equal(Drive.setIndex, undefined);
   assert.equal(Drive.setOrder, undefined);
   assert.equal(Drive.setCollapsed, undefined);
 });

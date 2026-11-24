@@ -296,9 +296,10 @@ function queueScenario(stub) {
   });
   const drive = browser.context.PastexDrive;
   drive.fetchAccessToken = async () => "token";
-  drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
+  drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME });
   drive.listChildren = async () => [];
-  drive.setIndex = async (t, root, index) => { stored = index; };
+  drive.readIndexFile = async () => ({ id: "", index: null });
+  drive.writeIndexFile = async (t, root, index) => { stored = index; };
   stub(drive);
   const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
   const leave = () => new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
@@ -351,7 +352,7 @@ test("a reorder and a fold in one flush both survive, on one connection", async 
   const calls = [];
   let connects = 0;
   const { browser, send, leave } = queueScenario((drive) => {
-    drive.setIndex = async (t, root, index) => { calls.push(JSON.parse(JSON.stringify(index))); };
+    drive.writeIndexFile = async (t, root, index) => { calls.push(JSON.parse(JSON.stringify(index))); };
   });
   const realConnect = browser.context.PastexLibrary.connect;
   browser.context.PastexLibrary.connect = async (...args) => { connects++; return realConnect(...args); };
@@ -375,7 +376,7 @@ test("a reorder and a collapse each become one index write, and the stored order
   // The label is read back from the folder before each write, so the stub must
   // both record the write and store it, exactly like Drive does.
   const { browser, send, leave } = queueScenario((drive) => {
-    drive.setIndex = async (t, root, index) => { calls.push([root, index]); drive.__stored = index; };
+    drive.writeIndexFile = async (t, root, index) => { calls.push([root, index]); drive.__stored = index; };
   });
   // The folder already carries an unrelated folded folder, which must survive.
   browser.context.PastexDrive.__stored = { order: { root: [] }, collapsed: { folder: "1" } };
@@ -763,7 +764,7 @@ function editScenario() {
     const at = library.findIndex((node) => node.id === id);
     if (at !== -1) library.splice(at, 1);
   };
-  drive.setIndex = async (t, root, index) => { writes.push(["index", index]); };
+  drive.writeIndexFile = async (t, root, index) => { writes.push(["index", index]); };
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
   return { browser, writes, send };
@@ -924,7 +925,8 @@ test("a leftover queue is sent when the browser starts again", async () => {
     drive.listChildren = async () => [];
     const writes = [];
     drive.uploadNew = async (t, parent, name, text) => { writes.push([name, text]); return { id: "made" }; };
-    drive.setIndex = async () => {};
+    drive.readIndexFile = async () => ({ id: "", index: null });
+    drive.writeIndexFile = async () => {};
     // A queue that never left before the browser was quit.
     const queue = browser.context.PastexQueue.create(browser.context.chrome.storage.local);
     await queue.push([{ id: "q1", kind: "create", name: "Recovered", text: "still here",
@@ -968,14 +970,16 @@ function roundTripScenario() {
   const { browser, writes } = editScenario();
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
   // The Drive folder as the loader will read it on the next start.
-  const driveState = { properties: {}, children: [] };
+  const driveState = { index: null, children: [] };
   const drive = browser.context.PastexDrive;
-  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME,
-    properties: structuredClone(driveState.properties) });
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME });
   drive.listChildren = async () => structuredClone(driveState.children);
-  drive.setIndex = async (t, root, index) => {
+  // The index is a file in the library, so it lives with the children.
+  drive.readIndexFile = async () => ({ id: driveState.index ? "index-file" : "",
+    index: structuredClone(driveState.index) });
+  drive.writeIndexFile = async (t, root, index) => {
     writes.push(["index", structuredClone(index)]);
-    driveState.properties.pastex_index = JSON.stringify(index);
+    driveState.index = structuredClone(index);
   };
   drive.uploadNew = async (t, parent, name, text) => {
     writes.push(["text", name, text]);
@@ -1021,7 +1025,7 @@ test("add text, collapse and reorder survive a browser restart", async () => {
 
   assert.ok(driveState.children.some((file) => file.name === "New one.txt"),
     "the added text reached Drive as a real file");
-  const index = JSON.parse(driveState.properties.pastex_index);
+  const index = driveState.index;
   assert.deepEqual(index.collapsed, { folder1: "1" }, "the fold reached Drive");
   assert.deepEqual(index.order.root, ["drive-New one", "folder1"],
     "the order reached Drive under the root folder's own id");

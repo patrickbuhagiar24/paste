@@ -269,9 +269,9 @@ writes to Drive and then gives rows their Drive id, and the refusal of
 
 1. **A data-frugal architecture.** Snippet bodies are cached by the SHA-256 of
    their content (`hash.js`, `library.js`, `cache.js`), so an unchanged file is
-   never downloaded again; order and collapse state live in one `pastex_index`
-   label on the root folder, so a reorder is one Drive write instead of one per
-   item. This is a strong design decision.
+   never downloaded again; order and collapse state live in one
+   `pastex-index.json` file in the library folder, so a reorder is one Drive
+   write instead of one per item. This is a strong design decision.
 2. **Fail-closed security.** The site allowlist refuses an empty or broken
    configuration; `content.js` verifies `sender.id`; the panel uses a
    30-second capability token bound to the tab URL; MV3 CSP without remote

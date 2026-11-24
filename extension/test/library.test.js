@@ -7,6 +7,8 @@ function fakeDrive() {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
     parseServiceAccount: (text) => JSON.parse(text), fetchAccessToken: async () => "token",
     getFolder: async () => ({ id: "root", mimeType: "application/vnd.google-apps.folder" }),
+    // The index is its own file now; this library has no index yet.
+    readIndexFile: async () => ({ id: "", index: null }),
     listChildren: async (token, parent) => parent === "root" ? [
       { id: "folder", name: "Folder", mimeType: "application/vnd.google-apps.folder" },
       { id: "empty", name: "Empty", mimeType: "application/vnd.google-apps.folder" },
@@ -71,10 +73,10 @@ test("the folder's index label decides order, then Drive order for unnamed rows"
   const drive = fakeDrive();
   // The root folder carries the centralized index; the rows themselves carry
   // nothing. No per-item label is read any more.
-  drive.getFolder = async () => ({
-    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
-    properties: { pastex_index: JSON.stringify({ v: 2, order: { root: ["second", "first"] }, collapsed: {} }) },
-  });
+  // The index is its own file in the library, read before the listing.
+  let indexRead = null;
+  drive.readIndexFile = async () => (indexRead = { id: "idx",
+    index: { v: 2, order: { root: ["second", "first"] }, collapsed: {} } });
   drive.listChildren = async () => [
     { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
     { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
@@ -83,17 +85,14 @@ test("the folder's index label decides order, then Drive order for unnamed rows"
   drive.downloadText = async (token, id) => id;
   const result = await Library.load(native, drive);
   assert.deepEqual(result.tree.map((node) => node.id), ["second", "first", "unranked"]);
+  assert.equal(indexRead.id, "idx", "the index file's id is kept for the next write");
 });
 
 test("an index with another version is discarded, not decoded", async () => {
   const drive = fakeDrive();
-  drive.getFolder = async () => ({
-    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
-    properties: {
-      // v1 and an unversioned shape both mean "unknown": Drive's order wins.
-      pastex_index: JSON.stringify({ order: { root: ["b", "a"] }, collapsed: { a: "1" } }),
-    },
-  });
+  // v1 and an unversioned shape both mean "unknown": Drive's order wins.
+  drive.readIndexFile = async () => ({ id: "idx",
+    index: { order: { root: ["b", "a"] }, collapsed: { a: "1" } } });
   drive.listChildren = async () => [
     { id: "a", name: "A.txt", mimeType: drive.TEXT_MIME },
     { id: "b", name: "B.txt", mimeType: drive.TEXT_MIME },
@@ -107,10 +106,8 @@ test("an index with another version is discarded, not decoded", async () => {
 
 test("folder collapse state comes from the index label, never from the folder", async () => {
   const drive = fakeDrive();
-  drive.getFolder = async () => ({
-    id: "root", name: "Root", mimeType: drive.FOLDER_MIME,
-    properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed: { closed: "1" } }) },
-  });
+  drive.readIndexFile = async () => ({ id: "idx",
+    index: { v: 2, order: {}, collapsed: { closed: "1" } } });
   drive.listChildren = async (token, parent) => parent === "root" ? [
     // A per-item label is ignored even when it is present.
     { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
@@ -199,18 +196,14 @@ test("only the branch that changed is listed and downloaded again", async () => 
   assert.equal(second.tree[1].children[0].text, "body rb");
 });
 
-test("the centralized index on the root folder orders and folds the library", async () => {
+test("the index file orders and folds the library", async () => {
   const drive = fakeDrive();
-  drive.getFolder = async () => ({
-    id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1",
-    properties: {
-      pastex_index: JSON.stringify({
-        v: 2,
-        order: { root: ["second", "first"] },
-        collapsed: { folder: "1" },
-      }),
-    },
-  });
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1" });
+  drive.readIndexFile = async () => ({ id: "idx", index: {
+    v: 2,
+    order: { root: ["second", "first"] },
+    collapsed: { folder: "1" },
+  } });
   drive.listChildren = async (token, parent) => parent === "root" ? [
     { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
     { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME },
@@ -226,11 +219,11 @@ test("the centralized index on the root folder orders and folds the library", as
 test("text inside a collapsed folder is deferred until the folder is opened", async () => {
   const drive = fakeDrive();
   let downloads = 0;
-  const folderWith = (collapsed) => async () => ({
-    id: "root", mimeType: drive.FOLDER_MIME,
-    properties: { pastex_index: JSON.stringify({ v: 2, order: {}, collapsed: { closed: collapsed } }) },
-  });
-  drive.getFolder = folderWith("1");
+  // The index lives in its own file, so a fold is a different file body, not a
+  // different folder property.
+  const folderWith = (collapsed) => async () => ({ id: "idx",
+    index: { v: 2, order: {}, collapsed: { closed: collapsed } } });
+  drive.readIndexFile = folderWith("1");
   drive.listChildren = async (token, parent) => parent === "root" ? [
     { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
@@ -239,7 +232,7 @@ test("text inside a collapsed folder is deferred until the folder is opened", as
   assert.equal(closed.tree[0].children[0].deferred, true);
   assert.equal(closed.tree[0].children[0].loadError, undefined);
   assert.equal(downloads, 0);
-  drive.getFolder = folderWith("0");
+  drive.readIndexFile = folderWith("0");
   drive.listChildren = async (token, parent) => parent === "root" ? [
     { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];

@@ -83,7 +83,7 @@ def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     assert "storage.sync" not in background + cache
     assert "libraryCache.mutate" in background
     assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background
-    assert "PastexDrive.trashFile" in background and "PastexDrive.setIndex" in background
+    assert "PastexDrive.trashFile" in background and "PastexDrive.writeIndexFile" in background
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert 'id="btn-insert"' not in panel
     assert 'id="selection-actions"' in panel
@@ -108,9 +108,9 @@ def test_the_order_and_the_collapse_state_live_in_one_label():
     drive = (EXT / "drive.js").read_text(encoding="utf-8")
     library = (EXT / "library.js").read_text(encoding="utf-8")
     background = (EXT / "background.js").read_text(encoding="utf-8")
-    assert "pastex_index" in drive, "the root folder carries the central index"
-    assert "pastex_index" in library and "parseIndex" in library
-    assert "PastexDrive.setIndex" in background
+    assert "INDEX_NAME" in drive, "the index is one file in the library folder"
+    assert "readIndexFile" in library and "parseIndex" in library
+    assert "PastexDrive.writeIndexFile" in background
     assert "PastexDrive.setOrder" not in background, "the order is not written per item"
 
 
@@ -501,7 +501,7 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "Snippets loaded from session cache." not in script
     # The central index is the only writer of order and collapse state; the
     # per-item labels are read-only history.
-    assert "pastex_index" in (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "INDEX_NAME" in (EXT / "drive.js").read_text(encoding="utf-8")
     assert "PastexDrive.setOrder" not in script
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content

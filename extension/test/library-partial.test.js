@@ -6,6 +6,7 @@ test("an unreadable Drive file does not hide other files", async () => {
   const drive = {
     FOLDER_MIME: "folder", TEXT_MIME: "text/plain", parseServiceAccount: JSON.parse,
     fetchAccessToken: async () => "tok", getFolder: async () => ({ mimeType: "folder" }),
+    readIndexFile: async () => ({ id: "", index: null }),
     listChildren: async () => [
       { id: "bad", name: "Denied.txt", mimeType: "text/plain" },
       { id: "good", name: "Visible.txt", mimeType: "text/plain" },
