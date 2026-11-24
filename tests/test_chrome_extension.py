@@ -513,8 +513,8 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
     drive = (EXT / "drive.js").read_text(encoding="utf-8")
     assert "launchWebAuthFlow" in drive, "the token comes from Chrome's sign-in window"
     assert "accounts.google.com/o/oauth2/v2/auth" in drive
-    assert "auth/drive.item" in drive, "only the per-item scope is requested"
-    assert "drive.file" not in drive, "the old scope is gone"
+    assert "auth/drive.file" in drive, "only the per-file scope is requested"
+    assert "auth/drive.item" not in drive, "an unpublished scope must not be requested"
     assert "auth/drive\"" not in drive and "auth/drive.readonly" not in drive
     # A public client has no secret, and a service account no longer exists.
     for gone in ("private_key", "client_email", "service_account", "jwt", "JWT",

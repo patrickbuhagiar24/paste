@@ -1,3 +1,21 @@
+pastex (2.27.0-1) unstable; urgency=medium
+
+  * BREAKING: the requested scope is `https://www.googleapis.com/auth/drive.file`
+    again, and the grant has to be approved once more. `drive.item` is not in
+    Google's scope tables — not among the non-sensitive scopes, the sensitive
+    ones or the restricted ones — so Google refused the request with
+    `invalid_scope` and no token was issued. `drive.file` is the per-file scope
+    Google publishes: it reaches the files Pastex creates and the files the
+    configuration links name, and nothing else in Drive. The account-wide
+    `drive` scope is still not requested.
+  * Because the requested scope changed, the grant Google already holds no
+    longer matches: the next read asks for approval once, and every later read
+    is silent again.
+  * The guide in the extension README now names `auth/drive.file` and says
+    plainly why `auth/drive.item` must not be substituted for it.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 16:00:00 +0000
+
 pastex (2.26.0-1) unstable; urgency=medium
 
   * BREAKING: the configuration file may now carry any name. The fixed

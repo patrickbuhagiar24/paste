@@ -291,7 +291,8 @@ writes to Drive and then gives rows their Drive id, and the refusal of
 
 1. **~~The service-account key can be exposed through links.~~** Resolved: the
    service account is gone. Pastex now uses the **OAuth user flow with the
-   `drive.item` scope** — access only to the items the configuration links name,
+   `drive.file` scope** — access only to the files Pastex creates and the ones
+   the configuration links name,
    no key distributed, and a public client id that is worthless on its own. The
    remaining property to keep is that a cached snapshot never carries the
    client id.

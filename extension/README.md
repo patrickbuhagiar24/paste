@@ -52,10 +52,13 @@ You need, once, about ten minutes:
    screen*: choose **External** (or **Internal** if the client is only for one
    Workspace organisation), set the app name (`Pastex`), your e-mail as the
    support address, and your e-mail as the developer contact. Save.
-   Add the scope `https://www.googleapis.com/auth/drive.item` — Pastex asks for
-   nothing else. It is the per-item scope: access reaches the items the links in
-   the configuration file name, not the rest of Drive. This scope is classified by Google as **non-sensitive**, so it
-   needs no verification review and no security assessment.
+   Add the scope `https://www.googleapis.com/auth/drive.file` — Pastex asks for
+   nothing else. It is the per-file scope: access reaches the files Pastex
+   creates and the files the links in the configuration file name, not the rest
+   of Drive. This scope is classified by Google as **non-sensitive**, so it
+   needs no verification review and no security assessment. Do not substitute
+   `auth/drive.item`: it is not in Google's scope tables, and sign-in is refused
+   with `invalid_scope`.
 
 5. **Create the OAuth client.** *APIs & Services → Credentials → Create
    credentials → OAuth client ID*. Application type: **Web application**. Name
