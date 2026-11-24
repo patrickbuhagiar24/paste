@@ -428,7 +428,6 @@ def test_extension_readme_documents_setup_and_signing():
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
         "pastex-config-cache",
-        "pastex-storage.json",
         "pastex-folder",
         "pastex-index",
         "A file picker opens directly",
@@ -476,6 +475,8 @@ def test_configuration_comes_only_from_a_single_picked_file():
     # Configuration is one file, picked in a single-file picker.
     assert "showOpenFilePicker({" in script
     assert "showDirectoryPicker" not in script
+    # Neither the panel nor the source may pin a filename.
+    assert "pastex-storage" not in script
     assert "config-manifest.js" not in html
     # There is no offscreen configuration reader any more: the worker reads the
     # cache the panel wrote, so it never needs a file handle.
@@ -526,7 +527,9 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
     # The configuration folder holds a public client id, never a credential, and
     # it is one file of Drive links.
     source = (EXT / "config-source.js").read_text(encoding="utf-8")
-    assert "pastex-storage.json" in source
+    # The file name is the user's choice; the four keys are what make a file a
+    # configuration, so no filename may be required or refused.
+    assert "pastex-storage" not in source, "the configuration file name must be free"
     assert "client_id" in source
     assert "pastex-folder" in source and "pastex-index" in source and "pastex-sites" in source
     # No script in the repository signs in a service account any more.

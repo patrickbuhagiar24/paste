@@ -63,9 +63,9 @@
     async function identity() {
       var config = await native.readConfig();
       if (!config.drive || !config.drive.folderId)
-        throw new Error(config.driveError || "Add a pastex-storage.json to the configuration folder.");
+        throw new Error(config.driveError || "Pick your configuration file in Config.");
       if (!config.oauth || !config.oauth.client_id)
-        throw new Error(config.oauthError || "Add pastex-storage.json with your Google OAuth client_id.");
+        throw new Error(config.oauthError || "The configuration file needs your Google OAuth client_id.");
       if (identityCache.config === config) return identityCache.value;
       // The identity of a library is the folder plus the OAuth client, so the
       // cache follows a folder change and is not tied to a credential.

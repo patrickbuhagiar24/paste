@@ -8,9 +8,12 @@
  * everything afterwards reads that cache. The file is a source of configuration,
  * never its storage.
  *
- * The user picks the file they mean, by name, in the file picker. There is no
- * folder scan and no search for "the files Pastex needs": one pick is one file,
- * which is why nothing here can pick the wrong one. */
+ * The user picks the file they mean in the file picker. There is no folder scan
+ * and no search for "the files Pastex needs": one pick is one file. The name of
+ * that file does not matter — any `.json` document will do — because what makes a
+ * file a configuration is the keys it contains, all of which are checked here.
+ * The one filename that does not work is an empty one: the panel reports the
+ * picked name so the user can tell which file it is using. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.PastexConfigSource = factory();
@@ -18,8 +21,9 @@
   "use strict";
   // One file, three links and the client id. A link is what Drive's own Share
   // button gives you, so the file can be written without knowing which id
-  // belongs to what.
-  var STORAGE = "pastex-storage.json";
+  // belongs to what. The file name is the user's choice; these keys are not: a
+  // file is a configuration because it carries all four, whatever it is called.
+  var CONFIG = "The configuration file";
   var LINK_FOLDER = "pastex-folder", LINK_SITES = "pastex-sites", LINK_INDEX = "pastex-index";
   var CLIENT = "client_id";
   var FILE = "file ", CACHE = "pastex-config-cache";
@@ -42,45 +46,44 @@
     async function readCache() {
       // chrome.storage.get(key) resolves to an OBJECT keyed by the key, so the
       // record has to be unwrapped. Reading it as the record itself makes
-      // `files` undefined on every later open.
+      // `value` undefined on every later open.
       var result = await storage().get(CACHE);
       var record = result && typeof result === "object" ? result[CACHE] : null;
       if (!record || typeof record !== "object" || record.version !== CACHE_VERSION) return null;
       return record;
     }
 
-    async function writeCache(file, name) {
+    async function writeCache(value, name) {
       await storage().set({ [CACHE]: {
         version: CACHE_VERSION,
         savedAt: new Date().toISOString(),
         file: name || "",
-        value: file,
+        value: value,
       } });
     }
 
-    /* Read the one file the user picked. The name is checked because the picker
-     * cannot filter by name: picking something else is a mistake the user can
-     * see and fix, not a different configuration to decode. */
+    /* Read the one file the user picked. There is no name check: the picker
+     * filter already narrows the choice to JSON, and the keys are what decide
+     * whether the file is a configuration. The name is only remembered so the
+     * panel can say which file it is using. */
     async function readPickedFile(handle) {
       if (!handle || typeof handle.getFile !== "function")
-        throw new Error("Choose " + STORAGE + " in Config first.");
+        throw new Error("Choose your configuration file in Config first.");
       var name = handle.name || "";
-      if (name !== STORAGE) {
-        throw new Error("Choose " + STORAGE + ", not " + (name || "another file") + ".");
-      }
       var file;
       try { file = await handle.getFile(); }
       catch (err) { throw new Error("That file could not be read. Choose it again."); }
       var text;
       try { text = await file.text(); }
       catch (err) { throw new Error("That file could not be read. Choose it again."); }
-      if (text.length > MAX_BYTES) throw new Error(STORAGE + " is larger than " + (MAX_BYTES / 1024) + " KiB.");
+      name = file.name || name;
+      if (text.length > MAX_BYTES) throw new Error(name + " is larger than " + (MAX_BYTES / 1024) + " KiB.");
       var value;
       try { value = JSON.parse(text.replace(/^\uFEFF/, "")); }
-      catch (err) { throw new Error(STORAGE + " is not valid JSON."); }
+      catch (err) { throw new Error(name + " is not valid JSON."); }
       if (!value || typeof value !== "object" || Array.isArray(value))
-        throw new Error(STORAGE + " must contain a JSON object.");
-      return { name: file.name || name, value: value };
+        throw new Error(name + " must contain a JSON object.");
+      return { name: name, value: value };
     }
 
     /* A Drive link, reduced to the id the API needs. Only the shapes Drive's
@@ -100,27 +103,28 @@
       return "";
     }
 
-    /* Check the file and report all the problems at once. A user who has to
+    /* Check the keys and report all the problems at once. A user who has to
      * pick the file again after each single error is being told one third of
-     * what is wrong, so every problem is collected, not thrown one by one. */
+     * what is wrong, so every problem is collected, not thrown one by one. The
+     * message names the key, never a filename, because any name is allowed. */
     function problems(storage) {
       var list = [];
       if (!storage || typeof storage !== "object") {
-        list.push(STORAGE + " is missing");
+        list.push(CONFIG + " holds no keys");
         return { list: list, value: null };
       }
 
       var folderId = idFromLink(storage[LINK_FOLDER]);
       var indexId = idFromLink(storage[LINK_INDEX]);
-      if (!folderId) list.push(STORAGE + " needs a " + LINK_FOLDER + " link to the library folder");
-      if (!indexId) list.push(STORAGE + " needs an " + LINK_INDEX + " link to the order/collapse file");
+      if (!folderId) list.push(CONFIG + " needs a " + LINK_FOLDER + " link to the library folder");
+      if (!indexId) list.push(CONFIG + " needs a " + LINK_INDEX + " link to the order/collapse file");
 
       // The OAuth client of this installation lives in the same file: one file
       // describes the whole setup, and none of it is a secret.
       var clientId = typeof storage[CLIENT] === "string" ? storage[CLIENT].trim() : "";
       var validClient = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
-      if (!clientId) list.push(STORAGE + " needs the " + CLIENT + " of a Google OAuth client");
-      else if (!validClient) list.push(STORAGE + " needs the " + CLIENT + " of a Google OAuth client (type Web application)");
+      if (!clientId) list.push(CONFIG + " needs the " + CLIENT + " of a Google OAuth client");
+      else if (!validClient) list.push(CONFIG + " needs the " + CLIENT + " of a Google OAuth client (type Web application)");
 
       // sites may also be an inline list, so a single file can describe the whole
       // installation; a link to a shared list is treated exactly like the id.
@@ -128,10 +132,10 @@
       var sitesId = idFromLink(sitesValue);
       var inline = Array.isArray(sitesValue) ? sitesValue : null;
       if (!sitesId && !inline) {
-        list.push(STORAGE + " needs a " + LINK_SITES + " link to the site list or an inline array");
+        list.push(CONFIG + " needs a " + LINK_SITES + " link to the site list or an inline array");
       } else if (inline) {
         try { sites.parse(inline); }
-        catch (err) { list.push(STORAGE + ": " + (err.message || err)); }
+        catch (err) { list.push(CONFIG + ": " + (err.message || err)); }
       }
 
       return {
@@ -158,13 +162,13 @@
       await writeCache(picked.value, picked.name);
       memoized.config = null; memoized.configKey = "";
       memoized.sites = null; memoized.sitesKey = "";
-      return { storage: FILE + picked.name };
+      return { storage: FILE + (picked.name || "configuration") };
     }
 
     /* All later reads come from the cache; the file is never opened again. */
     async function readConfigFrom(force) {
       var record = await readCache();
-      if (!record) throw new Error("Choose " + STORAGE + " in Config first.");
+      if (!record) throw new Error("Choose your configuration file in Config first.");
       var key = record.savedAt + ":" + record.file;
       return memo("config", key, !!force, async function () {
         var v = validate(record.value);
@@ -183,12 +187,12 @@
 
     async function readSitesFrom(force) {
       var record = await readCache();
-      if (!record) throw new Error("Choose " + STORAGE + " in Config first.");
+      if (!record) throw new Error("Choose your configuration file in Config first.");
       var key = record.savedAt + ":" + record.file;
       return memo("sites", key, !!force, async function () {
         var v = validate(record.value);
-        if (v.allowedSites) return { allowedSites: v.allowedSites, fileId: "", source: FILE + STORAGE };
-        return { allowedSites: null, fileId: v.sitesId, source: FILE + STORAGE };
+        if (v.allowedSites) return { allowedSites: v.allowedSites, fileId: "", source: FILE + (record.file || "configuration") };
+        return { allowedSites: null, fileId: v.sitesId, source: FILE + (record.file || "configuration") };
       });
     }
 

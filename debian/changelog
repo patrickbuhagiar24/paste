@@ -1,3 +1,25 @@
+pastex (2.26.0-1) unstable; urgency=medium
+
+  * BREAKING: the configuration file may now carry any name. The fixed
+    `pastex-storage.json` requirement is gone: **Config** opens the same
+    single-file picker, and whatever JSON file is picked becomes the
+    configuration as long as it holds all four keys — `pastex-folder`,
+    `pastex-index`, `pastex-sites` and `client_id`. The keys are checked, the
+    name is not, so a file called `drive-links.json` or `my drive links.json`
+    works exactly like the old name.
+  * Every message that named a file now names the keys instead: `The
+    configuration file needs a pastex-folder link…`, `needs the client_id of a
+    Google OAuth client`, `Choose your configuration file in Config first.` The
+    panel still reports the name it used (`Using <name>.`), so the file in use
+    is never in doubt.
+  * Errors about the picked file itself quote the name you chose, because that
+    is the only way to tell two JSON files apart: `<name> is not valid JSON.`,
+    `<name> must contain a JSON object.`, `<name> is larger than 256 KiB.`
+  * The cached configuration shape is unchanged (version 5), so an existing
+    installation keeps working without picking anything again.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 13:00:00 +0000
+
 pastex (2.25.0-1) unstable; urgency=medium
 
   * BREAKING: configuration is now picked as one file, not found in a folder.

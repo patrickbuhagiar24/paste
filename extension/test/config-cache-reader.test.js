@@ -65,7 +65,7 @@ test("a bare id works, and a missing id is reported instead of thrown at read ti
   const config = load(store).create(store);
   const result = await config.readConfig();
   assert.equal(result.drive, null);
-  assert.match(result.driveError, /pastex-storage\.json/);
+  assert.match(result.driveError, /configuration file needs a pastex-folder link/);
 });
 
 test("an unusable client id is reported through oauthError", async () => {
@@ -75,7 +75,7 @@ test("an unusable client id is reported through oauthError", async () => {
   const config = load(store).create(store);
   const result = await config.readConfig();
   assert.equal(result.oauth, null);
-  assert.match(result.oauthError, /pastex-storage\.json/);
+  assert.match(result.oauthError, /configuration file needs the client_id/);
 });
 
 test("sites fail closed and a missing configuration explains what to do", async () => {
@@ -87,13 +87,13 @@ test("sites fail closed and a missing configuration explains what to do", async 
 
   const empty = storage({});
   const none = load(empty).create(empty);
-  await assert.rejects(none.readConfig(), /Choose pastex-storage\.json in Config first/);
-  await assert.rejects(none.readSites(), /Choose pastex-storage\.json in Config first/);
+  await assert.rejects(none.readConfig(), /Choose your configuration file in Config first/);
+  await assert.rejects(none.readSites(), /Choose your configuration file in Config first/);
 });
 
 test("invalidate clears the stored configuration", async () => {
   const store = storage(record(goodFiles()));
   const config = load(store).create(store);
   await config.invalidate();
-  await assert.rejects(config.readConfig(), /Choose pastex-storage\.json in Config first/);
+  await assert.rejects(config.readConfig(), /Choose your configuration file in Config first/);
 });

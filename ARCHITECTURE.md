@@ -87,7 +87,8 @@ is why the panel feels instant.
 
 ## 5. Configuration: one file of links
 
-The user presses **Config** once and picks **one file**, `pastex-storage.json`:
+The user presses **Config** once and picks **one file**, of any name — for
+example `pastex-storage.json`, the name used throughout this document:
 
 | Key | Contents | Analogy |
 | --- | --- | --- |
@@ -96,8 +97,9 @@ The user presses **Config** once and picks **one file**, `pastex-storage.json`:
 | `pastex-sites` | the site list, inline or as a link | **guest list** |
 | `client_id` | the public OAuth client id of this installation | **who you are** |
 
-The picked file must carry that exact name; nothing is identified by its
-content, and no folder is scanned for it. Each
+The picked file is identified by these keys, never by its name: any filename is
+accepted, and a missing key is reported by key name. No folder is scanned for
+the file. Each
 link is reduced to the id the API needs, so the value can be whatever Drive's
 Share button produced (a bare id, a `/folders/<id>` link, a `/file/d/<id>/view`
 link or an `?id=<id>` link). Because the index is named, reading the order costs
@@ -184,7 +186,7 @@ second way** of doing the same thing. What that means for a user:
 | --- | --- |
 | Order and folded folders | May return to Drive's order with folders open. Arrange them again once. |
 | The snippet files in Google Drive | **Never** touched. Always intact, readable by any other app. |
-| Configuration file name | Must be exact: `pastex-storage.json`. |
+| Configuration file name | Yours to choose: any `.json` name works; the four keys are what matter. |
 | Browser requirement | Chrome/Chromium 141 or newer. |
 
 If the panel looks odd after an update during development, run
@@ -196,7 +198,7 @@ is not touched), then open the panel again. The full rule is in
 
 | Symptom the user sees | Likely cause | Where to look |
 | --- | --- | --- |
-| "Drive: not connected." | `pastex-storage.json` was not picked, or a key is missing | Config → the message names the key |
+| "Drive: not connected." | the configuration file was not picked, or a key is missing | Config → the message names the key |
 | The list appears but note bodies are empty | the copy shrank because storage was full; rows are filled while idle | `cache.js` (staged degradation) |
 | Changes are not on another computer yet | orders are waiting because a site tab is still open | the Drive bar shows how many are waiting; `↻ Sync` |
 | ⚡ does not appear | the site is not in `pastex-sites` | `sites.js`, then pick the file again |

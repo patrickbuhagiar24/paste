@@ -108,10 +108,10 @@
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-storage.json to the configuration folder.");
-    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "Add a pastex-storage.json with a client_id.");
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Pick your configuration file in Config.");
+    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "The configuration file needs a client_id.");
     // A token for the signed-in account, signed in with the client id this
-    // installation put in pastex-storage.json. The first call of a session may
+    // installation put in the configuration file. The first call of a session may
     // show Google's page, which is why it is interactive.
     var token = await drive.getAuthToken({ clientId: config.oauth.client_id, interactive: true });
     var rootId = config.drive.folderId;
@@ -128,13 +128,13 @@
     };
   }
 
-  // The site list may be inline in pastex-storage.json or live in a file of its
-  // own: a link is fetched with the same token as everything else.
+  // The site list may be inline in the configuration file or live in a file of
+  // its own: a link is fetched with the same token as everything else.
   async function readSites(native, drive, token) {
     var config = await native.readConfig();
     if (config.sites && config.sites.allowedSites) return config.sites.allowedSites;
     var fileId = config.sites && config.sites.fileId;
-    if (!fileId) throw new Error("pastex-storage.json needs a pastex-sites link or an inline array.");
+    if (!fileId) throw new Error("The configuration file needs a pastex-sites link or an inline array.");
     var text = await drive.downloadText(token, fileId);
     var data;
     try { data = JSON.parse(text); } catch (ignored) {

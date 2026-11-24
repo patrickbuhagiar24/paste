@@ -22,9 +22,9 @@ Cloud project, the consent screen, the redirect URL and the client ID, in about
 ten minutes. Because the token belongs to your account, the files Pastex creates
 are yours, sit in your own Drive storage, and open normally in Drive.
 
-In **Config**, pick one local file, `pastex-storage.json`, which names the
-library folder, the order/collapse file and the site list by their **shared
-Drive links**. Pastex reads that file once, validates every link, and then works
+In **Config**, pick one local JSON file — any name will do, for example
+`pastex-storage.json` — which names the library folder, the order/collapse file
+and the site list by their **shared Drive links**. Pastex reads that file once, validates every link, and then works
 from its own cache; the file is never uploaded or published, and it contains no
 credential. See
 [the extension README](extension/README.md#set-up-the-configuration-file) for
@@ -189,7 +189,7 @@ trusted by host. Nothing about Google Drive is touched by either mode.
 
 After installing, **quit the browser completely and start it again**: Chrome
 reads the extension registration only at startup. Then enable Pastex in
-`chrome://extensions` and pick `pastex-storage.json` with **Config**.
+`chrome://extensions` and pick your configuration file with **Config**.
 
 To undo it:
 

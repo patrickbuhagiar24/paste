@@ -145,7 +145,8 @@ test("a sign-in failure is reported, not swallowed", async () => {
     Drive.getAuthToken({ identity: fakeIdentity(() => REDIRECT + "#access_token=stolen&state=other"), clientId: mine }),
     /did not match this request/);
   await assert.rejects(Drive.getAuthToken({ identity: {}, clientId: mine }), /sign-in window is unavailable/);
-  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(granted) }), /pastex-storage\.json/);
+  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(granted) }),
+    /configuration file needs the client_id/);
 });
 
 test("an unregistered redirect URL is named in the error", async () => {

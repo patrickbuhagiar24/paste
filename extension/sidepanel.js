@@ -451,7 +451,7 @@
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
-      if (/HTTP (401|403|404)\b|invalid_grant|pastex-storage\.json/i.test(err.message || "")) {
+      if (/HTTP (401|403|404)\b|invalid_grant|Choose your configuration file/i.test(err.message || "")) {
         tree = []; rootId = ""; ready = false; fromCache = false;
       } else {
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;

@@ -19,7 +19,7 @@ In short:
 | The extension ID | `chrome://extensions` (Developer mode) |
 | A Google Cloud project with the Drive API enabled | <https://console.cloud.google.com> |
 | An OAuth client of type **Web application** whose *Authorized redirect URI* is `https://<extension-id>.chromiumapp.org/` | *APIs & Services → Credentials* |
-| `client_id` holding that client ID | written by you, in `pastex-storage.json` |
+| `client_id` holding that client ID | written by you, in your configuration file (any JSON name) |
 
 There is no client secret: an extension is a public client, and Google hands the
 token straight back to Chrome. If the redirect URL is wrong, Google answers
@@ -61,15 +61,15 @@ fingerprint check, is in the [project README](README.md).
 2. Enable Pastex when the browser offers it.
 3. Note the extension ID in `chrome://extensions` and register its redirect URL
    in the OAuth client (see [section 1](#1-signing-in-to-google)).
-4. Open the side panel, click **Config**, and pick `pastex-storage.json`, the
-   one file of Drive links.
+4. Open the side panel, click **Config**, and pick your configuration file — one
+   JSON file of Drive links, under any name you like.
 
 ### Common messages
 
 | Message | Meaning |
 | --- | --- |
-| `Choose pastex-storage.json in Config first.` | no configuration has been picked yet, or the cache was cleared by an upgrade |
-| `Choose pastex-storage.json, not <name>.` | the picked file has another name |
+| `Choose your configuration file in Config first.` | no configuration has been picked yet, or the cache was cleared by an upgrade |
+| `<name> is not valid JSON.` | the picked file does not parse; the name in the message is the file you chose |
 | `pastex-sites: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
 | `Configuration has problems: …` | the file was rejected; the previous configuration is still active |
 | `Google does not recognise this extension's redirect URL` | copy the quoted URL into the OAuth client's *Authorized redirect URIs* |

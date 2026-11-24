@@ -80,14 +80,15 @@ function panelHarness(fail, options = {}) {
     PastexConfigSource: { create: () => ({
       chooseFile: async (handle) => {
         imports.push(handle.name);
-        return { storage: "file pastex-storage.json" };
+        return { storage: "file " + handle.name };
       },
     }) },
     PastexSites: {},
     // One pick is one file: the picker resolves to the file the user chose.
     showOpenFilePicker: async (opts) => {
       pickerCalls++;
-      const handle = options.filePicker ? await options.filePicker(opts) : { name: "pastex-storage.json" };
+      // The name is the user's choice, so the harness picks an arbitrary one.
+      const handle = options.filePicker ? await options.filePicker(opts) : { name: "my-drive-links.json" };
       return [handle];
     },
     confirm: () => options.confirm !== false, setTimeout, clearTimeout,
@@ -219,14 +220,14 @@ test("side panel edits the cache and queues the Drive write instead of calling D
   assert.ok(messages.some((m) => m.type === "pastex-panel-local-edit"));
 });
 
-test("Config opens the file picker immediately and uses the one chosen file", async () => {
+test("Config opens the file picker immediately and accepts whatever name it is given", async () => {
   const { elements, pickerCalls, imports, messages } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
   assert.equal(pickerCalls(), 1);
   await settled();
-  assert.deepEqual(imports, ["pastex-storage.json"], "exactly the file the user picked is read");
-  assert.match(elements.status.textContent, /Using pastex-storage\.json/);
+  assert.deepEqual(imports, ["my-drive-links.json"], "exactly the file the user picked is read");
+  assert.match(elements.status.textContent, /Using my-drive-links\.json/);
   // The worker is asked to re-register sites, not to scan anything.
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
 });
@@ -393,10 +394,10 @@ test("clipboard fallback runs only when no editable field is focused", async () 
 test("the file picker reads one file and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
   await elements["btn-config"].listeners.click();
-  assert.deepEqual(imports, ["pastex-storage.json"]);
+  assert.deepEqual(imports, ["my-drive-links.json"]);
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements.status.textContent, /Using pastex-storage\.json/);
+  assert.match(elements.status.textContent, /Using my-drive-links\.json/);
 });
 
 test("canceling the file picker leaves configuration unchanged", async () => {

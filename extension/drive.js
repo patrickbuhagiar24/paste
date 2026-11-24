@@ -28,7 +28,7 @@
   var REVOKE_URL = "https://oauth2.googleapis.com/revoke";
   var UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3";
   // The narrow, per-item scope: it reaches only the files and folders the user
-  // handed to Pastex through the links in pastex-storage.json, not the rest of
+  // handed to Pastex through the links in the configuration file, not the rest of
   // Drive. The full drive scope would reach everything and is not requested.
   var SCOPES = "https://www.googleapis.com/auth/drive.item";
   var FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -64,7 +64,7 @@
   //
   // The client id is not compiled into the extension: this project is
   // self-hosted, so each installation brings its own OAuth client, recorded in
-  // pastex-storage.json (see the guide in README.md).
+  // the configuration file (see the guide in README.md).
 
   function identityApi(overrides) {
     var api = (overrides && overrides.identity) || (typeof chrome !== "undefined" && chrome && chrome.identity);
@@ -172,7 +172,7 @@
   async function getAuthToken(options) {
     options = options || {};
     var clientId = String(options.clientId || "").trim();
-    if (!clientId) throw new Error("Add pastex-storage.json with the client_id of a Google OAuth client.");
+    if (!clientId) throw new Error("The configuration file needs the client_id of a Google OAuth client.");
     var cached = cachedToken(clientId);
     if (cached) return cached;
     var api = identityApi(options);
@@ -360,8 +360,8 @@
   }
 
   // The order and the collapse state of the whole library live in one file, and
-  // the configuration names it directly (the pastex-index link in
-  // pastex-storage.json). Reading it is one GET: no listing is needed to find
+  // the configuration names it directly (the `pastex-index` key of the
+  // configuration file). Reading it is one GET: no listing is needed to find
   // it, so a folder listing costs one request instead of two.
   //
   // It cannot live in the root folder's custom properties: Drive allows 124

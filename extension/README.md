@@ -3,8 +3,8 @@
 Pastex is a browser extension for text snippets stored directly in Google
 Drive, accessed as **you** through Google OAuth — no service account and no key
 file. It operates on **only the sites you choose**. Configure Pastex with one
-file of Drive links, `pastex-storage.json`, described below; the extension reads
-it when it needs configuration and never publishes it. Google Drive and a
+JSON file of Drive links — call it anything, `pastex-storage.json` here — described
+below; the extension reads it when it needs configuration and never publishes it. Google Drive and a
 working internet connection are required.
 
 ## Install
@@ -35,7 +35,7 @@ You need, once, about ten minutes:
    ```
 
    Pastex prints the exact value for you, so it can be copied rather than
-   typed: open the side panel, click **Config**, pick `pastex-storage.json`,
+   typed: open the side panel, click **Config**, pick your configuration file,
    and the status line reports the redirect URL for this installation. The ID
    is derived from the CRX signing key, so it is stable across upgrades of the
    signed package.
@@ -54,7 +54,7 @@ You need, once, about ten minutes:
    support address, and your e-mail as the developer contact. Save.
    Add the scope `https://www.googleapis.com/auth/drive.item` — Pastex asks for
    nothing else. It is the per-item scope: access reaches the items the links in
-   `pastex-storage.json` name, not the rest of Drive. This scope is classified by Google as **non-sensitive**, so it
+   the configuration file name, not the rest of Drive. This scope is classified by Google as **non-sensitive**, so it
    needs no verification review and no security assessment.
 
 5. **Create the OAuth client.** *APIs & Services → Credentials → Create
@@ -87,11 +87,16 @@ hour.
 
 ## Set up the configuration file
 
-Configuration is **one file of Drive links on your computer**. Click **Config**
-once, pick `pastex-storage.json` in the file picker, and Pastex reads it.
-Nothing needs to be public, and the file is not a credential.
+Configuration is **one JSON file of Drive links on your computer**. Click
+**Config** once, pick that file in the file picker, and Pastex reads it. Nothing
+needs to be public, and the file is not a credential.
 
-Create `pastex-storage.json`:
+**The file name is yours to choose.** Any name works — `pastex-storage.json`,
+`drive-links.json`, even `my drive links.json` — because a configuration is the
+four keys inside it, all of which are checked. The panel reports the name it
+used (`Using <name>.`), so a screen full of JSON files is never ambiguous.
+
+The file must contain these four keys:
 
 ```json
 {
@@ -129,13 +134,11 @@ allows no sites, and a missing, invalid or unreadable list fails closed.
 Then:
 
 1. Open the side panel and click **Config**.
-2. Pick `pastex-storage.json`. A file picker opens directly from the click and
-   offers JSON files. The chosen file must carry that exact name; picking
-   anything else is refused by name (`Choose pastex-storage.json, not
-   other.json.`) rather than guessed at, and nothing is cached.
+2. Pick your configuration file. A file picker opens directly from the click and
+   offers JSON files. Any name is accepted; nothing else on disk is looked at.
 3. Every problem is reported at once and named by key, so one pick is enough to
-   see everything: `pastex-storage.json needs a pastex-folder link to the
-   library folder`, `needs an pastex-index link to the order/collapse file`,
+   see everything: `The configuration file needs a pastex-folder link to the
+   library folder`, `needs a pastex-index link to the order/collapse file`,
    `needs the client_id of a Google OAuth client`. Fix them all, then pick the
    file again.
 4. The first read opens Google's sign-in window once. Choose the Google account
@@ -259,7 +262,7 @@ same metadata; refresh before editing shared lists.
 ### Upgrading from an older version
 
 Old configuration files remain untouched. To carry them over, put the same four
-keys in one `pastex-storage.json` and pick that file in **Config**; Pastex no
+keys in one JSON file of any name and pick that file in **Config**; Pastex no
 longer reads or writes the old files.
 
 Before upgrading, sync any browser-only snippets to Drive using the previous
@@ -392,8 +395,8 @@ not listed under `pastex-sites` are not injected or targeted.
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
 - If configuration is missing or the file cannot be read, open **Config** and
-  pick `pastex-storage.json` again. The chosen file must carry exactly that
-  name. The worker console can show errors.
+  pick the file again. Any name works; the keys are what matter, and a missing
+  key is named in the status line. The worker console can show errors.
 - If the order and the folded folders were forgotten, the `pastex-index` link
   probably points at a file the signed-in account cannot open; the library then
   loads in Drive's order with every folder open, and the next reorder writes the

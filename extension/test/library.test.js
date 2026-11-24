@@ -37,7 +37,8 @@ test("Drive library loads nested snippets, contents, ids, and empty folders", as
 });
 
 test("Drive library reports missing configuration, invalid folder, and fetch errors", async () => {
-  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /pastex-storage\.json/);
+  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()),
+    /configuration file/);
   await assert.rejects(Library.load({ readConfig: async () => ({ drive: { folderId: "root" } }) }, fakeDrive()), /client_id/);
   const drive = fakeDrive();
   drive.getFolder = async () => ({ mimeType: "text/plain" });

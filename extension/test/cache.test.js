@@ -53,7 +53,7 @@ test("the cache is read without Drive and survives a worker restart, keyed by ac
   assert.equal((await b.get(false)).tree[0].id, "4");
   assert.equal((await b.get(false)).tree[0].id, "4");
   x.config.oauth = null;
-  await assert.rejects(b.get(false), /pastex-storage\.json/);
+  await assert.rejects(b.get(false), /configuration file/);
   assert.equal(x.data[Cache.KEY], undefined);
 });
 
