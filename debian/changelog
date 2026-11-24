@@ -1,3 +1,24 @@
+pastex (2.25.0-1) unstable; urgency=medium
+
+  * BREAKING: configuration is now picked as one file, not found in a folder.
+    **Config** opens a single-file picker filtered to JSON and reads
+    `pastex-storage.json` directly. There is no directory picker and no scan for
+    the needed files: a folder is never opened, and a file with another name is
+    refused by name instead of being searched for. The cached configuration
+    shape moved to version 5, which discards version 4, so the file is picked
+    once more after the upgrade.
+  * The chosen file is read once, inside the picker gesture. The parsed object
+    is cached under `pastex-config-cache`; the handle is dropped, so neither the
+    panel nor the worker can open it again — not even after a restart.
+  * One pick now reports everything: a wrong name, an unreadable file, invalid
+    JSON, a non-object document or an oversized file (over 256 KiB) is refused
+    before anything is cached, and a file that fails validation leaves the
+    previous configuration in use.
+  * `pastex-sites` must be an inline array or a link; the site list is never
+    looked up among sibling files any more.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 09:30:00 +0000
+
 pastex (2.24.0-1) unstable; urgency=medium
 
   * BREAKING: configuration is one file, not three. `pastex-storage.json` holds

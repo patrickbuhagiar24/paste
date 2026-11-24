@@ -141,8 +141,8 @@ Next steps on this machine:
      and enable Pastex when the browser offers it.
   3. Register this extension id and its redirect URL in your Google OAuth
      client (see extension/README.md, "Create the Google OAuth client").
-  4. Open the side panel, click Config, and pick the folder holding
-     pastex-storage.json (one file of Drive links).
+  4. Open the side panel, click Config, and pick pastex-storage.json
+     (one file of Drive links).
 
 Remove it again:
   sudo ./scripts/test-deploy.sh --uninstall

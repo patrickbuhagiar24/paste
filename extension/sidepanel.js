@@ -847,29 +847,32 @@
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        err.message ? "Folder has problems: " + err.message : "Could not use the folder.", err.name === "AbortError" ? "" : "error");
+        err.message ? "Configuration has problems: " + err.message : "Could not use that file.", err.name === "AbortError" ? "" : "error");
     } finally {
       button.disabled = false;
     }
   }
 
   $("btn-config").addEventListener("click", function () {
-    if (typeof window.showDirectoryPicker !== "function") {
-      setStatus("Folder picking is not supported here.");
+    if (typeof window.showOpenFilePicker !== "function") {
+      setStatus("File picking is not supported here.");
       return;
     }
-    // The picker must be called directly from the user gesture. The folder is
-    // scanned for the one canonical file; no manifest is read.
+    // The picker must be called directly from the user gesture. One pick is one
+    // file: nothing is searched for and nothing else in its folder is read.
     return applyConfiguration(async function () {
       // The redirect URL is derived from the extension id, so the only place it
       // can be read is a running installation. Saying it here is what makes the
       // OAuth client possible to set up without a debugger.
       var redirect = "";
       try { redirect = chrome.identity.getRedirectURL(); } catch (ignored) { redirect = ""; }
-      var handle = await window.showDirectoryPicker({ mode: "read", id: "pastex-config" });
-      var found = await Config.chooseFolder(handle);
-      return { found: found, redirect: redirect,
-        label: "Using folder " + (handle.name || "configuration") };
+      var picked = await window.showOpenFilePicker({
+        multiple: false,
+        id: "pastex-config",
+        types: [{ description: "Pastex configuration", accept: { "application/json": [".json"] } }],
+      });
+      var found = await Config.chooseFile(picked[0]);
+      return { found: found, redirect: redirect, label: "Using " + (picked[0].name || "configuration") };
     }, function (applied) {
       // One status line, so the value is reported in the line that already
       // exists rather than in a second label nobody asked for.

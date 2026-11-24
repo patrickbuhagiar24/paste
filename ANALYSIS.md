@@ -331,7 +331,7 @@ writes to Drive and then gives rows their Drive id, and the refusal of
    config-source layering meant three paths that had to stay consistent.~~
    **Fixed in 2.16.0:** `handle-store.js` and `config-import.js` were deleted,
    `config-source.js` is down to one path
-   (`create(sites, cacheStore)` → `chooseFolder`/`readConfig`/`readSites`), and
+   (`create(sites, cacheStore)` → `chooseFile`/`readConfig`/`readSites`), and
    `extension/test/dead-code.test.js` refuses a file nothing loads. See
    [ARCHITECTURE.md](ARCHITECTURE.md) for the plain-language summary.
 10. **`debian/changelog` bumps the version on every UI change** — good for

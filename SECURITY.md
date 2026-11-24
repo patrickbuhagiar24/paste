@@ -33,7 +33,7 @@ register the new `https://<extension-id>.chromiumapp.org/` in your OAuth client
 until the old tokens are useless anyway.
 
 Pastex holds no client secret and stores no credential. The configuration
-file contains only public Drive links and a public client id, so a leaked folder
+file contains only public Drive links and a public client id, so a leaked file
 grants no access beyond what a link already shares. The access token Google issues lives in the worker's
 memory for about an hour and is never written to disk; the permission itself
 stays with Google. Signing out revokes the access token at Google. Report

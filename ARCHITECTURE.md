@@ -73,7 +73,7 @@ lost** — it is stored and sent on the next start.
 
 There are three triggers, no more:
 
-1. **The first time after configuring the folder** — once, reading the whole
+1. **The first time after picking the configuration file** — once, reading the whole
    warehouse.
 2. **When the machine is idle** (no typing or mouse movement for about a
    minute, or the screen is locked) — it checks whether anything changed. If
@@ -87,8 +87,7 @@ is why the panel feels instant.
 
 ## 5. Configuration: one file of links
 
-The user presses **Config** once and picks **one folder** containing one file,
-`pastex-storage.json`:
+The user presses **Config** once and picks **one file**, `pastex-storage.json`:
 
 | Key | Contents | Analogy |
 | --- | --- | --- |
@@ -97,19 +96,20 @@ The user presses **Config** once and picks **one folder** containing one file,
 | `pastex-sites` | the site list, inline or as a link | **guest list** |
 | `client_id` | the public OAuth client id of this installation | **who you are** |
 
-The file must carry that exact name; nothing is identified by its content. Each
+The picked file must carry that exact name; nothing is identified by its
+content, and no folder is scanned for it. Each
 link is reduced to the id the API needs, so the value can be whatever Drive's
 Share button produced (a bare id, a `/folders/<id>` link, a `/file/d/<id>/view`
 link or an `?id=<id>` link). Because the index is named, reading the order costs
 one GET instead of a listing.
-After the folder is picked, its contents are **copied into Pastex's memory**, so
-the folder is never opened again (not even after the browser restarts). When
-something is wrong, Pastex reports **every** problem at once and the previous
-configuration stays in use.
+After the file is picked, its parsed contents are **copied into Pastex's
+memory**, so the file is never opened again (not even after the browser
+restarts). When something is wrong, Pastex reports **every** problem at once and
+the previous configuration stays in use.
 
-**The folder holds no secret.** A client id is public by design; the credential
-lives with Google and Chrome. Nothing in the folder is a key, so a leaked folder
-grants nobody access to Drive.
+**The file holds no secret.** A client id is public by design; the credential
+lives with Google and Chrome. Nothing in the file is a key, so a leaked
+configuration file grants nobody access to Drive.
 
 ## 6. The guest list (allowed sites)
 
@@ -196,10 +196,10 @@ is not touched), then open the panel again. The full rule is in
 
 | Symptom the user sees | Likely cause | Where to look |
 | --- | --- | --- |
-| "Drive: not connected." | the folder was not picked, or one of the three files is missing | Config → the message names the file |
+| "Drive: not connected." | `pastex-storage.json` was not picked, or a key is missing | Config → the message names the key |
 | The list appears but note bodies are empty | the copy shrank because storage was full; rows are filled while idle | `cache.js` (staged degradation) |
 | Changes are not on another computer yet | orders are waiting because a site tab is still open | the Drive bar shows how many are waiting; `↻ Sync` |
-| ⚡ does not appear | the site is not in `pastex-sites.json` | `sites.js`, then pick the folder again |
+| ⚡ does not appear | the site is not in `pastex-sites` | `sites.js`, then pick the file again |
 | The panel is old after a package update | Chrome reads extension registration at start-up | quit Chrome completely, compare versions |
 | `apt update`: *"…mint Release … does not have a Release file"* | an old machine still points at the retired `mint` suite | change `Suites: mint` to `Suites: stable` in `/etc/apt/sources.list.d/pastex.sources`, then `apt update` |
 
@@ -208,8 +208,9 @@ is not touched), then open the panel again. The full rule is in
 Several old layers were deliberately dropped so that there is never a second
 way to do the same thing:
 
-- **Folder-handle storage (IndexedDB)** and the **separate folder-file scanner**
-  — the panel now scans the folder once and stores the result.
+- **Folder-handle storage (IndexedDB)** and the **folder scanner** that searched
+  a directory for the needed files — the panel now reads one picked file once
+  and caches the parsed object.
 - **Per-item order/fold writers in Drive** — order and fold state are written to
   one file, `pastex-index.json`. Older per-item labels are ignored, so a library
   from a previous version shows up in Drive's order.

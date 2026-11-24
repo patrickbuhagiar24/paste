@@ -1,17 +1,18 @@
 /* Read configuration straight from persistent storage inside the background
  * worker.
  *
- * The configuration is one file of three Drive links (pastex-storage.json); the
- * site list may also be inline in it, so one file can describe the whole
- * installation.
+ * The configuration is one file the user picked (pastex-storage.json) holding
+ * three Drive links and the client id; the site list may also be inline in it,
+ * so one file describes the whole installation. The panel read that file once
+ * and stored the parsed object, which is all this reader uses.
  *
  * The worker used to ask an offscreen document for configuration, and that
  * document tried to use the user's folder handle. File System Access handles
  * are not usable there, which surfaced as:
  *   "The request is not allowed by the user agent or the platform in the
  *    current context."
- * Configuration is now cached when the panel scans the folder, so the worker
- * only needs chrome.storage — no document, no handle, no request to a folder. */
+ * Configuration is now cached when the panel reads the file, so the worker only
+ * needs chrome.storage — no document, no handle, no request to a file. */
 (function (root) {
   "use strict";
   var CACHE = "pastex-config-cache";
@@ -41,12 +42,14 @@
     }
 
     function storageFile(saved) {
-      return (saved.files || {})["pastex-storage.json"] || null;
+      // The record holds the parsed configuration of the one file the panel
+      // picked; there is no file map any more.
+      return saved.value || null;
     }
 
     async function readConfig() {
       var saved = await record();
-      if (!saved) throw new Error("Choose a configuration folder in Config first.");
+      if (!saved) throw new Error("Choose pastex-storage.json in Config first.");
       var storage = storageFile(saved);
       var folderId = storage ? idFromLink(storage["pastex-folder"]) : "";
       var indexId = storage ? idFromLink(storage["pastex-index"]) : "";
@@ -69,13 +72,13 @@
     }
     async function readSites() {
       var saved = await record();
-      if (!saved) throw new Error("Choose a configuration folder in Config first.");
+      if (!saved) throw new Error("Choose pastex-storage.json in Config first.");
       var storage = storageFile(saved);
       var value = storage ? storage["pastex-sites"] : null;
-      if (Array.isArray(value)) return { allowedSites: value, fileId: "", source: "configuration folder" };
+      if (Array.isArray(value)) return { allowedSites: value, fileId: "", source: "configuration file" };
       var id = idFromLink(value);
       if (!id) throw new Error("pastex-storage.json needs a pastex-sites link or an inline array.");
-      return { allowedSites: null, fileId: id, source: "configuration folder" };
+      return { allowedSites: null, fileId: id, source: "configuration file" };
     }
     return {
       readConfig: readConfig,

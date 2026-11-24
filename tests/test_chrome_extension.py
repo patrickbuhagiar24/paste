@@ -431,7 +431,7 @@ def test_extension_readme_documents_setup_and_signing():
         "pastex-storage.json",
         "pastex-folder",
         "pastex-index",
-        "A folder picker opens directly",
+        "A file picker opens directly",
         "Configuration is then **cached**",
     ):
         assert required in readme, f"README misses {required!r}"
@@ -462,7 +462,7 @@ def test_release_requires_new_crx_secret():
     assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]' in workflow
 
 
-def test_configuration_comes_only_from_a_user_selected_folder():
+def test_configuration_comes_only_from_a_single_picked_file():
     for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/postinst"]:
         text = path.read_text(encoding="utf-8")
         assert "~/.config/pastex" not in text
@@ -473,27 +473,32 @@ def test_configuration_comes_only_from_a_user_selected_folder():
     assert 'id="choose-folder"' not in html
     script = (EXT / "sidepanel.js").read_text()
     assert '$("btn-config").addEventListener' in script
-    # Configuration is a folder of JSON files discovered by content.
-    assert "showDirectoryPicker({" in script
-    assert "showOpenFilePicker" not in script
+    # Configuration is one file, picked in a single-file picker.
+    assert "showOpenFilePicker({" in script
+    assert "showDirectoryPicker" not in script
     assert "config-manifest.js" not in html
     # There is no offscreen configuration reader any more: the worker reads the
-    # cache the panel wrote, so it never needs a folder handle.
+    # cache the panel wrote, so it never needs a file handle.
     assert not (EXT / "config-reader.html").exists()
     assert not (EXT / "config-reader.js").exists()
     assert not (EXT / "config-client.js").exists()
     assert "PastexManifest" not in script
-    assert "chooseFolder" in script
+    assert "chooseFolder" not in script
+    assert "chooseFile" in script
     worker = (EXT / "background.js").read_text()
     assert "PastexConfigCacheReader" in worker
     assert "PastexConfigClient" not in worker
     cache_reader = (EXT / "config-cache-reader.js").read_text()
     assert "pastex-config-cache" in cache_reader
-    # The folder is scanned once by the panel and never opened by the worker.
+    source = (EXT / "config-source.js").read_text()
+    assert "showDirectoryPicker" not in source
+    assert ".values()" not in source
+    # No folder is scanned anywhere, and the worker never opens a file.
+    assert "showOpenFilePicker" not in worker
     assert "showDirectoryPicker" not in worker
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
-    # The folder handle is used once, inside the picker gesture, and never
-    # stored: no IndexedDB layer exists for it any more.
+    # The picked file is read once, inside the picker gesture, and its parsed
+    # value is cached: no IndexedDB layer exists for a handle any more.
     assert not (EXT / "handle-store.js").exists()
     assert not (EXT / "config-import.js").exists()
     assert "indexedDB" not in script

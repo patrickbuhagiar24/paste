@@ -70,22 +70,25 @@ function panelHarness(fail, options = {}) {
   let pickerCalls = 0;
   const clipboardTexts = [];
   const native = {
-    readConfig: async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } }),
+    readConfig: async () => ({ drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+      sites: { fileId: "", allowedSites: [] } }),
     resetCache() {},
     importConfigs: async (files) => { imports.push(files); return options.importResult || { imported: Object.keys(files), error: "" }; },
   };
   const document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag), createDocumentFragment: () => new Element("fragment"), addEventListener() {} };
   const window = { PastexStore: Store, PastexDrive: drive, PastexNative: native, PastexLibrary: Library,
     PastexConfigSource: { create: () => ({
-      chooseFolder: async (handle) => {
+      chooseFile: async (handle) => {
         imports.push(handle.name);
-        return { drive: "folder drive.json", account: "folder account.json", sites: "folder sites.json" };
+        return { storage: "file pastex-storage.json" };
       },
     }) },
     PastexSites: {},
-    showDirectoryPicker: async (opts) => {
+    // One pick is one file: the picker resolves to the file the user chose.
+    showOpenFilePicker: async (opts) => {
       pickerCalls++;
-      return options.folderPicker ? options.folderPicker(opts) : { name: "my-config" };
+      const handle = options.filePicker ? await options.filePicker(opts) : { name: "pastex-storage.json" };
+      return [handle];
     },
     confirm: () => options.confirm !== false, setTimeout, clearTimeout,
     addEventListener() {}};
@@ -216,12 +219,16 @@ test("side panel edits the cache and queues the Drive write instead of calling D
   assert.ok(messages.some((m) => m.type === "pastex-panel-local-edit"));
 });
 
-test("Config opens the folder picker immediately", async () => {
-  const { elements, pickerCalls } = panelHarness(false);
+test("Config opens the file picker immediately and uses the one chosen file", async () => {
+  const { elements, pickerCalls, imports, messages } = panelHarness(false);
   await settled();
   elements["btn-config"].listeners.click();
   assert.equal(pickerCalls(), 1);
   await settled();
+  assert.deepEqual(imports, ["pastex-storage.json"], "exactly the file the user picked is read");
+  assert.match(elements.status.textContent, /Using pastex-storage\.json/);
+  // The worker is asked to re-register sites, not to scan anything.
+  assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
 });
 
 test("side panel shows discovered Drive items before downloads finish", async () => {
@@ -383,17 +390,17 @@ test("clipboard fallback runs only when no editable field is focused", async () 
   assert.match(elements.status.textContent, /Copied/);
 });
 
-test("folder picker scans one folder and refreshes sites and Drive", async () => {
+test("the file picker reads one file and refreshes sites and Drive", async () => {
   const { elements, imports, messages } = panelHarness(false);
   await elements["btn-config"].listeners.click();
-  assert.deepEqual(imports, ["my-config"]);
+  assert.deepEqual(imports, ["pastex-storage.json"]);
   assert.ok(messages.some((m) => m.type === "pastex-reload-sites"));
   assert.ok(messages.some((m) => m.type === "pastex-panel-library" && m.force));
-  assert.match(elements.status.textContent, /Using folder my-config/);
+  assert.match(elements.status.textContent, /Using pastex-storage\.json/);
 });
 
-test("canceling the folder picker leaves configuration unchanged", async () => {
-  const { elements, imports } = panelHarness(false, { folderPicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
+test("canceling the file picker leaves configuration unchanged", async () => {
+  const { elements, imports } = panelHarness(false, { filePicker: async () => { const e = new Error("canceled"); e.name = "AbortError"; throw e; } });
   await elements["btn-config"].listeners.click();
   assert.equal(imports.length, 0);
   assert.match(elements.status.textContent, /unchanged/);

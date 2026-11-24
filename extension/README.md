@@ -35,7 +35,7 @@ You need, once, about ten minutes:
    ```
 
    Pastex prints the exact value for you, so it can be copied rather than
-   typed: open the side panel, click **Config**, pick the configuration folder,
+   typed: open the side panel, click **Config**, pick `pastex-storage.json`,
    and the status line reports the redirect URL for this installation. The ID
    is derived from the CRX signing key, so it is stable across upgrades of the
    signed package.
@@ -85,11 +85,11 @@ folder has to be handed over, and no credential is stored on disk: the grant
 stays with Google, and Pastex keeps only an access token in memory for about an
 hour.
 
-## Set up the configuration folder
+## Set up the configuration file
 
 Configuration is **one file of Drive links on your computer**. Click **Config**
-once, pick the folder holding it, and Pastex reads it. Nothing needs to be
-public, and no file in the folder is a credential.
+once, pick `pastex-storage.json` in the file picker, and Pastex reads it.
+Nothing needs to be public, and the file is not a credential.
 
 Create `pastex-storage.json`:
 
@@ -129,43 +129,42 @@ allows no sites, and a missing, invalid or unreadable list fails closed.
 Then:
 
 1. Open the side panel and click **Config**.
-2. Pick the folder holding `pastex-storage.json`. A folder picker opens directly
-   from the click. The file must carry that exact name. Any other `.json` file in the
-   folder is ignored, and a renamed file is reported as missing rather than
-   guessed at. Nested folders are ignored.
+2. Pick `pastex-storage.json`. A file picker opens directly from the click and
+   offers JSON files. The chosen file must carry that exact name; picking
+   anything else is refused by name (`Choose pastex-storage.json, not
+   other.json.`) rather than guessed at, and nothing is cached.
 3. Every problem is reported at once and named by key, so one pick is enough to
    see everything: `pastex-storage.json needs a pastex-folder link to the
    library folder`, `needs an pastex-index link to the order/collapse file`,
    `needs the client_id of a Google OAuth client`. Fix them all, then pick the
-   folder again.
+   file again.
 4. The first read opens Google's sign-in window once. Choose the Google account
    that owns the library folder and accept. Every later read is silent: Pastex
    asks Chrome for a token without a page, and the page only appears again if
    you signed out or withdrew access in your Google account.
 
-Only the **surface** of the folder is scanned: files ending in `.json` are
-read, subfolders are skipped without being entered, and a `.json` file that does
-not parse is ignored rather than failing the whole folder.
+One pick reads one file. There is no folder to scan and no search for the
+needed files: the panel opens the chosen file once, parses it, and stops.
 
-Configuration is then **cached**, not re-read. The panel scans the folder once,
-validates it, and stores the parsed JSON under `pastex-config-cache` in
-`chrome.storage.local`. The side panel and the background worker both read that
-cache afterwards, so opening Pastex later never opens the folder again, not even
-after a browser restart. Choosing a new folder replaces the cache; a folder that
-fails validation leaves the previous cache untouched.
+Configuration is then **cached**, not re-read. The panel validates the parsed
+object and stores it under `pastex-config-cache` in `chrome.storage.local`.
+The side panel and the background worker both read that cache afterwards, so
+opening Pastex later never opens the file again, not even after a browser
+restart. Choosing a new file replaces the cache; a file that fails validation
+leaves the previous cache untouched.
 
-There is no folder-handle store: the grant is used inside the picker gesture
-and never persisted, so `extension/handle-store.js` no longer exists.
+No handle is stored: the read happens inside the picker gesture and the handle
+is dropped, so `extension/handle-store.js` no longer exists.
 
 This is why the worker needs no offscreen document: a File System Access handle
 is not usable outside the page that holds it, and asking for one from an
 extension document fails with *"The request is not allowed by the user agent or
 the platform in the current context."* Nothing publishes configuration to Drive,
-and the folder holds no credential at all — only a public client ID — so a
-leaked configuration folder grants nothing. Snippet text is cached separately,
+and the file holds no credential at all — only a public client ID — so a leaked
+configuration file grants nothing. Snippet text is cached separately,
 keyed by a SHA-256 hash of the folder and the client ID.
 
-After modifying site JSON, open **Config** again and reselect the folder to
+After modifying the site list, open **Config** again and repick the file to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
 insertion requests re-check the current allowlist. The in-page launcher checks the allowlist on focus and refreshes that authorization while the field stays focused; it expires after 30 seconds. Changes to Drive
 configuration are picked up on refresh. No credential is logged, stored in
@@ -259,9 +258,9 @@ same metadata; refresh before editing shared lists.
 
 ### Upgrading from an older version
 
-Old configuration files remain untouched. To use them, copy the three JSON
-files into a local folder and pick that folder in **Config**; Pastex no longer
-reads or writes the old files.
+Old configuration files remain untouched. To carry them over, put the same four
+keys in one `pastex-storage.json` and pick that file in **Config**; Pastex no
+longer reads or writes the old files.
 
 Before upgrading, sync any browser-only snippets to Drive using the previous
 version and verify them in Google Drive. The new version does not read, migrate,
@@ -284,7 +283,7 @@ next to it.
 
 ## Reading from the cache, writing when you leave
 
-Reading never touches Google Drive. The first time a configuration folder is
+Reading never touches Google Drive. The first time a configuration file is
 loaded, the library is downloaded once and stored whole — every folder, every
 snippet body — and every later open is served from that snapshot, so the list
 appears instantly even when Drive is slow. Later changes arrive from the
@@ -362,10 +361,9 @@ to insert it; its row has an **Edit** button, which opens a small menu holding
 complete snippet text is inserted verbatim, including newlines and trailing
 spaces, into textareas and editable fields; a single-line input cannot display
 line breaks. The allowlist is cached for 30 seconds so a click does not have to
-re-read the configuration folder; reselecting the folder refreshes it
-immediately. If no editable field is focused on an allowed page, the text is
+re-read the configuration; repicking the file refreshes it immediately. If no editable field is focused on an allowed page, the text is
 copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
-not listed in `pastex-sites.json` are not injected or targeted.
+not listed under `pastex-sites` are not injected or targeted.
 
 ## Troubleshooting
 
@@ -393,10 +391,9 @@ not listed in `pastex-sites.json` are not injected or targeted.
 - `getcwd() failed: No such file or directory` during apt means your terminal's
   current directory was removed. Run `cd ~` before retrying; check install
   status with `dpkg -s pastex`. The warning itself does not prove failure.
-- If configuration is missing or the file in the folder cannot be read, open
-  **Config** and reselect the folder. The folder must contain
-  `pastex-storage.json` under exactly that name. The worker console can show
-  errors.
+- If configuration is missing or the file cannot be read, open **Config** and
+  pick `pastex-storage.json` again. The chosen file must carry exactly that
+  name. The worker console can show errors.
 - If the order and the folded folders were forgotten, the `pastex-index` link
   probably points at a file the signed-in account cannot open; the library then
   loads in Drive's order with every folder open, and the next reorder writes the
@@ -436,9 +433,8 @@ Permissions: `sidePanel`, `scripting` and `activeTab` provide
 the editor and approved-site launcher; `storage` provides the temporary session
 cache; `alarms` and `idle` drive the background synchronization that runs only
 while the user is away; `clipboardWrite` is the fallback on approved sites;
-`fileSystemAccess` lets the side panel's folder picker read the chosen
-directory; the grant is used once, then the parsed configuration is cached in
-`storage`. HTTP/HTTPS host
+`fileSystemAccess` lets the side panel's file picker read the chosen file;
+the grant is used once, then the parsed configuration is cached in `storage`. HTTP/HTTPS host
 permission covers dynamic user-approved sites and the Google API endpoints;
 Chrome displays this as access to all sites even
 though Pastex restricts injection using the allowlist described above.

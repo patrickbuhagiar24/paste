@@ -55,14 +55,12 @@ function harness(home, unavailable, shared, options) {
   // The panel writes this record when it scans the chosen folder.
   if (!unavailable) {
     localData["pastex-config-cache"] = {
-      version: 4, savedAt: "2026-01-01T00:00:00.000Z", folder: "chosen-folder",
-      files: {
-        "pastex-storage.json": {
-          "pastex-folder": "1RootFolderIdAbCdEf",
-          "pastex-index": "1IndexFileIdAbCdEf",
-          "pastex-sites": opts.withoutSites ? "not a link" : ["https://allowed.example"],
-          client_id: "123456789012-abc.apps.googleusercontent.com",
-        },
+      version: 5, savedAt: "2026-01-01T00:00:00.000Z", file: "pastex-storage.json",
+      value: {
+        "pastex-folder": "1RootFolderIdAbCdEf",
+        "pastex-index": "1IndexFileIdAbCdEf",
+        "pastex-sites": opts.withoutSites ? "not a link" : ["https://allowed.example"],
+        client_id: "123456789012-abc.apps.googleusercontent.com",
       },
     };
   }
@@ -152,7 +150,7 @@ test("site registration and on-demand injection are limited to configured sites"
     // Configuration lives in storage: replacing the cached allowlist is what a
     // panel rescan does, and no folder or file is involved.
     const config = browser.sharedLocal["pastex-config-cache"];
-    config.files["pastex-storage.json"]["pastex-sites"] = ["https://allowed.example"];
+    config.value["pastex-sites"] = ["https://allowed.example"];
     browser.listeners.startup();
     await new Promise(setImmediate);
     assert.deepEqual(Array.from(browser.registered[0].matches), ["https://allowed.example/*"]);
@@ -177,7 +175,7 @@ test("site registration and on-demand injection are limited to configured sites"
     assert.equal(browser.injected, 0);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     assert.equal(browser.injected, 1);
-    config.files["pastex-storage.json"]["pastex-sites"] = ["<all_urls>"];
+    config.value["pastex-sites"] = ["<all_urls>"];
     browser.listeners.startup();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "an invalid allowlist fails closed");
@@ -202,7 +200,7 @@ test("only the extension panel can request a site registration reload", async ()
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "nothing registered without an allowlist");
     const cached = browser.sharedLocal["pastex-config-cache"];
-    cached.files["pastex-storage.json"]["pastex-sites"] = ["https://allowed.example"];
+    cached.value["pastex-sites"] = ["https://allowed.example"];
     let denied;
     assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "https://allowed.example" }, (res) => { denied = res; }), false);
     assert.equal(denied.ok, false);

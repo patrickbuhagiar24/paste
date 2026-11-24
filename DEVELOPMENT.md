@@ -24,7 +24,7 @@ acceptable when it touches the first row, even if the change looks cosmetic.
    deleted in the same commit. No fallbacks, no feature detection for old
    browser versions, no "still read for older libraries".
 2. **State carries an explicit version.** Every persisted shape has a version
-   number (`pastex-index.json` → `"v": 2`, `pastex-config-cache` → `version: 2`, the
+   number (`pastex-index.json` → `"v": 2`, `pastex-config-cache` → `version: 5`, the
    queue → its own storage key `pastex.deferred.v1`).
    An unknown version is **discarded and rebuilt**, never guessed at field by
    field.

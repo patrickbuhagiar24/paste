@@ -61,16 +61,17 @@ fingerprint check, is in the [project README](README.md).
 2. Enable Pastex when the browser offers it.
 3. Note the extension ID in `chrome://extensions` and register its redirect URL
    in the OAuth client (see [section 1](#1-signing-in-to-google)).
-4. Open the side panel, click **Config**, and pick the folder holding the three
-   JSON files.
+4. Open the side panel, click **Config**, and pick `pastex-storage.json`, the
+   one file of Drive links.
 
 ### Common messages
 
 | Message | Meaning |
 | --- | --- |
-| `pastex-storage.json is missing` | the file is not in the chosen folder, or it was renamed |
+| `Choose pastex-storage.json in Config first.` | no configuration has been picked yet, or the cache was cleared by an upgrade |
+| `Choose pastex-storage.json, not <name>.` | the picked file has another name |
 | `pastex-sites: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
-| `Folder has problems: …` | the folder was rejected; the previous configuration is still active |
+| `Configuration has problems: …` | the file was rejected; the previous configuration is still active |
 | `Google does not recognise this extension's redirect URL` | copy the quoted URL into the OAuth client's *Authorized redirect URIs* |
 | `... needs a pastex-folder link` | that key is empty or is not a Drive link |
 | `... needs the client_id of a Google OAuth client` | the client ID is missing or malformed |
