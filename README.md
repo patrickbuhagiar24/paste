@@ -11,13 +11,21 @@ every node keeps the signature of the metadata Drive reported for it, so a
 refresh only downloads the branch that really changed. The order and the
 collapse state of the library live in one label on the root folder. The check
 interval grows while Drive keeps reporting the same library and returns to
-its fast value as soon as a change is seen; the panel shows when the library
-was last checked and **↻ Sync** sends waiting changes by hand.
+its fast value as soon as a change is seen; one status line reports the result
+and **↻ Sync** sends waiting changes by hand.
+
+Pastex reaches Drive as **you**, through Google OAuth: no service account and no
+key file. Each installation registers one OAuth client and records its public
+client ID in `pastex-oauth.json`; the [step-by-step guide in the extension
+README](extension/README.md#create-the-google-oauth-client) covers the Google
+Cloud project, the consent screen, the redirect URL and the client ID, in about
+ten minutes. Because the token belongs to your account, the files Pastex creates
+are yours, sit in your own Drive storage, and open normally in Drive.
 
 In **Config**, pick a local folder holding `pastex-google-drive.json`,
-`pastex-sites.json` and your service-account JSON. Pastex reads that folder
-once, validates every file, and then works from its own cache; nothing in the
-folder is ever uploaded or published. See
+`pastex-sites.json` and `pastex-oauth.json`. Pastex reads that folder once,
+validates every file, and then works from its own cache; nothing in the folder is
+ever uploaded or published, and it contains no credential. See
 [the extension README](extension/README.md) for the three files and their
 contents.
 
@@ -148,7 +156,7 @@ The other documents:
 | [where-order-and-collapse-live.md](where-order-and-collapse-live.md) | where manual order and folded folders are stored, and when they reset |
 | [ANALYSIS.md](ANALYSIS.md) | the colour and accessibility work, plus the improvements that are not done yet |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | the in-development policy: what may be dropped and what is never touched |
-| [SECURITY.md](SECURITY.md) | the signing keys, the release checks and the service-account trade-off |
+| [SECURITY.md](SECURITY.md) | the signing keys, the release checks and the OAuth trade-off |
 
 ## Testing a build on a real computer
 

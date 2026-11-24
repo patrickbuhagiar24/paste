@@ -62,12 +62,14 @@
 
     async function identity() {
       var config = await native.readConfig();
-      if (!config.serviceAccount || !config.serviceAccount.client_email || !config.serviceAccount.private_key)
-        throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
       if (!config.drive || !config.drive.folderId)
         throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
+      if (!config.oauth || !config.oauth.client_id)
+        throw new Error(config.oauthError || "Add pastex-oauth.json with your Google OAuth client_id.");
       if (identityCache.config === config) return identityCache.value;
-      var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
+      // The identity of a library is the folder plus the OAuth client, so the
+      // cache follows a folder change and is not tied to a credential.
+      var value = JSON.stringify([config.drive.folderId, config.oauth.client_id]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
       identityCache.value = Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
       identityCache.config = config;

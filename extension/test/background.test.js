@@ -55,12 +55,11 @@ function harness(home, unavailable, shared, options) {
   // The panel writes this record when it scans the chosen folder.
   if (!unavailable) {
     localData["pastex-config-cache"] = {
-      version: 1, savedAt: "2026-01-01T00:00:00.000Z", folder: "chosen-folder",
+      version: 3, savedAt: "2026-01-01T00:00:00.000Z", folder: "chosen-folder",
       files: {
         "pastex-google-drive.json": { folder_id: "root" },
         "pastex-sites.json": opts.withoutSites ? {} : { allowed_sites: ["https://allowed.example"] },
-        "service-account.json": { type: "service_account", client_email: "x",
-          private_key: "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n" },
+        "pastex-oauth.json": { client_id: "123-abc.apps.googleusercontent.com" },
       },
     };
   }
@@ -221,14 +220,14 @@ test("panel loads are cached and an edit changes the cache without reading Drive
     fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
     fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-    browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+    browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } });
     let text = "old", loads = 0;
     browser.context.PastexLibrary.load = async () => ({
       tree: [{ id: "item", kind: "text", name: "Item", driveName: "Item.txt", text: text }],
       session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} }, sequence: ++loads,
     });
     browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
-    browser.context.PastexDrive.fetchAccessToken = async () => "token";
+    browser.context.PastexDrive.getAuthToken = async () => "token";
     browser.context.PastexDrive.getFolder = async () => ({ mimeType: browser.context.PastexDrive.FOLDER_MIME, properties: { pastex_index: "" } });
     let driveWrites = 0;
     browser.context.PastexDrive.updateText = async (token, id, value) => { driveWrites++; text = value; };
@@ -277,7 +276,7 @@ function queueScenario(stub) {
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-  browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+  browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } });
   let stored = { order: { root: [] }, collapsed: { folder: "1" } };
   // connect() reads the folder, so it must hand back the label the previous
   // write stored; returning a snapshot from before the writes would lose it.
@@ -295,7 +294,7 @@ function queueScenario(stub) {
     tree: structuredClone(rows), session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: stored,
   });
   const drive = browser.context.PastexDrive;
-  drive.fetchAccessToken = async () => "token";
+  drive.getAuthToken = async () => "token";
   drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME });
   drive.listChildren = async () => [];
   drive.readIndexFile = async () => ({ id: "", index: null });
@@ -446,7 +445,7 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
 test("the background sync runs only while the user is away", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -470,7 +469,7 @@ test("the background sync runs only while the user is away", async () => {
 test("the background sync keeps the cache and only notifies the panel when Drive changed", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let tree = [{ id: "item", kind: "text", name: "Item", text: "text" }];
   browser.context.PastexLibrary.load = async () => ({
@@ -500,7 +499,7 @@ test("the background sync keeps the cache and only notifies the panel when Drive
 test("the startup warm-up never syncs while the user is active", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -528,12 +527,12 @@ test("a browser start with nothing queued reads nothing from Drive", async () =>
       JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
     browser.context.PastexConfig.readConfig = async () => ({
-      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+      drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
     });
     const drive = browser.context.PastexDrive;
     let remote = 0;
     // Every path to Drive goes through one of these.
-    drive.fetchAccessToken = async () => { remote++; return "token"; };
+    drive.getAuthToken = async () => { remote++; return "token"; };
     drive.getFolder = async () => { remote++; return { mimeType: drive.FOLDER_MIME, properties: {} }; };
     drive.listChildren = async () => { remote++; return []; };
     let loads = 0;
@@ -556,7 +555,7 @@ test("a browser start with nothing queued reads nothing from Drive", async () =>
 
 test("a running panel operation suppresses the background sync", async () => {  const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   let release;
@@ -581,7 +580,7 @@ test("a running panel operation suppresses the background sync", async () => {  
 test("the background check slows down while Drive keeps reporting the same library", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let text = "text";
   browser.context.PastexLibrary.load = async () => ({
@@ -619,7 +618,7 @@ test("the growing interval is kept when the worker restarts", async () => {
   try {
     const browser = harness(home, false, shared);
     browser.context.PastexConfig.readConfig = async () => ({
-      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+      drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
     });
     browser.context.PastexLibrary.load = async () => ({
       tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
@@ -650,7 +649,7 @@ function panelScenario() {
   const browser = harness(os.tmpdir(), true, undefined);
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked pastex-sites.json" });
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   const sender = { id: "abc", tab: { id: 1, windowId: 8, url: "https://allowed.example/path" }, frameId: 0, url: "https://allowed.example/path" };
   const ask = (message) => new Promise((resolve) => browser.listeners.message(message, sender, resolve));
@@ -722,7 +721,7 @@ function editScenario() {
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
   // One stable configuration object: the cache keys a snapshot by it, and a
   // fresh object on every read would look like a different library.
-  const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+  const configuration = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   browser.context.PastexConfig.readConfig = async () => configuration;
   // The Drive side: a listing of the library, kept in step with the writes, so
   // the sync after a flush sees what the flush just wrote.
@@ -837,7 +836,7 @@ test("the background check refuses to run while a site is visible", async () => 
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -913,14 +912,14 @@ test("a leftover queue is sent when the browser starts again", async () => {
   try {
     const browser = harness(home, true);
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-    const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+    const configuration = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
     browser.context.PastexConfig.readConfig = async () => configuration;
     browser.context.PastexLibrary.connect = async () => ({ token: "t", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
     browser.context.PastexLibrary.load = async () => ({
       tree: [], session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} },
     });
     const drive = browser.context.PastexDrive;
-    drive.fetchAccessToken = async () => "token";
+    drive.getAuthToken = async () => "token";
     drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
     drive.listChildren = async () => [];
     const writes = [];
@@ -1087,8 +1086,8 @@ test("a snippet kept out by the storage quota is not thrown away", async () => {
     postMessage: (message) => { posted.push(message); },
   });
   await send({ type: "pastex-panel-library" });
-  // Exactly what Drive answers for a service account: the folder can hold
-  // files, but this account may not create one.
+  // Exactly what Drive answers when the user's own Drive is full: the folder
+  // can hold files, but no new one can be created right now.
   browser.context.PastexDrive.uploadNew = async () => {
     throw new Error("Drive API POST /files failed (HTTP 403): Service Accounts do not have storage quota.");
   };
@@ -1171,9 +1170,9 @@ test("the stored index is the one the loader applies, not a shape it ignores", a
   // it can parse, and a token that needs no signature check.
   const realConfig = { readConfig: async () => ({
     drive: { folderId: "root" },
-    serviceAccount: { client_email: "x", private_key: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----" },
+    oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   }) };
-  browser.context.PastexDrive.fetchAccessToken = async () => "token";
+  browser.context.PastexDrive.getAuthToken = async () => "token";
   browser.context.PastexDrive.downloadText = async () => "";
   const again = await RealLibrary.load(
     realConfig, browser.context.PastexDrive,

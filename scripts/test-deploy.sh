@@ -139,8 +139,10 @@ Next steps on this machine:
      Chrome and Chromium read the registration file only at startup.
   2. Open chrome://extensions (or chrome://extensions/?id=<the id above>)
      and enable Pastex when the browser offers it.
-  3. Open the side panel, click Config, and pick the folder holding
-     pastex-google-drive.json, pastex-sites.json and service-account.json.
+  3. Register this extension id and its redirect URL in your Google OAuth
+     client (see extension/README.md, "Create the Google OAuth client").
+  4. Open the side panel, click Config, and pick the folder holding
+     pastex-google-drive.json, pastex-sites.json and pastex-oauth.json.
 
 Remove it again:
   sudo ./scripts/test-deploy.sh --uninstall

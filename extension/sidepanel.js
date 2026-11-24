@@ -451,7 +451,7 @@
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
-      if (/HTTP (401|403|404)\b|invalid_grant|service-account\.json|pastex-google-drive\.json/i.test(err.message || "")) {
+      if (/HTTP (401|403|404)\b|invalid_grant|pastex-oauth\.json|pastex-google-drive\.json/i.test(err.message || "")) {
         tree = []; rootId = ""; ready = false; fromCache = false;
       } else {
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
@@ -821,7 +821,7 @@
 
   // --- configuration: one folder containing the three JSON files ---
 
-  async function applyConfiguration(load) {
+  async function applyConfiguration(load, note) {
     var button = $("btn-config");
     button.disabled = true;
     try {
@@ -841,7 +841,9 @@
       refreshRequested = false;
       while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
       await refresh(true);
-      setStatus(issues.length ? "Saved, but sites need a browser restart." : applied.label + ".", issues.length ? "error" : "ok");
+      var extra = note ? note(applied) : "";
+      setStatus(issues.length ? "Saved, but sites need a browser restart." : applied.label + ". " + extra,
+        issues.length ? "error" : "ok");
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
@@ -859,9 +861,19 @@
     // The picker must be called directly from the user gesture. The folder is
     // scanned for the three JSON files by content; no manifest is read.
     return applyConfiguration(async function () {
+      // The redirect URL is derived from the extension id, so the only place it
+      // can be read is a running installation. Saying it here is what makes the
+      // OAuth client possible to set up without a debugger.
+      var redirect = "";
+      try { redirect = chrome.identity.getRedirectURL(); } catch (ignored) { redirect = ""; }
       var handle = await window.showDirectoryPicker({ mode: "read", id: "pastex-config" });
       var found = await Config.chooseFolder(handle);
-      return { found: found, label: "Using folder " + (handle.name || "configuration") };
+      return { found: found, redirect: redirect,
+        label: "Using folder " + (handle.name || "configuration") };
+    }, function (applied) {
+      // One status line, so the value is reported in the line that already
+      // exists rather than in a second label nobody asked for.
+      return applied.redirect ? "OAuth redirect URL: " + applied.redirect : "";
     });
   });
 

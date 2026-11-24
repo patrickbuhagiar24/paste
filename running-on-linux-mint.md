@@ -2,52 +2,37 @@
 
 This guide has two parts:
 
-1. **[Inspecting the Drive label](#1-inspecting-the-drive-label)** — a script
-   that shows exactly what Pastex stores in Google Drive.
+1. **[Signing in to Google](#1-signing-in-to-google)** — the one-time OAuth
+   client every installation needs.
 2. **[Installing and running Pastex](#2-installing-and-running-pastex)** — the
    Chrome extension itself on Linux Mint.
 
-## 1. Inspecting the Drive label
+## 1. Signing in to Google
 
-`scripts/get-pastex-label.sh` builds its own OAuth token from the service
-account key (an RS256 JWT signed with `openssl`) and then calls the Drive API.
-Nothing has to be installed beyond Mint's defaults: `curl`, `jq`, `openssl`.
+Pastex uses Google OAuth as **you**: no service account, no key file, no folder
+shared with an e-mail address. The full walkthrough, with the exact console
+paths, is in [extension/README.md](extension/README.md#create-the-google-oauth-client).
+In short:
 
-### Requirements
-
-| Requirement | How to install on Linux Mint |
+| What you need | Where it comes from |
 | --- | --- |
-| A `service-account.json` key | Google Cloud → *Credentials* → service account → download the JSON key |
-| The library folder shared with `client_email` as **Editor** | Drive → right-click the folder → *Share* |
-| `curl`, `jq`, `openssl` | `sudo apt install curl jq openssl` (all present by default) |
+| The extension ID | `chrome://extensions` (Developer mode) |
+| A Google Cloud project with the Drive API enabled | <https://console.cloud.google.com> |
+| An OAuth client of type **Web application** whose *Authorized redirect URI* is `https://<extension-id>.chromiumapp.org/` | *APIs & Services → Credentials* |
+| `pastex-oauth.json` holding that client ID | written by you, in the configuration folder |
 
-### Usage
+There is no client secret: an extension is a public client, and Google hands the
+token straight back to Chrome. If the redirect URL is wrong, Google answers
+`redirect_uri_mismatch` and Pastex prints the URL you must register, so the
+mistake is visible without a debugger.
 
-```bash
-chmod +x scripts/get-pastex-label.sh
+### Why not a service account
 
-# The root folder recorded in ./pastex-google-drive.json
-./scripts/get-pastex-label.sh -k ~/keys/service-account.json
-
-# Any specific file or folder id
-./scripts/get-pastex-label.sh -k ~/keys/service-account.json 1AbCdEfGhIjKlMnOpQrStUv
-```
-
-The output is the raw `properties` object, then the index file decoded. The
-index lives in `pastex-index.json` inside the library folder; if the script
-reports it is missing, the library is simply being shown in Drive's order with
-every folder open, and Pastex writes the file on the next reorder or fold.
-
-### The request it makes, in one line
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://www.googleapis.com/drive/v3/files/$FOLDER_ID?fields=id,name,mimeType,properties"
-```
-
-The token is obtained from `https://oauth2.googleapis.com/token` with a
-`jwt-bearer` assertion. The private key is written to a private temporary file
-(`chmod 600`) and removed on exit; it is never printed.
+A service account has no Drive storage of its own, so Google refuses every file
+it tries to create in a personal folder — a folder could be created while a
+snippet could not, which is exactly the symptom that led here. With OAuth the
+files belong to you, count against your own storage, and open normally in Drive.
+If your Drive is full, Google says so and Pastex keeps the snippet queued.
 
 ## 2. Installing and running Pastex
 
@@ -74,7 +59,9 @@ fingerprint check, is in the [project README](README.md).
 
 1. Restart the browser completely (not just close the window).
 2. Enable Pastex when the browser offers it.
-3. Open the side panel, click **Config**, and pick the folder holding the three
+3. Note the extension ID in `chrome://extensions` and register its redirect URL
+   in the OAuth client (see [section 1](#1-signing-in-to-google)).
+4. Open the side panel, click **Config**, and pick the folder holding the three
    JSON files.
 
 ### Common messages
@@ -84,8 +71,10 @@ fingerprint check, is in the [project README](README.md).
 | `pastex-google-drive.json is missing` | the file is not in the chosen folder, or it was renamed |
 | `pastex-sites.json: Invalid site origin: <all_urls>` | use `https://example.com`, never a global wildcard |
 | `Folder has problems: …` | the folder was rejected; the previous configuration is still active |
-| `The request failed. Make sure the folder is shared with: …` | share the Drive folder with that `client_email` as **Editor** |
-| `Could not obtain an access token` | malformed key, or the Drive API is not enabled for the project |
+| `Google does not recognise this extension's redirect URL` | copy the quoted URL into the OAuth client's *Authorized redirect URIs* |
+| `pastex-oauth.json is missing` | the client ID file is absent or renamed |
+| `Your Google account is out of Drive storage` | free space in Drive, or use a folder in a Shared Drive |
+| `interaction_required` / `access_denied` | sign-in was cancelled; choose **↻ Sync** and accept once |
 
 ### Uninstalling
 

@@ -27,13 +27,18 @@ public keyring and its fingerprint are published.
 The Debian package derives the Chrome extension ID from the CRX signing key,
 so the ID must stay the same across releases. Compare the ID shown at
 `chrome://extensions` with `extension-id.txt` on the repository website or in
-the GitHub Release. A change means the package was built with a different key;
-do not enter service-account credentials until that is resolved.
+the GitHub release. A change means the package was built with a different key,
+and the ID is part of the OAuth redirect URL: after a genuine rotation,
+register the new `https://<extension-id>.chromiumapp.org/` in your OAuth client
+until the old tokens are useless anyway.
 
-Service-account JSON files stay in the folder you select in the extension.
-Pastex stores only the browser-granted directory handle, never the key or the
-JSON contents. Report credential-handling issues privately to the maintainer
-rather than opening a public issue.
+Pastex holds no client secret and stores no credential. The configuration
+folder contains only a public client id (`pastex-oauth.json`), so a leaked
+folder grants no access. The access token Google issues lives in the worker's
+memory for about an hour and is never written to disk; the permission itself
+stays with Google. Signing out revokes the access token at Google. Report
+credential-handling issues privately to the maintainer rather than opening a
+public issue.
 
 ## Release checksums
 

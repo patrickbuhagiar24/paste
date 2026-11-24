@@ -1,25 +1,9 @@
-// Unit tests for extension/drive.js: key parsing, JWT signing (WebCrypto),
-// and Drive API wrappers against stub fetch().
+// Unit tests for extension/drive.js: the OAuth token handshake with Chrome and
+// the Drive API wrappers against stub fetch().
 "use strict";
 
 const assert = require("node:assert/strict");
-const { subtle } = require("node:crypto").webcrypto;
 const Drive = require("../drive.js");
-
-function pemBlock(base64, label) {
-  const lines = base64.match(/.{1,64}/g) || [];
-  return "-----BEGIN " + label + "-----\n" + lines.join("\n") + "\n-----END " + label + "-----\n";
-}
-
-async function testKeyPair() {
-  const pair = await subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"]
-  );
-  const pkcs8 = Buffer.from(await subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
-  return { pair, pem: pemBlock(pkcs8, "PRIVATE KEY") };
-}
 
 function stubFetch(handler) {
   const calls = [];
@@ -53,86 +37,165 @@ function textResponse(text, status) {
   };
 }
 
-test("parseServiceAccount accepts a key and rejects junk", async () => {
-  const { pem } = await testKeyPair();
-  const sa = Drive.parseServiceAccount(JSON.stringify({ type: "service_account", client_email: "a@b.iam.gserviceaccount.com", private_key: pem }));
-  assert.equal(sa.client_email, "a@b.iam.gserviceaccount.com");
-  assert.throws(() => Drive.parseServiceAccount("not json"), /not valid JSON/);
-  assert.throws(() => Drive.parseServiceAccount("{}"), /client_email/);
-  assert.throws(
-    () => Drive.parseServiceAccount(JSON.stringify({ type: "authorized_user", client_email: "a", private_key: pem })),
-    /not "service_account"/
-  );
-  assert.throws(
-    () => Drive.parseServiceAccount(JSON.stringify({ client_email: "a", private_key: "bogus" })),
-    /private_key|import/i
-  );
+// --- the OAuth handshake ---------------------------------------------------
+//
+// The token comes from Google's sign-in page through Chrome, using the client
+// id this installation recorded in pastex-oauth.json. There is no key file and
+// no client secret: the extension is a public client and its bundle is public.
+
+const CLIENT = "123456789012-abcdefghijklmnop.apps.googleusercontent.com";
+// Every test uses its own client id: the token cache is keyed by it and lives
+// for the whole module, exactly as it does in a running worker.
+const client = (n) => "10000000000" + n + "-abcdefghijklmnop.apps.googleusercontent.com";
+const REDIRECT = "https://abcdefghijklmnop.chromiumapp.org/";
+
+// A stand-in for chrome.identity that answers the way Google does: the token
+// arrives in the fragment of the redirect URL.
+function fakeIdentity(answer) {
+  const asked = [];
+  return {
+    asked,
+    getRedirectURL: () => REDIRECT,
+    launchWebAuthFlow: (options, callback) => {
+      asked.push(options);
+      const redirected = answer(options);
+      // Called asynchronously, like the real API.
+      Promise.resolve().then(() => callback(redirected));
+    },
+  };
+}
+function granted(options) {
+  const url = new URL(options.url);
+  const state = url.searchParams.get("state");
+  return REDIRECT + "#access_token=ya29.token&expires_in=3600&token_type=Bearer&state=" + state;
+}
+
+test("a Drive token comes from Google's sign-in page, never from a key file", async () => {
+  // Pastex used to sign a JWT with a service-account key; Google holds that
+  // credential now, and the extension never stores one.
+  for (const gone of ["parseServiceAccount", "fetchAccessToken", "signJwt"]) {
+    assert.equal(Drive[gone], undefined, gone + " must not exist");
+  }
+  const identity = fakeIdentity(granted);
+  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: CLIENT, interactive: true }), "ya29.token");
+  const url = new URL(identity.asked[0].url);
+  assert.equal(url.searchParams.get("client_id"), CLIENT);
+  assert.equal(url.searchParams.get("redirect_uri"), REDIRECT);
+  assert.equal(url.searchParams.get("response_type"), "token");
+  assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive.file");
+  assert.equal(url.searchParams.get("state").length, 32);
+  // Even an interactive request tries silently first: Chrome's worker restarts
+  // often, and a grant Google already holds needs no page.
+  assert.deepEqual(identity.asked[0].interactive, false);
+  assert.equal(url.searchParams.get("prompt"), "none");
 });
 
-test("signJwt produces a verifiable RS256 token", async () => {
-  const { pair, pem } = await testKeyPair();
-  const now = Math.floor(Date.now() / 1000);
-  const claims = Drive.claimSet("svc@example.iam.gserviceaccount.com", now);
-  assert.equal(claims.aud, Drive.TOKEN_URL);
-  assert.equal(claims.exp - claims.iat, 3600);
-  assert.ok(claims.scope.includes("auth/drive"));
-
-  const jwt = await Drive.signJwt(subtle, pem, claims);
-  const parts = jwt.split(".");
-  assert.equal(parts.length, 3);
-  const header = JSON.parse(Buffer.from(parts[0].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-  assert.equal(header.alg, "RS256");
-  const body = JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-  assert.equal(body.iss, "svc@example.iam.gserviceaccount.com");
-
-  const data = Buffer.from(parts[0] + "." + parts[1], "utf8");
-  const signature = Buffer.from(parts[2].replace(/-/g, "+").replace(/_/g, "/"), "base64");
-  assert.equal(await subtle.verify("RSASSA-PKCS1-v1_5", pair.publicKey, signature, data), true);
+test("a token already held is reused instead of opening a window again", async () => {
+  const identity = fakeIdentity(granted);
+  const mine = client(2);
+  await Drive.getAuthToken({ identity: identity, clientId: mine, interactive: true });
+  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  assert.equal(identity.asked.length, 1, "one sign-in serves the session");
 });
 
-test("fetchAccessToken posts a JWT assertion and caches the token", async () => {
-  Drive.clearTokenCache();
-  const { pem } = await testKeyPair();
-  const sa = { client_email: "svc@example.iam.gserviceaccount.com", private_key: pem };
-  const fetchImpl = stubFetch(async () => jsonResponse({ access_token: "tok123", expires_in: 3600 }));
-  const first = await Drive.fetchAccessToken(sa, { subtle, fetchImpl });
-  assert.equal(first, "tok123");
-  const second = await Drive.fetchAccessToken(sa, { subtle, fetchImpl });
-  assert.equal(second, "tok123");
-  assert.equal(fetchImpl.calls.length, 1);
-  assert.equal(fetchImpl.calls[0].url, Drive.TOKEN_URL);
-  assert.ok(fetchImpl.calls[0].options.body.includes("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"));
-  assert.ok(fetchImpl.calls[0].options.body.includes("assertion="));
-  Drive.clearTokenCache();
+test("the sign-in page is opened only when a silent request is refused", async () => {
+  // Interactive: the silent attempt is refused, so Google's page is opened.
+  const asked = [];
+  const identity = {
+    getRedirectURL: () => REDIRECT,
+    launchWebAuthFlow: (options, callback) => {
+      asked.push(options);
+      const state = new URL(options.url).searchParams.get("state");
+      Promise.resolve().then(() => callback(options.interactive
+        ? REDIRECT + "#access_token=ya29.granted&expires_in=3600&state=" + state
+        : REDIRECT + "#error=interaction_required&state=" + state));
+    },
+  };
+  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: client(3), interactive: true }), "ya29.granted");
+  assert.equal(asked.length, 2, "one silent attempt, then the page");
+  assert.equal(asked[0].interactive, false);
+  assert.equal(new URL(asked[0].url).searchParams.get("prompt"), "none");
+  assert.equal(asked[1].interactive, true);
+  assert.equal(new URL(asked[1].url).searchParams.get("prompt"), "select_account");
+
+  // Non-interactive: a refusal is reported, never turned into a page.
+  const quiet = fakeIdentity((options) => {
+    const url = new URL(options.url);
+    return REDIRECT + "#error=interaction_required&state=" + url.searchParams.get("state");
+  });
+  await assert.rejects(Drive.getAuthToken({ identity: quiet, clientId: client(4) }), /not signed in yet/);
+  assert.equal(quiet.asked.length, 1);
+  assert.equal(quiet.asked[0].interactive, false);
 });
 
-test("fetchAccessToken does not reuse a token after file credentials change", async () => {
-  Drive.clearTokenCache();
-  const { pem } = await testKeyPair();
-  const other = await testKeyPair();
-  const fetchImpl = stubFetch(async () => jsonResponse({ access_token: "tok", expires_in: 3600 }));
-  await Drive.fetchAccessToken({ client_email: "first@example.com", private_key: pem }, { subtle, fetchImpl });
-  await Drive.fetchAccessToken({ client_email: "second@example.com", private_key: pem }, { subtle, fetchImpl });
-  await Drive.fetchAccessToken({ client_email: "second@example.com", private_key: other.pem }, { subtle, fetchImpl });
-  assert.equal(fetchImpl.calls.length, 3);
-  Drive.clearTokenCache();
+test("a sign-in failure is reported, not swallowed", async () => {
+  const mine = client(5);
+  const denied = fakeIdentity((options) => {
+    const url = new URL(options.url);
+    return REDIRECT + "#error=access_denied&state=" + url.searchParams.get("state");
+  });
+  await assert.rejects(Drive.getAuthToken({ identity: denied, clientId: mine }), /access_denied/);
+  // A window the person closes comes back empty.
+  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(() => ""), clientId: mine }),
+    /not signed in/);
+  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(() => ""), clientId: mine, interactive: true }),
+    /no answer/);
+  // An answer that does not belong to this request is refused outright.
+  await assert.rejects(
+    Drive.getAuthToken({ identity: fakeIdentity(() => REDIRECT + "#access_token=stolen&state=other"), clientId: mine }),
+    /did not match this request/);
+  await assert.rejects(Drive.getAuthToken({ identity: {}, clientId: mine }), /sign-in window is unavailable/);
+  await assert.rejects(Drive.getAuthToken({ identity: fakeIdentity(granted) }), /pastex-oauth\.json/);
 });
 
-test("fetchAccessToken surfaces token-endpoint errors", async () => {
-  Drive.clearTokenCache();
-  const { pem } = await testKeyPair();
-  const sa = { client_email: "svc@example.iam.gserviceaccount.com", private_key: pem };
-  const fetchImpl = stubFetch(async () => jsonResponse({ error: "invalid_grant", error_description: "bad jwt" }, 400));
-  await assert.rejects(Drive.fetchAccessToken(sa, { subtle, fetchImpl }), /invalid_grant|bad jwt/);
-  Drive.clearTokenCache();
+test("an unregistered redirect URL is named in the error", async () => {
+  const identity = fakeIdentity((options) => {
+    const url = new URL(options.url);
+    return REDIRECT + "#error=redirect_uri_mismatch&state=" + url.searchParams.get("state");
+  });
+  await assert.rejects(Drive.getAuthToken({ identity: identity, clientId: client(8) }),
+    (err) => {
+      assert.match(err.message, /redirect_uri_mismatch/);
+      assert.match(err.message, /abcdefghijklmnop\.chromiumapp\.org/, "the exact URL to register is quoted");
+      return true;
+    });
 });
 
-test("base64 helpers round-trip", () => {
-  const bytes = Drive.base64ToBytes("aGVsbG8td29ybGQ");
-  assert.equal(Buffer.from(bytes).toString("utf8"), "hello-world");
-  assert.equal(Drive.stringToBase64Url("hello-world"), "aGVsbG8td29ybGQ");
-  // URL-safe alphabet, no padding.
-  assert.match(Drive.stringToBase64Url(">>>???"), /^[A-Za-z0-9_-]+$/);
+test("a token Google has revoked is dropped so the next call can renew it", async () => {
+  const identity = fakeIdentity(granted);
+  const mine = client(6);
+  const token = await Drive.getAuthToken({ identity: identity, clientId: mine });
+  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: mine }), token);
+  await Drive.removeCachedToken(token);
+  // A second call after the removal asks Google again.
+  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  assert.equal(identity.asked.length, 2);
+});
+
+test("signing out revokes the token at Google and forgets it here", async () => {
+  const identity = fakeIdentity(granted);
+  const mine = client(7);
+  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  const revoked = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => { revoked.push({ url, body: options.body }); return jsonResponse({}); };
+  try {
+    await Drive.signOut();
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+  // Every token this worker held is revoked, not only the last one, so nothing
+  // handed out earlier stays usable.
+  assert.ok(revoked.length >= 1);
+  for (const call of revoked) assert.equal(call.url, "https://oauth2.googleapis.com/revoke");
+  assert.ok(revoked.some((call) => /token=ya29\.token/.test(call.body)), "the token itself is revoked");
+  // Nothing is left to reuse.
+  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  assert.equal(identity.asked.length, 2);
+});
+
+test("the requested scope covers only the files Pastex itself uses", () => {
+  assert.equal(Drive.SCOPES, "https://www.googleapis.com/auth/drive.file");
 });
 
 test("listChildren follows pagination", async () => {
@@ -315,10 +378,6 @@ test("stalled Google responses and body reads time out and abort", async () => {
   assert.equal(signal.aborted, true);
   const slowBody = async (url, options) => { signal = options.signal; return { ok: true, headers: { get: () => "text/plain" }, text: () => new Promise(() => {}) }; };
   await assert.rejects(Drive.driveFetch("tok", "/files/x", { fetchImpl: slowBody, timeoutMs: 10 }), /timed out/);
-  assert.equal(signal.aborted, true);
-  const { pem } = await testKeyPair();
-  Drive.clearTokenCache();
-  await assert.rejects(Drive.fetchAccessToken({ client_email: "a@b", private_key: pem }, { subtle, fetchImpl: hanging, timeoutMs: 10 }), /timed out/);
   assert.equal(signal.aborted, true);
 });
 

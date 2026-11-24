@@ -8,7 +8,7 @@ function setup() {
   const data = {};
   const localData = {};
   let calls = 0;
-  const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "account", private_key: "private-secret" } };
+  const config = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const storage = {
     async get(key) { return { [key]: data[key] }; },
     async set(values) { Object.assign(data, structuredClone(values)); },
@@ -43,17 +43,17 @@ test("the cache is read without Drive and survives a worker restart, keyed by ac
   // The Sync above rewrote the snapshot from the second read.
   assert.equal((await b.get(false)).tree[0].id, "2");
   assert.equal(x.calls, 2, "a new worker reads the stored snapshot");
-  assert.ok(!JSON.stringify(x.data).includes("private-secret"));
+  assert.ok(!JSON.stringify(x.data).includes("123-abc"), "the stored snapshot carries no client id");
   x.config.drive.folderId = "other";
   // A different library has no stored snapshot: its first read syncs once,
   // and then it is cached like the others.
   assert.equal((await b.get(false)).tree[0].id, "3");
   assert.equal((await b.get(false)).tree[0].id, "3");
-  x.config.serviceAccount.private_key = "rotated-key";
+  x.config.oauth.client_id = "456-def.apps.googleusercontent.com";
   assert.equal((await b.get(false)).tree[0].id, "4");
   assert.equal((await b.get(false)).tree[0].id, "4");
-  x.config.serviceAccount = null;
-  await assert.rejects(b.get(false), /service-account/);
+  x.config.oauth = null;
+  await assert.rejects(b.get(false), /pastex-oauth\.json/);
   assert.equal(x.data[Cache.KEY], undefined);
 });
 
@@ -396,7 +396,7 @@ test("a changed node signature refreshes the snapshot without disturbing the pan
 
 function nestedWorld() {
   const data = {}, localData = {};
-  const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "a", private_key: "k" } };
+  const config = { drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const area = (store) => ({
     async get(key) { return { [key]: store[key] }; },
     async set(values) { Object.assign(store, structuredClone(values)); },
@@ -406,7 +406,7 @@ function nestedWorld() {
   let downloads = 0, listings = 0;
   const drive = {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
-    parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
+    getAuthToken: async () => "token",
     getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root" }),
     // Order and collapse live in the index file, not on the folder.
     readIndexFile: async () => ({ id: "", index: null }),

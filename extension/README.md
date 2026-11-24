@@ -1,7 +1,8 @@
 # Pastex for Chrome and Chromium
 
 Pastex is a browser extension for text snippets stored directly in Google
-Drive. It operates on **only the sites you choose**. Configure Pastex with one
+Drive, accessed as **you** through Google OAuth — no service account and no key
+file. It operates on **only the sites you choose**. Configure Pastex with one
 folder containing the three configuration files described below; the extension
 reads that folder when it needs configuration and never publishes the files.
 Google Drive and a working internet connection are required.
@@ -10,6 +11,83 @@ Google Drive and a working internet connection are required.
 
 Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 141 or newer is required.
 
+## Create the Google OAuth client
+
+Pastex talks to Drive **as you**. There is no service account and no key file:
+the extension asks Google for permission through Chrome's sign-in window, and
+the token it receives belongs to the Google account that signed in. Files Pastex
+creates are therefore yours, they sit in your own Drive storage, and they open
+normally in Drive.
+
+Each installation brings its own OAuth client, because this project is
+self-hosted (the `.deb` is built by whoever installs it). There is no client
+secret and none is needed: an extension is a public client, and Google's
+implicit flow hands the token back to Chrome directly.
+
+You need, once, about ten minutes:
+
+1. **Note your extension's ID and redirect URL.** In `chrome://extensions`,
+   enable *Developer mode*, find **Pastex**, and copy the 32-letter ID. Its
+   redirect URL is
+
+   ```
+   https://<extension-id>.chromiumapp.org/
+   ```
+
+   Pastex prints the exact value for you, so it can be copied rather than
+   typed: open the side panel, click **Config**, pick the configuration folder,
+   and the status line reports the redirect URL for this installation. The ID
+   is derived from the CRX signing key, so it is stable across upgrades of the
+   signed package.
+
+2. **Create a Google Cloud project.** Open
+   <https://console.cloud.google.com/projectcreate>, give it a name such as
+   `pastex`, and click *Create*. Select the new project in the project picker at
+   the top of the page.
+
+3. **Enable the Drive API.** Go to *APIs & Services → Library*, search for
+   **Google Drive API**, open it and click *Enable*.
+
+4. **Fill in the OAuth consent screen.** *APIs & Services → OAuth consent
+   screen*: choose **External** (or **Internal** if the client is only for one
+   Workspace organisation), set the app name (`Pastex`), your e-mail as the
+   support address, and your e-mail as the developer contact. Save.
+   Add the scope `https://www.googleapis.com/auth/drive.file` — Pastex asks for
+   nothing else. This scope is classified by Google as **non-sensitive**, so it
+   needs no verification review and no security assessment.
+
+5. **Create the OAuth client.** *APIs & Services → Credentials → Create
+   credentials → OAuth client ID*. Application type: **Web application**. Name
+   it `Pastex (Chrome extension)`. Under *Authorized redirect URIs* click *Add
+   URI* and paste the redirect URL from step 1 **exactly**, including the
+   trailing `/`. Leave *Authorized JavaScript origins* empty. Click *Create* and
+   copy the **client ID** shown — it looks like
+   `123456789012-abcdefghijklmnop.apps.googleusercontent.com`.
+
+   Do not choose the *Chrome Extension* application type: Google only accepts
+   that type for an extension published in the Chrome Web Store, and Pastex is
+   installed from a package. The *Web application* type plus a registered
+   `chromiumapp.org` redirect is the combination that works for a self-hosted
+   extension.
+
+6. **Publish the consent screen.** Still under *OAuth consent screen*, click
+   *Publish app* and confirm. While the status stays *Testing*, every sign-in
+   shows a warning page, the grant expires after seven days, and only the test
+   users you listed may sign in. *In production* with a non-sensitive scope
+   needs no review.
+
+7. **Record the client ID in the configuration folder** as
+   `pastex-oauth.json`:
+
+   ```json
+   {"client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"}
+   ```
+
+That is the whole Google side. Nothing is shared with an e-mail address, no
+folder has to be handed over, and no credential is stored on disk: the grant
+stays with Google, and Pastex keeps only an access token in memory for about an
+hour.
+
 ## Set up the configuration folder
 
 Configuration is a **folder of JSON files on your computer**, not a manifest of
@@ -17,13 +95,10 @@ Drive links. Click **Config** once, pick the folder, and Pastex reads the
 three files by name. Nothing in the folder needs to be public, and
 no Drive link is ever shared.
 
-1. Enable the **Drive API** in Google Cloud, create a service account and
-   download its JSON key. **Share the snippets folder with its `client_email`
-   as an Editor** — that grant is the only thing that lets Pastex read and
-   write snippets. Save the key in the configuration folder as
-   `service-account.json`. This is the one file recognised by its content, so a
-   key downloaded under a project-specific name is accepted too.
-2. Add `pastex-google-drive.json` to the same folder:
+1. Create the library folder in your own Drive (or inside a Shared Drive) and
+   copy its ID from the URL:
+   `https://drive.google.com/drive/folders/YOUR_FOLDER_ID`.
+2. Add `pastex-google-drive.json` to the configuration folder on your computer:
 
    ```json
    {"folder_url": "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"}
@@ -40,21 +115,27 @@ no Drive link is ever shared.
    An empty list allows no sites. Use HTTP(S) origins only, without paths,
    ports, credentials or global wildcards. Wildcard subdomains include the
    base domain. If missing, invalid or inaccessible, the allowlist fails closed.
-4. Open the side panel and click **Config**. A folder picker opens directly;
+4. Add `pastex-oauth.json` with the client ID from the guide above.
+5. Open the side panel and click **Config**. A folder picker opens directly;
    select the folder containing the three files. Every `.json` file in that
-   folder is read and identified by content — a key carries
-   `"type": "service_account"`, the others carry `folder_id`/`folder_url` and
-   `allowed_sites`. Only `pastex-sites.json` and `pastex-google-drive.json` must
-   carry those exact names; extra files are ignored. Nested folders are
-   ignored. Files are validated before the choice is accepted; if anything is
-   invalid, the previous configuration is kept.
+   folder is read, and the three canonical names are the three files Pastex
+   uses — `pastex-google-drive.json`, `pastex-sites.json` and
+   `pastex-oauth.json`. Extra files are ignored, and a file with another name is
+   not guessed at: it is reported as missing. Nested folders are ignored. Files
+   are validated before the choice is accepted; if anything is invalid, the
+   previous configuration is kept.
 
    The check reports **every** problem at once and names the files: a missing
-   file is reported as missing (`service-account.json is missing`), while a
+   file is reported as missing (`pastex-oauth.json is missing`), while a
    present but unusable one is reported separately
    (`pastex-google-drive.json has no usable folder_id or folder_url`). Fix them
    all, then pick the folder again — the picker does not have to be repeated
    after each single fix.
+
+6. The first read opens Google's sign-in window once. Choose the Google account
+   that owns the library folder and accept. Every later read is silent: Pastex
+   asks Chrome for a token without a page, and the page only appears again if
+   you signed out or withdrew access in your Google account.
 
 Only the **surface** of the folder is scanned: files ending in `.json` are
 read, subfolders are skipped without being entered, and a `.json` file that does
@@ -74,16 +155,16 @@ This is why the worker needs no offscreen document: a File System Access handle
 is not usable outside the page that holds it, and asking for one from an
 extension document fails with *"The request is not allowed by the user agent or
 the platform in the current context."* Nothing publishes configuration to Drive,
-so the service-account key never leaves the machine and cannot leak through a
-shared link. Snippet text is cached separately, keyed by a SHA-256 hash of the
-configuration.
+and the folder holds no credential at all — only a public client ID — so a
+leaked configuration folder grants nothing. Snippet text is cached separately,
+keyed by a SHA-256 hash of the folder and the client ID.
 
 After modifying site JSON, open **Config** again and reselect the folder to
 update script registration and reload open tabs. Existing tabs may retain a script until reloaded, but
 insertion requests re-check the current allowlist. The in-page launcher checks the allowlist on focus and refreshes that authorization while the field stays focused; it expires after 30 seconds. Changes to Drive
-configuration are picked up on refresh. The service-account key is not logged,
-stored in Chrome storage or displayed; it is read into extension memory and used
-to sign authentication requests to Google.
+configuration are picked up on refresh. No credential is logged, stored in
+Chrome storage or displayed: the access token Google returns lives in the
+worker's memory for about an hour, and the permission itself stays with Google.
 
 Each snippet maps to a Drive text file. Creating, editing and renaming write
 straight to Drive; deleting moves the item (including a folder's contents) to
@@ -102,8 +183,8 @@ nothing. A snapshot that is on screen keeps its bodies before another account's
 snapshot keeps its place, and a complete snapshot is never replaced by a
 compacted one while it still fits. A cached open reports how many rows still miss a
 body; the panel shows the list at once and the worker fills those rows without
-listing Drive again, then repaints. The cache contains snippet text (not the
-service-account key) and is accessible to the extension, not websites.
+listing Drive again, then repaints. The cache contains snippet text and no
+credential, and is accessible to the extension, not websites.
 
 A background check is also cheaper than before: a metadata-only pass
 (`verify`) compares folder and item signatures and reads the timing label
@@ -282,16 +363,18 @@ not listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
-- If a **folder** can be created but a **snippet** cannot, and the status line
-  says *Service Accounts do not have storage quota*, the problem is on the Drive
-  side: a service account may not own new files, so it cannot create a `.txt`
-  snippet (or `pastex-index.json`), while a folder it creates belongs to the
-  folder's owner and is allowed. The snippet you typed is **not lost**: it stays
-  queued and the panel says so. Fix it by moving the library into a **Shared
-  Drive** and adding the service account as a **Content manager**; existing
-  snippets and folders keep working meanwhile. `scripts/check-drive-write.sh`
-  writes one of each and prints Drive's exact answer for every step, then
-  removes what it created.
+- If the status line says *Google does not recognise this extension's redirect
+  URL*, copy the URL it quotes (`https://<extension-id>.chromiumapp.org/`) into
+  *Authorized redirect URIs* of the OAuth client and try **↻ Sync** again. The
+  URL changes if the extension ID changes, which happens when the package is
+  rebuilt with another CRX key.
+- If the status line says *Your Google account is out of Drive storage*, free
+  space in Drive, or move the library into a folder inside a **Shared Drive**;
+  files created there are counted against the Shared Drive, not your account.
+  The snippet you typed is **not lost**: it stays queued and the panel says so.
+- If the sign-in window never appears, or Pastex reports that the sign-in window
+  is unavailable, sign in to Chrome with a Google account and avoid a managed
+  profile that blocks extensions. Reload Pastex from `chrome://extensions`.
 - If APT has installed a newer version but Chrome still displays the older
   extension, fully exit and restart Chrome. Verify the installed package version
   with `dpkg-query -W pastex` and compare it with `chrome://extensions`. As a
@@ -306,14 +389,14 @@ not listed in `pastex-sites.json` are not injected or targeted.
   status with `dpkg -s pastex`. The warning itself does not prove failure.
 - If configuration is missing or a file in the folder cannot be read, open
   **Config** and reselect the folder. The folder must contain
-  `service-account.json`, `pastex-google-drive.json` and `pastex-sites.json`
-  under exactly those names (the key may also be a file whose content marks it
-  as a service-account key). The worker console can show errors.
-- If Drive says 404, share the folder with the service account email. Token
-  errors can indicate a malformed key or a disabled Drive API. Snippets appear
-  progressively while loading; a stalled Google request times out and reports
-  an error. Check network access, the folder ID, permissions, and Drive API,
-  then use **↻ Sync**. Individual unreadable files display a warning.
+  `pastex-google-drive.json`, `pastex-sites.json` and `pastex-oauth.json` under
+  exactly those names. The worker console can show errors.
+- If Drive says 404, check the folder ID and that the signed-in account can see
+  that folder. Token errors can mean a deleted OAuth client or a disabled Drive
+  API. Snippets appear progressively while loading; a stalled Google request
+  times out and reports an error. Check network access, the folder ID, the
+  registered redirect URL and the Drive API, then use **↻ Sync**. Individual
+  unreadable files display a warning.
 - The built-in Chrome Web Store, `chrome://` pages and other browser-protected
   pages cannot run extensions, even if listed.
 

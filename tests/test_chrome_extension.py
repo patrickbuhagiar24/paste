@@ -44,6 +44,8 @@ def test_manifest_permissions_are_minimal_and_documented():
         "clipboardWrite",
         "storage",
         "fileSystemAccess",
+        # chrome.identity: the sign-in window that issues the Drive token.
+        "identity",
     }
     # Broad host permissions enable dynamic registration for user-chosen sites;
     # content scripts themselves are registered only for the allowlist.
@@ -196,8 +198,8 @@ def test_no_remote_code_or_eval_in_extension_sources():
 
 def test_https_is_only_used_for_google_apis():
     # Configuration now comes from a local folder; the only Google hosts are
-    # the Drive API and its token endpoint.
-    allowed = {"www.googleapis.com", "oauth2.googleapis.com"}
+    # the Drive API, its token/revoke endpoint and the sign-in page Chrome opens.
+    allowed = {"www.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"}
     for path in sorted(EXT.glob("*.js")):
         for host in re.findall(r"https://([^/'\"\s]+)", path.read_text(encoding="utf-8")):
             assert host in allowed, f"{path.name} talks to {host}"
@@ -400,7 +402,7 @@ def test_control_recommends_a_browser():
 def test_control_describes_the_extension():
     control = (ROOT / "debian" / "control").read_text(encoding="utf-8")
     assert "Chrome extension" in control
-    assert "service account" in control
+    assert "Google OAuth" in control
     assert "offers to enable" in control
 
 
@@ -413,20 +415,27 @@ def test_postinst_points_at_the_browser_enable_step():
 def test_extension_readme_documents_setup_and_signing():
     readme = (EXT / "README.md").read_text(encoding="utf-8")
     for required in (
-        "service account",
+        "Google OAuth client",
         "Drive API",
-        "client_email",
+        "OAuth consent screen",
+        "Authorized redirect URI",
+        "chromiumapp.org",
+        "client ID",
         "PASTEX_CRX_KEY",
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
         "pastex-config-cache",
         "pastex-google-drive.json",
-        "service-account.json",
+        "pastex-oauth.json",
         "A folder picker opens directly",
         "Configuration is then **cached**",
     ):
         assert required in readme, f"README misses {required!r}"
+    # The guide must be complete enough to create the client without guessing.
+    for step in ("Enable the Drive API", "Create the OAuth client", "Web application",
+                 "Publish the consent screen", "pastex-oauth.json"):
+        assert step in readme, f"OAuth guide misses {step!r}"
 
 
 def test_packaging_never_touches_home_directories():
@@ -488,6 +497,39 @@ def test_configuration_comes_only_from_a_user_selected_folder():
     assert "PastexHandleStore" not in script
     assert "PastexConfigImport" not in script
     assert "nativeMessaging" not in _manifest()["permissions"]
+
+
+def test_drive_access_is_oauth_and_the_service_account_is_gone():
+    """One way of doing one thing: no service account survives anywhere."""
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "launchWebAuthFlow" in drive, "the token comes from Chrome's sign-in window"
+    assert "accounts.google.com/o/oauth2/v2/auth" in drive
+    assert "auth/drive.file" in drive, "only the narrow scope is requested"
+    # A public client has no secret, and a service account no longer exists.
+    for gone in ("private_key", "client_email", "service_account", "jwt", "JWT",
+                 "grant-type:jwt-bearer", "client_secret"):
+        assert gone not in drive, f"drive.js still mentions {gone!r}"
+    for path in sorted(EXT.glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        assert "service-account.json" not in text, f"{path.name} still reads a key file"
+        assert "parseServiceAccount" not in text, f"{path.name} still parses a key"
+    # The configuration folder holds a public client id, never a credential.
+    source = (EXT / "config-source.js").read_text(encoding="utf-8")
+    assert "pastex-oauth.json" in source
+    assert "client_id" in source
+    # No script in the repository signs in a service account any more.
+    for script in sorted((ROOT / "scripts").glob("*.sh")):
+        assert "jwt-bearer" not in script.read_text(encoding="utf-8"), script.name
+    assert not (ROOT / "scripts" / "check-drive-write.sh").exists()
+    assert not (ROOT / "scripts" / "get-pastex-label.sh").exists()
+
+
+def test_drive_tokens_are_never_written_to_storage():
+    """The access token lives in memory; Chrome keeps the refresh token."""
+    for name in ("drive.js", "library.js", "cache.js", "background.js"):
+        text = (EXT / name).read_text(encoding="utf-8")
+        for forbidden in ("access_token:", "set({ token", "storage.local.set({ token"):
+            assert forbidden not in text, f"{name} persists a token"
 
 
 def test_sidepanel_has_collapse_all_and_verbatim_insert():

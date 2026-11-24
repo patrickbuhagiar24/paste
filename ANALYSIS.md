@@ -278,8 +278,8 @@ writes to Drive and then gives rows their Drive id, and the refusal of
    configuration; `content.js` verifies `sender.id`; the panel uses a
    30-second capability token bound to the tab URL; MV3 CSP without remote
    code; workflow actions pinned to commit SHAs. The security documentation
-   (`SECURITY.md`, the service-account warning) is honest and does not sell
-   safety it does not have.
+   (`SECURITY.md`, the OAuth trade-off) is honest and does not sell safety it
+   does not have.
 3. **Test discipline.** Over 250 checks across JS and Python, a dependency-free
    JS runner, and many assertions that lock down *behaviour* (e.g. "a failed
    insertion must not silently fall back to the clipboard"), not only syntax.
@@ -289,14 +289,12 @@ writes to Drive and then gives rows their Drive id, and the refusal of
 
 **P1 — Technical / real risk**
 
-1. **The service-account key can be exposed through links.** The current
-   configuration model requires `service-account.json` to be downloadable by the
-   browser, so whoever holds the link holds that private key (the README already
-   warns about this). It puts Pastex on a fragile foundation for user data.
-   Suggestion: support the **OAuth user flow with the `drive.file` scope** as
-   the primary path (access only to files the app created, no key distributed),
-   keeping the service account as an advanced option. This removes the largest
-   class of risk in the project.
+1. **~~The service-account key can be exposed through links.~~** Resolved: the
+   service account is gone. Pastex now uses the **OAuth user flow with the
+   `drive.file` scope** — access only to files the app created, no key
+   distributed, and a public client id that is worthless on its own. The
+   remaining property to keep is that a cached snapshot never carries the
+   client id.
 2. **`host_permissions` is too broad** (`http://*/*`, `https://*/*`) purely to
    support dynamic script registration. It could be narrowed with
    `optional_host_permissions` requested per site when the user picks the

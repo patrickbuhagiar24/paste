@@ -42,7 +42,7 @@ function panelHarness(fail, options = {}) {
   let seq = 0;
   const drive = {
     FOLDER_MIME: "folder", TEXT_MIME: "text/plain",
-    parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
+    getAuthToken: async () => "token",
     getFolder: async () => {
       if (fail === true) throw new Error("403 denied");
       return { mimeType: "folder" };
@@ -70,7 +70,7 @@ function panelHarness(fail, options = {}) {
   let pickerCalls = 0;
   const clipboardTexts = [];
   const native = {
-    readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }),
+    readConfig: async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } }),
     resetCache() {},
     importConfigs: async (files) => { imports.push(files); return options.importResult || { imported: Object.keys(files), error: "" }; },
   };

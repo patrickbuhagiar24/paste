@@ -25,23 +25,20 @@
       if (!saved) throw new Error("Choose a configuration folder in Config first.");
       var files = saved.files || {};
       var drive = files["pastex-google-drive.json"] || {};
-      var account = files["service-account.json"] || {};
+      var oauth = files["pastex-oauth.json"] || {};
       var id = typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
       if (!id && typeof drive.folder_url === "string") {
         var match = /\/folders\/([A-Za-z0-9_-]+)/.exec(drive.folder_url);
         id = match ? match[1] : "";
       }
       var validId = /^[A-Za-z0-9_-]+$/.test(id);
-      var validKey = account.type === "service_account" &&
-        typeof account.client_email === "string" && account.client_email.trim() &&
-        typeof account.private_key === "string" &&
-        account.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 &&
-        account.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
+      var clientId = typeof oauth.client_id === "string" ? oauth.client_id.trim() : "";
+      var validClient = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
       return {
         drive: validId ? { folderId: id } : null,
         driveError: validId ? "" : "Add a pastex-google-drive.json with a valid folder_id to the configuration folder.",
-        serviceAccount: validKey ? { client_email: account.client_email, private_key: account.private_key } : null,
-        serviceAccountError: validKey ? "" : "Add a valid service-account.json key to the configuration folder.",
+        oauth: validClient ? { client_id: clientId } : null,
+        oauthError: validClient ? "" : "Add pastex-oauth.json with the client_id of a Google OAuth client (type Web application).",
         sources: {},
       };
     }

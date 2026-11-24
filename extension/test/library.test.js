@@ -5,7 +5,7 @@ const Library = require("../library.js");
 function fakeDrive() {
   return {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
-    parseServiceAccount: (text) => JSON.parse(text), fetchAccessToken: async () => "token",
+    getAuthToken: async () => "token",
     getFolder: async () => ({ id: "root", mimeType: "application/vnd.google-apps.folder" }),
     // The index is its own file now; this library has no index yet.
     readIndexFile: async () => ({ id: "", index: null }),
@@ -18,7 +18,7 @@ function fakeDrive() {
     downloadText: async (token, id) => ({ top: "top content", nested: "nested content" })[id],
   };
 }
-const native = { readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }) };
+const native = { readConfig: async () => ({ drive: { folderId: "root" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } }) };
 
 test("Drive library loads nested snippets, contents, ids, and empty folders", async () => {
   const result = await Library.load(native, fakeDrive());
@@ -32,8 +32,8 @@ test("Drive library loads nested snippets, contents, ids, and empty folders", as
 });
 
 test("Drive library reports missing configuration, invalid folder, and fetch errors", async () => {
-  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /service-account/);
-  await assert.rejects(Library.load({ readConfig: async () => ({ serviceAccount: {} }) }, fakeDrive()), /google-drive/);
+  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /pastex-google-drive\.json/);
+  await assert.rejects(Library.load({ readConfig: async () => ({ drive: { folderId: "root" } }) }, fakeDrive()), /pastex-oauth\.json/);
   const drive = fakeDrive();
   drive.getFolder = async () => ({ mimeType: "text/plain" });
   await assert.rejects(Library.load(native, drive), /not a folder/);

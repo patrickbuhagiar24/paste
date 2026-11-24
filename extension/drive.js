@@ -1,5 +1,13 @@
-/* Google Drive API access using a service-account key from the selected folder.
- * The private key is used locally to sign an assertion, not sent to Google.
+/* Google Drive API access with OAuth, as the person using Pastex.
+ *
+ * The access token is issued to the signed-in Google account, so the files it
+ * creates belong to that account and are counted against its own storage. A
+ * service account was used before and could not do this: it has no storage of
+ * its own, so Google refused every new file.
+ *
+ * There is no client secret anywhere. The extension is a public client: its
+ * bundle can be read by anyone, so a secret shipped in it would not be one.
+ *
  * Snippet files are read and written directly in the configured Drive folder.
  */
 
@@ -14,13 +22,15 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var TOKEN_URL = "https://oauth2.googleapis.com/token";
   var DRIVE_URL = "https://www.googleapis.com/drive/v3";
+  // Google's own sign-in page, and the endpoint that revokes a token.
+  var AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+  var REVOKE_URL = "https://oauth2.googleapis.com/revoke";
   var UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3";
-  // Full drive scope: a folder the user shares with the service account is
-  // NOT visible under the narrower drive.file scope, which only covers
-  // files the app itself created.
-  var SCOPES = "https://www.googleapis.com/auth/drive";
+  // drive.file covers exactly the files and folders this extension created or
+  // that the user handed to it, which is everything Pastex needs. The full
+  // drive scope would also let it read unrelated files, so it is not requested.
+  var SCOPES = "https://www.googleapis.com/auth/drive.file";
   var FOLDER_MIME = "application/vnd.google-apps.folder";
   var TEXT_MIME = "text/plain";
   var REQUEST_TIMEOUT_MS = 20000;
@@ -43,158 +53,192 @@
     }
   }
 
-  var tokenCache = { token: "", expiry: 0 };
+  // --- OAuth tokens ---------------------------------------------------------
+  //
+  // Pastex has no server and no client secret, so it uses Google's implicit
+  // flow through chrome.identity.launchWebAuthFlow(): Chrome opens Google's
+  // consent page and hands the resulting redirect URL back to the extension.
+  // The access token arrives in that URL's fragment and is never written to
+  // disk. Every request then runs as the signed-in person, so the files Pastex
+  // creates belong to that person and count against their own Drive storage.
+  //
+  // The client id is not compiled into the extension: this project is
+  // self-hosted, so each installation brings its own OAuth client, recorded in
+  // pastex-oauth.json (see the guide in README.md).
 
-  // --- base64 helpers (browser + node) ---
-
-  function bytesToBase64Url(bytes) {
-    var bin = "";
-    var CHUNK = 0x8000;
-    for (var i = 0; i < bytes.length; i += CHUNK) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  function identityApi(overrides) {
+    var api = (overrides && overrides.identity) || (typeof chrome !== "undefined" && chrome && chrome.identity);
+    if (!api || typeof api.launchWebAuthFlow !== "function" || typeof api.getRedirectURL !== "function") {
+      throw new Error("Chrome's sign-in window is unavailable. Reload Pastex from chrome://extensions and try again.");
     }
-    var b64;
-    if (typeof btoa !== "undefined") {
-      b64 = btoa(bin);
-    } else {
-      b64 = Buffer.from(bin, "binary").toString("base64");
-    }
-    return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return api;
   }
 
-  function stringToBase64Url(text) {
-    var bytes;
-    if (typeof TextEncoder !== "undefined") {
-      bytes = new TextEncoder().encode(text);
-    } else {
-      bytes = Uint8Array.from(Buffer.from(text, "utf8"));
-    }
-    return bytesToBase64Url(bytes);
+  // One token per client id, kept only in memory: an access token lives about
+  // an hour, and a discarded worker simply signs in silently again.
+  var tokens = new Map();
+
+  function cachedToken(clientId) {
+    var entry = tokens.get(clientId);
+    if (!entry) return "";
+    if (entry.expiresAt <= Date.now()) { tokens.delete(clientId); return ""; }
+    return entry.token;
   }
 
-  function base64ToBytes(b64) {
-    var bin;
-    if (typeof atob !== "undefined") {
-      bin = atob(b64);
-    } else {
-      bin = Buffer.from(b64, "base64").toString("binary");
-    }
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) {
-      bytes[i] = bin.charCodeAt(i);
-    }
-    return bytes;
+  function storeToken(clientId, token, expiresIn) {
+    var seconds = Number(expiresIn) > 0 ? Number(expiresIn) : 3600;
+    // A minute of slack: a token that expires mid-request is worse than one
+    // fetched a moment early.
+    tokens.set(clientId, { token: token, expiresAt: Date.now() + Math.max(60, seconds - 60) * 1000 });
   }
 
-  function pemToPkcs8(pem) {
-    var body = String(pem || "")
-      .replace(/-----BEGIN [^-]+-----/g, "")
-      .replace(/-----END [^-]+-----/g, "")
-      .replace(/\s+/g, "");
-    if (!body) {
-      throw new Error("the private_key field is empty");
+  function randomState() {
+    var bytes = new Uint8Array(16);
+    globalCrypto().getRandomValues(bytes);
+    return Array.from(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  function globalCrypto() {
+    var api = typeof crypto !== "undefined" ? crypto : null;
+    if (!api || !api.getRandomValues) throw new Error("A secure random source is unavailable in this context.");
+    return api;
+  }
+
+  // Google answers either in the fragment (response_type=token) or, when it
+  // refuses, in the query string. Both are read, and `state` is checked before
+  // a token is accepted.
+  function readRedirect(redirectUrl, expectedState) {
+    var url = new URL(redirectUrl);
+    var fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
+    var query = url.searchParams;
+    var state = fragment.get("state") || query.get("state") || "";
+    if (expectedState && state !== expectedState) throw new Error("Google's answer did not match this request. Try signing in again.");
+    var failure = fragment.get("error") || query.get("error");
+    if (failure) {
+      var detail = fragment.get("error_description") || query.get("error_description") || failure;
+      throw new Error(detail);
     }
+    var token = fragment.get("access_token") || query.get("access_token") || "";
+    if (!token) throw new Error("Google's answer held no access token.");
+    return { token: token, expiresIn: fragment.get("expires_in") || query.get("expires_in") };
+  }
+
+  function authUrl(clientId, redirectUri, interactive, state) {
+    var url = new URL(AUTH_URL);
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("response_type", "token");
+    url.searchParams.set("scope", SCOPES);
+    url.searchParams.set("state", state);
+    // A silent request never shows a page: it only works while the person has
+    // already granted Pastex access, which is exactly when no page is wanted.
+    url.searchParams.set("prompt", interactive ? "select_account" : "none");
+    return url.toString();
+  }
+
+  // One trip through Chrome's sign-in window. `interactive` decides whether a
+  // page may appear: false means Google must answer silently from a grant it
+  // already holds, which is the normal case on every sync after the first.
+  function authorize(api, clientId, redirectUri, interactive) {
+    var state = randomState();
+    return new Promise(function (resolve, reject) {
+      try {
+        api.launchWebAuthFlow({ url: authUrl(clientId, redirectUri, interactive, state), interactive: interactive },
+          function (redirectedTo) {
+            var failure = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
+            if (failure) { reject(new Error(failure.message || "Google sign-in failed.")); return; }
+            if (!redirectedTo) {
+              reject(new Error(interactive ? "Google sign-in returned no answer."
+                : "Pastex is not signed in yet. Sync once and accept Google's request."));
+              return;
+            }
+            try { resolve(readRedirect(redirectedTo, state)); }
+            catch (err) { reject(err); }
+          });
+      } catch (err) {
+        reject(new Error("Google sign-in failed: " + (err && err.message ? err.message : err)));
+      }
+    });
+  }
+
+  /* getAuthToken({ clientId, interactive }) -> access token string.
+   *
+   * The token comes from the browser's sign-in window, never from a key file.
+   * A cached, unexpired token is reused, so an ordinary sync costs nothing.
+   * Otherwise a silent attempt comes first: Chrome's worker is restarted often,
+   * and the grant Google already holds is enough, so no page appears. Only when
+   * that is refused — first run on this computer, or access withdrawn — is the
+   * interactive page opened, and only if the caller allows it. */
+  async function getAuthToken(options) {
+    options = options || {};
+    var clientId = String(options.clientId || "").trim();
+    if (!clientId) throw new Error("Add pastex-oauth.json with the client_id of a Google OAuth client.");
+    var cached = cachedToken(clientId);
+    if (cached) return cached;
+    var api = identityApi(options);
+    var redirectUri = options.redirectUri || api.getRedirectURL();
+    var parsed;
     try {
-      return base64ToBytes(body);
+      parsed = await authorize(api, clientId, redirectUri, false);
     } catch (err) {
-      throw new Error("the private_key is not valid base64");
+      // A silent refusal is not a bug to report: Google simply will not answer
+      // without asking the person, so the message says what to do instead.
+      if (!options.interactive) throw explainSignIn(err, redirectUri, true);
+      try {
+        parsed = await authorize(api, clientId, redirectUri, true);
+      } catch (prompted) {
+        throw explainSignIn(prompted, redirectUri);
+      }
     }
+    storeToken(clientId, parsed.token, parsed.expiresIn);
+    return parsed.token;
   }
 
-  // --- service-account key handling ---
-
-  function parseServiceAccount(text) {
-    var data;
-    try {
-      data = JSON.parse(String(text || ""));
-    } catch (err) {
-      throw new Error("that is not valid JSON");
+  // The one sign-in failure that is a configuration value rather than a bug: the
+  // console must list the exact redirect URL Chrome reports. It is quoted in the
+  // message because the panel has a single status line and no help panel.
+  function explainSignIn(err, redirectUri, silent) {
+    var reason = err && err.message ? err.message : String(err);
+    if (silent && !/redirect_uri/i.test(reason)) {
+      return new Error("Pastex is not signed in yet. Sync once and accept Google's request. Google said: " + reason);
     }
-    if (!data || typeof data !== "object") {
-      throw new Error("that is not a service-account key file");
+    if (/redirect_uri/i.test(reason)) {
+      return new Error("Google does not recognise this extension's redirect URL. Add " +
+        redirectUri + " to the authorized redirect URIs of the OAuth client. Google said: " + reason);
     }
-    if (!data.client_email || !data.private_key) {
-      throw new Error("the key needs client_email and private_key fields");
-    }
-    if (data.type && data.type !== "service_account") {
-      throw new Error('the key type is "' + data.type + '", not "service_account"');
-    }
-    // Fail fast on a truncated key instead of at sync time.
-    pemToPkcs8(data.private_key);
-    return { client_email: data.client_email, private_key: data.private_key };
+    return err instanceof Error ? err : new Error(reason);
   }
 
-  function claimSet(email, nowSec, ttlSec) {
-    return {
-      iss: email,
-      scope: SCOPES,
-      aud: TOKEN_URL,
-      iat: nowSec,
-      exp: nowSec + (ttlSec || 3600),
-    };
+  // The redirect URL to register in the Google Cloud console. Chrome derives it
+  // from the extension id, so it must be read from a running installation
+  // rather than from a document. Used by Config to show the exact value.
+  function getRedirectURL(overrides) {
+    return identityApi(overrides).getRedirectURL();
   }
 
-  function subtleCrypto(overrides) {
-    if (overrides && overrides.subtle) {
-      return overrides.subtle;
-    }
-    if (typeof crypto !== "undefined" && crypto.subtle) {
-      return crypto.subtle;
-    }
-    if (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.subtle) {
-      return globalThis.crypto.subtle;
-    }
-    throw new Error("WebCrypto (crypto.subtle) is unavailable");
+  // A token Google has already revoked cannot be reused. Dropping it from the
+  // cache makes the next call sign in again instead of leaving the panel stuck
+  // until the browser restarts.
+  async function removeCachedToken(token) {
+    tokens.forEach(function (entry, clientId) {
+      if (entry.token === token) tokens.delete(clientId);
+    });
   }
 
-  async function signJwt(subtle, privateKeyPem, claims) {
-    var header = { alg: "RS256", typ: "JWT" };
-    var unsigned = stringToBase64Url(JSON.stringify(header)) + "." + stringToBase64Url(JSON.stringify(claims));
-    var keyBytes = pemToPkcs8(privateKeyPem);
-    // A fresh ArrayBuffer: importKey rejects views with a nonzero byteOffset.
-    var keyBuffer = keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength);
-    var key;
-    try {
-      key = await subtle.importKey("pkcs8", keyBuffer, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
-    } catch (err) {
-      throw new Error("the private_key could not be imported (" + (err && err.message ? err.message : err) + ")");
+  /* Signing out revokes the token at Google as well as forgetting it here, so
+   * nothing that was handed out stays valid. */
+  async function signOut() {
+    var issued = Array.from(tokens.values()).map(function (entry) { return entry.token; });
+    tokens.clear();
+    for (var i = 0; i < issued.length; i++) {
+      await withTimeout(async function (signal) {
+        await fetch(REVOKE_URL, {
+          method: "POST", signal: signal,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token: issued[i] }).toString(),
+        });
+      }, REQUEST_TIMEOUT_MS).catch(function () { /* the token is already forgotten */ });
     }
-    var data = typeof TextEncoder !== "undefined" ? new TextEncoder().encode(unsigned) : Uint8Array.from(Buffer.from(unsigned, "utf8"));
-    var signature = await subtle.sign("RSASSA-PKCS1-v1_5", key, data);
-    return unsigned + "." + bytesToBase64Url(new Uint8Array(signature));
-  }
-
-  function clearTokenCache() {
-    tokenCache = { token: "", expiry: 0 };
-  }
-
-  async function fetchAccessToken(sa, overrides) {
-    overrides = overrides || {};
-    var nowSec = Math.floor(Date.now() / 1000);
-    if (tokenCache.token && tokenCache.expiry - 60 > nowSec &&
-        tokenCache.email === sa.client_email && tokenCache.privateKey === sa.private_key) {
-      return tokenCache.token;
-    }
-    var subtle = subtleCrypto(overrides);
-    var assertion = await signJwt(subtle, sa.private_key, claimSet(sa.client_email, nowSec));
-    var fetchImpl = overrides.fetchImpl || fetch;
-    var tokenResult = await withTimeout(async function (signal) {
-      var response = await fetchImpl(TOKEN_URL, {
-        method: "POST", signal: signal,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "grant_type=" + encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer") +
-          "&assertion=" + encodeURIComponent(assertion),
-      });
-      return { res: response, data: await response.json().catch(function () { return {}; }) };
-    }, overrides.timeoutMs);
-    var res = tokenResult.res;
-    var data = tokenResult.data;
-    if (!res.ok || !data.access_token) {
-      throw new Error("token request failed (HTTP " + res.status + "): " + (data.error_description || data.error || "unknown error"));
-    }
-    tokenCache = { token: data.access_token, expiry: nowSec + (data.expires_in || 3600),
-      email: sa.client_email, privateKey: sa.private_key };
-    return tokenCache.token;
   }
 
   // --- Drive v3 REST helpers ---
@@ -226,15 +270,13 @@
           if (parsed && parsed.error && parsed.error.message) detail = parsed.error.message;
         } catch (ignored) { /* keep the raw text */ }
         var message = String(detail);
-        // The one Drive failure that is not about Pastex at all, and the one
-        // that looks like a Pastex bug: a service account may not create files,
-        // so a snippet cannot be added while a folder still can. Drive's own
-        // wording does not say what to do, so the sentence is spelled out.
+        // A full Drive is not something Pastex can retry away, and Drive's own
+        // wording does not say whose storage is full. The sentence is spelled
+        // out so the panel can be honest about what to free.
         if (/storage quota|storageQuotaExceeded/i.test(message)) {
-          throw new Error("Google will not let the service account create files: " +
-            "a service account has no storage of its own. Move the folder into a " +
-            "Shared Drive and add the service account as a Content manager " +
-            "(folders and existing snippets keep working, creating new ones does not). " +
+          throw new Error("Your Google account is out of Drive storage, so Google will not " +
+            "accept new files. Free space in Drive, or use a folder inside a Shared Drive " +
+            "(that space is counted against the Shared Drive, not your account). " +
             "Drive said: " + message.slice(0, 200));
         }
         throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + message.slice(0, 300));
@@ -314,10 +356,7 @@
   }
 
   async function downloadText(token, fileId, fetchImpl) {
-    return driveFetch(token, "/files/" + encodeURIComponent(fileId), {
-      query: { alt: "media" }, textResponse: true,
-      fetchImpl: fetchImpl,
-    });
+    return readFileText(token, fileId, fetchImpl);
   }
 
   async function renameFile(token, fileId, name, fetchImpl) {
@@ -439,16 +478,13 @@
   }
 
   return {
-    TOKEN_URL: TOKEN_URL,
     FOLDER_MIME: FOLDER_MIME,
     TEXT_MIME: TEXT_MIME,
-    stringToBase64Url: stringToBase64Url,
-    base64ToBytes: base64ToBytes,
-    parseServiceAccount: parseServiceAccount,
-    claimSet: claimSet,
-    signJwt: signJwt,
-    clearTokenCache: clearTokenCache,
-    fetchAccessToken: fetchAccessToken,
+    SCOPES: SCOPES,
+    getAuthToken: getAuthToken,
+    getRedirectURL: getRedirectURL,
+    removeCachedToken: removeCachedToken,
+    signOut: signOut,
     driveFetch: driveFetch,
     listChildren: listChildren,
     getFolder: getFolder,

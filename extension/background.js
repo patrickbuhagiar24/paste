@@ -237,7 +237,8 @@ async function runIdleSync(assumeIdle) {
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
-    if (/configure a|choose a configuration folder|add a pastex-google-drive/i.test(message)) nextSyncAt = Date.now() + CONFIG_RETRY_MS;
+    if (/configure a|choose a configuration folder|add a pastex-google-drive|add a pastex-oauth|Google sign-in/i.test(message))
+      nextSyncAt = Date.now() + CONFIG_RETRY_MS;
     else console.warn("Pastex background sync skipped:", message);
   } finally { idleSyncRunning = false; }
 }
@@ -737,49 +738,62 @@ function driveCommandFor(entry, session, snapshot) {
 // connect is an OAuth token plus a folder read and a queue of ten entries
 // would otherwise pay for twenty requests.
 async function sendQueued(entry, session) {
-  var result;
-  try {
-    var active = session || await PastexLibrary.connect(PastexConfig, PastexDrive);
-    // Read once per entry, before the write lock: mutate() invalidates the
-    // snapshot before it runs, so a read taken inside would always be empty,
-    // and a read taken once per flush would miss the previous entry's write.
-    var snapshot = await libraryCache.current();
-    result = await libraryCache.mutate(async function () {
-      var command = driveCommandFor(entry, active, snapshot);
-      if (!command) return { skipped: true };
-      var written = await applyDriveCommand(active, command);
-      // A created row now has its Drive id, and the cached snapshot follows at
-      // once: this runs while the write still holds the library lock, before
-      // the invalidation that drops the snapshot.
-      return written;
-    });
-  } catch (err) {
-    var failure = err && err.message ? err.message : String(err);
-    if (isStorageQuotaRefusal(failure)) {
-      // Kept, not dropped: see isStorageQuotaRefusal. The panel is told at once
-      // so the reason is visible without pressing Sync, and the row stays in
-      // the cache because the write is still going to happen.
-      lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure, kept: true });
-      notifyPanelsBlocked(failure);
+  // A revoked OAuth token answers 401 once. Forgetting the token and signing in
+  // again is enough, so a single retry is allowed here instead of leaving the
+  // whole queue stuck until the browser restarts. The retry is its own small
+  // loop around the body: a `continue` inside the catch would skip the
+  // bookkeeping below only by accident of nesting.
+  for (var attempt = 0; attempt < 2; attempt++) {
+    var result;
+    try {
+      var active = session || (await PastexLibrary.connect(PastexConfig, PastexDrive));
+      // Read once per entry, before the write lock: mutate() invalidates the
+      // snapshot before it runs, so a read taken inside would always be empty,
+      // and a read taken once per flush would miss the previous entry's write.
+      var snapshot = await libraryCache.current();
+      result = await libraryCache.mutate(async function () {
+        var command = driveCommandFor(entry, active, snapshot);
+        if (!command) return { skipped: true };
+        var written = await applyDriveCommand(active, command);
+        // A created row now has its Drive id, and the cached snapshot follows at
+        // once: this runs while the write still holds the library lock, before
+        // the invalidation that drops the snapshot.
+        return written;
+      });
+    } catch (err) {
+      var failure = err && err.message ? err.message : String(err);
+      if (/HTTP 401\b/.test(failure) && attempt === 0) {
+        // The token Google no longer accepts: drop it and ask for a fresh one.
+        if (session && session.token) await PastexDrive.removeCachedToken(session.token);
+        session = null;
+        continue;
+      }
+      if (isStorageQuotaRefusal(failure)) {
+        // Kept, not dropped: see isStorageQuotaRefusal. The panel is told at
+        // once so the reason is visible without pressing Sync, and the row
+        // stays in the cache because the write is still going to happen.
+        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure, kept: true });
+        notifyPanelsBlocked(failure);
+        return { ok: false, retry: true, error: failure };
+      }
+      if (isPermanentFailure(failure)) {
+        // Refused for good. The entry cannot be retried, but dropping it in
+        // silence is how a write disappears without a word: the panel is told,
+        // so the user sees why the row did not land, and an open panel repaints
+        // without the row that Drive does not have.
+        console.warn("Pastex: a queued write was refused and dropped:", failure);
+        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure });
+        await deferredQueue.remove([entry.id]);
+        await libraryCache.dropLocal(entry);
+        notifyPanelsDropped(failure);
+        return { ok: false, retry: false, error: failure };
+      }
+      // Offline, a rate limit or a missing configuration: keep it for later.
       return { ok: false, retry: true, error: failure };
     }
-    if (isPermanentFailure(failure)) {
-      // Refused for good. The entry cannot be retried, but dropping it in
-      // silence is how a write disappears without a word: the panel is told,
-      // so the user sees why the row did not land, and an open panel repaints
-      // without the row that Drive does not have.
-      console.warn("Pastex: a queued write was refused and dropped:", failure);
-      lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure });
-      await deferredQueue.remove([entry.id]);
-      await libraryCache.dropLocal(entry);
-      notifyPanelsDropped(failure);
-      return { ok: false, retry: false, error: failure };
-    }
-    // Offline, a rate limit or a missing configuration: keep it for later.
-    return { ok: false, retry: true, error: failure };
+    await deferredQueue.remove([entry.id]);
+    return { ok: true, id: result && result.id };
   }
-  await deferredQueue.remove([entry.id]);
-  return { ok: true, id: result && result.id };
 }
 
 // Replay the edits that are still waiting onto a freshly read snapshot, so the
@@ -800,10 +814,10 @@ async function replayPendingEdits() {
   return replay.length;
 }
 
-// A service account may not create files at all, and Drive says so with a 403.
-// That is a configuration problem the user can fix (move the library into a
-// Shared Drive), not a write that is wrong, so the entry is kept: the text in
-// it is user content and dropping it would lose work.
+// A full Drive answers with a 403 that no retry can fix. That is a problem the
+// user can change (free space, or move the library into a Shared Drive), not a
+// write that is wrong, so the entry is kept: the text in it is user content and
+// dropping it would lose work.
 function isStorageQuotaRefusal(message) {
   return /storage quota|storageQuotaExceeded/i.test(String(message || ""));
 }

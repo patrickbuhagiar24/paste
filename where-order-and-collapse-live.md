@@ -89,11 +89,9 @@ GET https://www.googleapis.com/drive/v3/files/<ROOT_FOLDER_ID>?q=name='pastex-in
 GET https://www.googleapis.com/drive/v3/files/<INDEX_FILE_ID>?alt=media
 ```
 
-Or with the script in this repository:
-
-```bash
-./scripts/get-pastex-label.sh -k /path/to/service-account.json
-```
+The first call tells you the index file's id; the second prints it. Both run as
+whichever Google account is signed in to Chrome, so there is nothing to share
+and no key to handle.
 
 ## Notes
 

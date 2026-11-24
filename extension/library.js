@@ -108,10 +108,12 @@
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
     if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
-    var account = drive.parseServiceAccount(JSON.stringify(config.serviceAccount));
-    var token = await drive.fetchAccessToken(account);
+    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "Add a pastex-oauth.json to the configuration folder.");
+    // A token for the signed-in account, signed in with the client id this
+    // installation put in pastex-oauth.json. The first call of a session may
+    // show Google's page, which is why it is interactive.
+    var token = await drive.getAuthToken({ clientId: config.oauth.client_id, interactive: true });
     var rootId = config.drive.folderId;
     var folder = await drive.getFolder(token, rootId);
     if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive ID is not a folder.");

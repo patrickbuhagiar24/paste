@@ -12,12 +12,12 @@
   else root.PastexConfigSource = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
-  var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", ACCOUNT = "service-account.json";
+  var DRIVE = "pastex-google-drive.json", SITES = "pastex-sites.json", OAUTH = "pastex-oauth.json";
   var FOLDER = "folder ", CACHE = "pastex-config-cache";
   // The cached configuration shape is versioned. A record with another version
   // is treated as absent, which asks the user to pick the folder again instead
   // of decoding an unknown shape. See DEVELOPMENT.md.
-  var CACHE_VERSION = 2;
+  var CACHE_VERSION = 3;
   var MAX_BYTES = 256 * 1024;
 
   function create(sites, cacheStore) {
@@ -72,11 +72,12 @@
       return raw;
     }
 
-    /* Identify the three files. The Drive and sites files must carry their
-     * canonical names: a rename is not supported, it is a configuration the
-     * user fixes once (DEVELOPMENT.md: no compatibility layer for names).
-     * The service-account key is the exception, because Google downloads it
-     * under a project-specific name, so it is recognised by its content. */
+    /* Identify the three files. All three carry canonical names: a rename is
+     * not supported, it is a configuration the user fixes once (DEVELOPMENT.md:
+     * no compatibility layer for names). Only pastex-sites.json and
+     * pastex-google-drive.json are shared with anyone else, and
+     * pastex-oauth.json holds the client id of this installation, which is why
+     * it is never shared: it is bound to one extension id. */
     function identify(raw) {
       var files = {}, sources = {};
       if (Object.prototype.hasOwnProperty.call(raw, DRIVE)) {
@@ -87,21 +88,9 @@
         files[SITES] = raw[SITES];
         sources[SITES] = SITES;
       }
-      if (Object.prototype.hasOwnProperty.call(raw, ACCOUNT)) {
-        files[ACCOUNT] = raw[ACCOUNT];
-        sources[ACCOUNT] = ACCOUNT;
-      } else {
-        var keys = Object.keys(raw).filter(function (name) {
-          return name !== DRIVE && name !== SITES && /\.json$/i.test(name);
-        });
-        for (var i = 0; i < keys.length; i++) {
-          var value = raw[keys[i]];
-          if (value && value.type === "service_account") {
-            files[ACCOUNT] = value;
-            sources[ACCOUNT] = keys[i];
-            break;
-          }
-        }
+      if (Object.prototype.hasOwnProperty.call(raw, OAUTH)) {
+        files[OAUTH] = raw[OAUTH];
+        sources[OAUTH] = OAUTH;
       }
       return { files: files, sources: sources };
     }
@@ -112,7 +101,7 @@
      * one by one. */
     function problems(found) {
       var files = found.files || {};
-      var drive = files[DRIVE], sa = files[ACCOUNT], sitesFile = files[SITES];
+      var drive = files[DRIVE], oauth = files[OAUTH], sitesFile = files[SITES];
       var list = [];
 
       var id = drive && typeof drive.folder_id === "string" ? drive.folder_id.trim() : "";
@@ -124,13 +113,12 @@
       if (!drive) list.push(DRIVE + " is missing");
       else if (!validId) list.push(DRIVE + " has no usable folder_id or folder_url");
 
-      var validSa = sa && sa.type === "service_account" &&
-        typeof sa.client_email === "string" && sa.client_email.trim() &&
-        typeof sa.private_key === "string" &&
-        sa.private_key.indexOf("-----BEGIN PRIVATE KEY-----") !== -1 &&
-        sa.private_key.indexOf("-----END PRIVATE KEY-----") !== -1;
-      if (!sa) list.push(ACCOUNT + " is missing");
-      else if (!validSa) list.push(ACCOUNT + " is not a usable service-account key");
+      // A Google OAuth client id looks like
+      // 123456789012-abcdefghijklmnop.apps.googleusercontent.com
+      var clientId = oauth && typeof oauth.client_id === "string" ? oauth.client_id.trim() : "";
+      var validClient = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
+      if (!oauth) list.push(OAUTH + " is missing");
+      else if (!validClient) list.push(OAUTH + " needs the client_id of a Google OAuth client (type Web application)");
 
       if (!sitesFile) list.push(SITES + " is missing");
       else if (!Array.isArray(sitesFile.allowed_sites)) list.push(SITES + " needs an allowed_sites array");
@@ -141,8 +129,8 @@
 
       return {
         list: list,
-        value: validId && validSa && sitesFile && Array.isArray(sitesFile.allowed_sites) ?
-          { folderId: id, client_email: sa.client_email, private_key: sa.private_key, allowedSites: sitesFile.allowed_sites } : null,
+        value: validId && validClient && sitesFile && Array.isArray(sitesFile.allowed_sites) ?
+          { folderId: id, clientId: clientId, allowedSites: sitesFile.allowed_sites } : null,
       };
     }
 
@@ -162,7 +150,7 @@
       await writeCache(found.files, handle.name || "");
       memoized.config = null; memoized.configKey = "";
       memoized.sites = null; memoized.sitesKey = "";
-      return { drive: FOLDER + DRIVE, account: FOLDER + ACCOUNT, sites: FOLDER + SITES };
+      return { drive: FOLDER + DRIVE, oauth: FOLDER + OAUTH, sites: FOLDER + SITES };
     }
 
     /* All later reads come from the cache; the folder is not used again. */
@@ -175,8 +163,8 @@
         return {
           drive: { folderId: v.folderId },
           driveError: "",
-          serviceAccount: { client_email: v.client_email, private_key: v.private_key },
-          serviceAccountError: "",
+          oauth: { client_id: v.clientId },
+          oauthError: "",
           sources: {},
         };
       });

@@ -168,7 +168,7 @@ def test_rendered_control_keeps_the_description_text():
     assert "Package: pastex" in rendered
     assert "Version: 2.0.0-1" in rendered
     description = rendered.split("Description:", 1)[1]
-    assert "service account" in description
+    assert "Google OAuth" in description
     assert "`" not in description
     assert "$" not in description
 

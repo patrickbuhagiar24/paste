@@ -93,18 +93,18 @@ files:
 | File | Contents | Analogy |
 | --- | --- | --- |
 | `pastex-google-drive.json` | the Drive folder id or link | **warehouse address** |
-| `service-account.json` | the access key from Google | **warehouse key** |
+| `pastex-oauth.json` | the public OAuth client id of this installation | **who you are** |
 | `pastex-sites.json` | the list of sites allowed to use Pastex | **guest list** |
 
-The two named files must carry those exact names. The key is recognised by its
-**content**, because Google downloads it under a project-specific name. After
-the folder is picked, its contents are **copied into Pastex's memory**, so the
-folder is never opened again (not even after the browser restarts). When
+All three must carry those exact names; nothing is identified by its content.
+After the folder is picked, its contents are **copied into Pastex's memory**, so
+the folder is never opened again (not even after the browser restarts). When
 something is wrong, Pastex reports **every** problem at once and the previous
 configuration stays in use.
 
-**The warehouse key is never stored or displayed.** It is used on the spot to
-ask Google for permission.
+**The folder holds no secret.** A client id is public by design; the credential
+lives with Google and Chrome. Nothing in the folder is a key, so a leaked folder
+grants nobody access to Drive.
 
 ## 6. The guest list (allowed sites)
 
@@ -179,7 +179,7 @@ second way** of doing the same thing. What that means for a user:
 | --- | --- |
 | Order and folded folders | May return to Drive's order with folders open. Arrange them again once. |
 | The snippet files in Google Drive | **Never** touched. Always intact, readable by any other app. |
-| Configuration file names | Must be exact (`pastex-google-drive.json`, `pastex-sites.json`); the service-account key may have any name. |
+| Configuration file names | Must be exact: `pastex-google-drive.json`, `pastex-sites.json`, `pastex-oauth.json`. |
 | Browser requirement | Chrome/Chromium 141 or newer. |
 
 If the panel looks odd after an update during development, run

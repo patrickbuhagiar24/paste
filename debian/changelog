@@ -1,3 +1,41 @@
+pastex (2.23.0-1) unstable; urgency=medium
+
+  * BREAKING: Drive access now runs as you, through Google OAuth, and the
+    service account is gone. Pastex asks Chrome to open Google's sign-in page
+    for a client id you create once, and keeps only an access token in memory
+    for about an hour. The files it writes belong to your Google account, count
+    against your own Drive storage, and open normally in Drive. The whole class
+    of "a folder can be created but a snippet cannot" disappears with it: a
+    service account has no storage of its own, so Google refused every file it
+    tried to create in a personal folder.
+  * BREAKING: configuration is three files, and the key file is no longer one
+    of them. `service-account.json` is replaced by `pastex-oauth.json`, which
+    holds only the public client id of your installation (for example
+    `{"client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"}`).
+    All three files (`pastex-google-drive.json`, `pastex-sites.json`,
+    `pastex-oauth.json`) must now carry their exact names; the old rule that
+    recognised a key by its content is removed with the key. The cached
+    configuration shape moved to version 3, so Pastex asks for the folder once
+    more after the upgrade.
+  * No client secret is needed, and none is accepted: an extension is a public
+    client, and Google hands the token back to Chrome directly. Only the
+    `drive.file` scope is requested, which reaches the files Pastex itself
+    created and nothing else. Signing out revokes the token at Google.
+  * The sign-in window reports the exact redirect URL to register
+    (`https://<extension-id>.chromiumapp.org/`) when Google answers
+    `redirect_uri_mismatch`, and a 401 drops the cached token and retries once
+    instead of leaving the queue stuck until the browser restarts.
+  * The extension README now carries the complete OAuth guide: Cloud project,
+    Drive API, consent screen, client creation, publishing, and the client id
+    file. The manifest gains the `identity` permission.
+  * BREAKING: `scripts/check-drive-write.sh` and
+    `scripts/get-pastex-label.sh` are removed. Both existed only to sign in a
+    service account with `openssl`, and the project does not keep two ways to
+    do one thing. `where-order-and-collapse-live.md` keeps the two API calls
+    that read the index, which now run as the signed-in account.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 02:00:00 +0000
+
 pastex (2.22.0-1) unstable; urgency=medium
 
   * Fixed: a snippet that Drive would not accept was thrown away. A service

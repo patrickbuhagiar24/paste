@@ -22,21 +22,17 @@ function storage(initial) {
   };
 }
 
-const account = {
-  type: "service_account",
-  client_email: "service@example.iam.gserviceaccount.com",
-  private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
-};
+const oauthFile = { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" };
 function record(files) {
   return {
-    "pastex-config-cache": { version: 1, savedAt: "2026-01-01T00:00:00.000Z", folder: "config", files: files },
+    "pastex-config-cache": { version: 3, savedAt: "2026-01-01T00:00:00.000Z", folder: "config", files: files },
   };
 }
 function goodFiles() {
   return {
     "pastex-google-drive.json": { folder_url: "https://drive.google.com/drive/folders/rootid" },
     "pastex-sites.json": { allowed_sites: ["https://example.org"] },
-    "service-account.json": account,
+    "pastex-oauth.json": oauthFile,
   };
 }
 
@@ -45,7 +41,8 @@ test("the worker reads configuration from storage without any folder access", as
   const config = load(store).create(store);
   const drive = await config.readConfig();
   assert.equal(drive.drive.folderId, "rootid");
-  assert.equal(drive.serviceAccount.client_email, account.client_email);
+  assert.equal(drive.oauth.client_id, oauthFile.client_id);
+  assert.equal(drive.oauthError, "");
   assert.equal(drive.driveError, "");
   assert.deepEqual((await config.readSites()).allowedSites, ["https://example.org"]);
 });
@@ -65,14 +62,14 @@ test("folder_id wins over folder_url and a missing id is reported, not thrown at
   assert.match(result.driveError, /pastex-google-drive\.json/);
 });
 
-test("an unusable key is reported through serviceAccountError", async () => {
+test("an unusable client id is reported through oauthError", async () => {
   const files = goodFiles();
-  delete files["service-account.json"];
+  files["pastex-oauth.json"] = { client_id: "123456789012-abcdefghijklmnop" };
   const store = storage(record(files));
   const config = load(store).create(store);
   const result = await config.readConfig();
-  assert.equal(result.serviceAccount, null);
-  assert.match(result.serviceAccountError, /service-account\.json/);
+  assert.equal(result.oauth, null);
+  assert.match(result.oauthError, /pastex-oauth\.json/);
 });
 
 test("sites fail closed and a missing configuration explains what to do", async () => {
