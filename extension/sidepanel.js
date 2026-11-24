@@ -32,7 +32,6 @@
   var loadConfigVersion = 0;
   var selecting = false;
   var selectedItems = new Set();
-  var lastCheckedAt = 0;
   // Edits made here are applied to the cache at once; their Drive write waits
   // in the worker's queue until the tab is left, so nothing is fetched while
   // the user works.
@@ -67,34 +66,6 @@
     node.textContent = text;
     if (tone) node.setAttribute("data-state", tone);
     else node.removeAttribute("data-state");
-  }
-
-  // The panel shows when the library was last confirmed with Drive, so the
-  // age of the list is visible even when nothing changed.
-  function relativeTime(timestamp) {
-    if (!timestamp) return "never";
-    var seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-    if (seconds < 45) return "just now";
-    var minutes = Math.round(seconds / 60);
-    if (minutes < 60) return minutes + " min ago";
-    var hours = Math.round(minutes / 60);
-    if (hours < 24) return hours + " h ago";
-    return Math.round(hours / 24) + " d ago";
-  }
-
-  function renderLastChecked() {
-    var node = $("last-checked");
-    if (!node) return;
-    node.textContent = "Checked: " + relativeTime(lastCheckedAt);
-    node.title = lastCheckedAt
-      ? "Google Drive was last checked at " + new Date(lastCheckedAt).toLocaleTimeString()
-      : "The library has not been checked yet.";
-  }
-
-  function noteChecked(timestamp) {
-    if (!timestamp) return;
-    lastCheckedAt = timestamp;
-    renderLastChecked();
   }
 
   function esc(text) {
@@ -324,16 +295,12 @@
     return selectedId ? index.byId.get(selectedId) || null : null;
   }
 
-  function renderDriveBar() {
+  // The panel has one status line, and it is for what just happened. There is no
+  // permanent "connected" label and no "checked N min ago" second line: the
+  // buttons already say whether Drive can be used, and a failure has to be the
+  // thing that is readable.
+  function renderButtons() {
     var folders = index.folders.length;
-    var state = busy ? "busy" : (ready ? "ready" : "error");
-    var label = busy ? "Drive: loading…" :
-      (ready ? (pendingWrites ? "Saved here • " + pendingWrites + " change(s) go to Drive when you leave this site" :
-        (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected")) : "Google Drive unavailable");
-    $("drive-status").textContent = label;
-    // The dot is a sibling of the label now, so the state lives on the bar.
-    $("drive-bar").setAttribute("data-state", state);
-    $("drive-dot").setAttribute("data-state", state);
     $("btn-sync").disabled = busy;
     $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
@@ -342,6 +309,13 @@
     // While Drive is unusable, Sync is the action that helps; the create
     // buttons keep their primary look only when a click can succeed.
     $("btn-sync").className = ready ? "" : "primary";
+  }
+
+  // Saving is local, so a queued change is not an error; it is reported once,
+  // when a save leaves something waiting, instead of as a permanent label.
+  function reportPending() {
+    if (!pendingWrites) return;
+    setStatus("Saved here. " + pendingWrites + " change(s) go to Drive when you leave this site.", "ok");
   }
 
   function onProgress(partial, id) {
@@ -365,9 +339,14 @@
     progressPort.onMessage.addListener(function (message) {
       if (!message) return;
       // The background worker refreshed the cache while the user was away.
-      if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
+      if (message.changed) { applyBackgroundChange(); return; }
       if (message.filled) { applyBackgroundChange(); return; }
       if (message.local) { if (typeof message.pending === "number") pendingWrites = message.pending; applyBackgroundChange(); return; }
+      // A queued write is waiting for a change only the user can make.
+      if (message.blocked) {
+        setStatus("Not sent: " + message.reason + " The change is kept and will be sent once this is fixed.", "error");
+        return;
+      }
       // Drive refused a queued write for good; the row it described is gone.
       if (message.dropped) {
         setStatus("Drive refused a saved change" + (message.reason ? ": " + message.reason : "."), "error");
@@ -430,8 +409,7 @@
       if (selectedId && !index.byId.has(selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
-      renderDriveBar();
-      noteChecked(result.lastCheckedAt);
+      renderButtons();
       if (result.pending) fillMissingBodies();
     } catch (ignored) {
       // A failed background update keeps the current list; the next manual
@@ -445,7 +423,7 @@
     busy = true;
     loading = true;
     loadConfigVersion = configVersion;
-    renderDriveBar();
+    renderButtons();
     render();
     if (!quiet) setStatus(force ? "Syncing…" : "Loading…");
     try {
@@ -462,7 +440,6 @@
       if (selectedId && !index.byId.has(selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
-      noteChecked(result.lastCheckedAt);
       // The cached open is instant; the rest of the library (if the snapshot
       // is missing bodies) is filled from the worker without a Drive listing.
       if (result.cached && result.pending) scheduleFill();
@@ -486,7 +463,7 @@
       loading = false;
       if (progressTimer) { window.clearTimeout(progressTimer); progressTimer = 0; }
       busy = false;
-      renderDriveBar();
+      renderButtons();
       render();
       if (refreshRequested) { refreshRequested = false; refresh(true); }
     }
@@ -779,7 +756,7 @@
     if (busy || !ready) return null;
     busy = true;
     savingLocal = true;
-    renderDriveBar();
+    renderButtons();
     render();
     setStatus("Saving…");
     var result = null, failure = "";
@@ -798,9 +775,10 @@
     // caller says whether its own dialog is still open at this point: a save
     // closes the editor after the repaint, a move closes it before.
     await applyBackgroundChange(!!whileEditing);
-    renderDriveBar();
+    renderButtons();
     if (failure) setStatus(failure, "error");
-    else setStatus(pendingWrites ? "Saved. " + pendingWrites + " waiting to sync." : "Saved.", "ok");
+    else if (pendingWrites) reportPending();
+    else setStatus("Saved.", "ok");
     return result;
   }
 
@@ -857,7 +835,7 @@
       configVersion++;
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
-      rebuildIndex(); render(); renderDriveBar();
+      rebuildIndex(); render(); renderButtons();
       // Let an in-flight panel load finish so its status cannot overwrite
       // the configuration result; then force one clean Drive reload.
       refreshRequested = false;
@@ -926,17 +904,24 @@
     }
     var result = response.result;
     pendingWrites = result.pending || 0;
-    renderDriveBar();
+    renderButtons();
     if (result.deferred) {
       setStatus("Saved. " + result.pending + " waiting to sync.", "ok");
       return;
     }
-    // A refusal is permanent: the write left the queue, so a count alone would
-    // suggest it was sent. The reason is the only useful thing here.
+    // A refusal is permanent, so the write left the queue and a count alone
+    // would suggest it was sent. A kept refusal is different: nothing was lost,
+    // and the queue depth already says how much is waiting.
     var refused = result.refused || [];
-    if (refused.length) {
-      var first = refused[0];
-      setStatus("Drive refused " + refused.length + " change(s): " + first.error, "error");
+    var kept = refused.filter(function (item) { return item.kept; });
+    var lost = refused.filter(function (item) { return !item.kept; });
+    if (kept.length) {
+      setStatus("Could not send " + kept.length + " change(s): " + kept[0].error +
+        " They are kept and will be sent once this is fixed.", "error");
+      return;
+    }
+    if (lost.length) {
+      setStatus("Drive refused " + lost.length + " change(s): " + lost[0].error, "error");
       return;
     }
     if (result.pending) {
@@ -953,9 +938,8 @@
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-status" });
       if (response && response.ok && response.result && typeof response.result.pending === "number") {
         pendingWrites = response.result.pending;
-        renderDriveBar();
       }
-    } catch (ignored) { /* the bar falls back to the cache label */ }
+    } catch (ignored) { /* the next save reports the queue depth again */ }
   }
   $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
@@ -992,10 +976,7 @@
     }
   });
   // Use the shared session cache on open; explicit refresh reloads Drive.
-  renderDriveBar();
-  renderLastChecked();
-  // The age of the list is refreshed while the panel stays open.
-  if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
+  renderButtons();
   announcePanelState(true);
   refresh(false);
   readPending();

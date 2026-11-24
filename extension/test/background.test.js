@@ -1076,6 +1076,62 @@ test("a write Drive refuses for good is reported instead of vanishing", async ()
   assert.match(dropped.reason, /Invalid name/);
 });
 
+test("a snippet kept out by the storage quota is not thrown away", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const posted = [];
+  browser.listeners.connect({
+    name: "pastex-library-progress",
+    sender: { id: browser.context.chrome.runtime.id, url: browser.context.chrome.runtime.getURL("sidepanel.html") },
+    onDisconnect: { addListener() {} }, onMessage: { addListener() {} },
+    postMessage: (message) => { posted.push(message); },
+  });
+  await send({ type: "pastex-panel-library" });
+  // Exactly what Drive answers for a service account: the folder can hold
+  // files, but this account may not create one.
+  browser.context.PastexDrive.uploadNew = async () => {
+    throw new Error("Drive API POST /files failed (HTTP 403): Service Accounts do not have storage quota.");
+  };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Keep me", text: "precious", parentId: "root",
+    item: { kind: "text", name: "Keep me", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  // The user wrote this text. A quota problem is fixable, so the entry waits.
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1, "the write is kept for the next attempt");
+  const blocked = posted.find((m) => m.blocked);
+  assert.ok(blocked, "the panel is told why, without pressing Sync");
+  assert.match(blocked.reason, /storage quota/i);
+  // The cached row is still there in the worker: the flush read the library
+  // back, and the quota refusal did not remove the local row the way a real
+  // rejection does.
+  const snapshot = await browser.context.libraryCache.current();
+  assert.ok(snapshot.tree.some((node) => node.name === "Keep me"),
+    "the row stays visible, because the write has not been given up on");
+});
+
+test("a flush that reads the library back keeps the edits still waiting", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  // Offline: the write is retried later, not dropped, so the read that follows
+  // cannot contain it.
+  browser.context.PastexDrive.uploadNew = async () => { throw new Error("network down"); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Pending", text: "not on Drive yet", parentId: "root",
+    item: { kind: "text", name: "Pending", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1, "the entry is still queued");
+  const snapshot = await browser.context.libraryCache.current();
+  assert.ok(snapshot.tree.some((node) => node.name === "Pending"),
+    "the row the user typed is still in the list");
+});
+
 test("a row that never reached Drive is not moved in Drive", async () => {
   const { browser, send } = editScenario();
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };

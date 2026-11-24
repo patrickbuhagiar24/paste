@@ -29,7 +29,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "drive-bar", "drive-dot", "drive-status", "last-checked", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
+  const ids = ["search", "tree", "empty", "status-bar", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -229,13 +229,16 @@ test("side panel shows discovered Drive items before downloads finish", async ()
   const waiting = new Promise((resolve) => { resume = resolve; });
   const { elements } = panelHarness(false, { beforeDownload: () => waiting });
   await new Promise((resolve) => setTimeout(resolve, 140));
-  assert.match(elements["drive-status"].textContent, /loading/);
+  // The status line reports progress while the bodies download, and it is the
+  // only line the panel has: no separate "connected" or "checked" label.
+  assert.match(elements.status.textContent, /snippets found/);
   assert.match(allText(elements.tree), /Synced/);
   assert.match(allText(elements.tree), /Empty Folder/);
-  assert.match(elements.status.textContent, /snippets found/);
+  assert.equal(elements["drive-status"], undefined, "there is no second Drive line");
+  assert.equal(elements["last-checked"], undefined, "there is no checked line");
   resume();
   await settled();
-  assert.match(elements["drive-status"].textContent, /connected/);
+  assert.match(elements.status.textContent, /snippets/);
 });
 
 test("select mode prevents paste, moves multiple selected items and deletes them", async () => {
@@ -422,25 +425,25 @@ test("collapsed folders recorded in the index stay collapsed in a new panel", as
   assert.equal(row.children[0].textContent, "▸");
 });
 
-test("session cache count is shown in the drive bar, not the footer", async () => {
+test("a library read from the session cache says so in the one status line", async () => {
   const tree = [{ id: "a", kind: "text", name: "A", text: "A" }, { id: "b", kind: "text", name: "B", text: "B" }];
   const { elements } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
   await settled();
-  assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 2 snippets/);
   assert.match(elements.status.textContent, /2 snippets \(cache\)/);
+  // There is exactly one place a state can be read, so the two extra labels
+  // cannot disagree with it.
+  assert.equal(elements["drive-status"], undefined);
 });
 
 test("a background sync notification repaints the panel from the cache", async () => {
   const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
   const { elements, progress } = panelHarness(false, { libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [] } } });
   await settled();
-  elements["drive-status"].textContent = "";
   elements.status.textContent = "";
   progress({ changed: true });
   await settled();
   await settled();
   assert.match(allText(elements.tree), /Alpha/);
-  assert.match(elements["drive-status"].textContent, /Google Drive • session cache · 1 snippets/);
   assert.equal(elements.status.textContent, "", "a background refresh must not spam the status line");
   assert.equal(elements["btn-sync"].disabled, false, "a background refresh must not disable the toolbar");
 });
@@ -452,30 +455,17 @@ test("the toolbar moves the create buttons to the end", () => {
   assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]);
 });
 
-test("the panel shows when the library was last checked", async () => {
-  const tree = [{ id: "a", kind: "text", name: "Alpha", text: "A" }];
-  const checked = Date.now() - 120000;
-  const { elements } = panelHarness(false, {
-    libraryResult: { ok: true, result: { tree, rootId: "root", cached: true, warnings: [], lastCheckedAt: checked } },
-  });
-  await settled();
-  assert.match(elements["last-checked"].textContent, /Checked: 2 min ago/);
-  assert.match(elements["last-checked"].title, /last checked at/);
-});
-
-test("the panel says when the library was never checked", async () => {
-  const { elements } = panelHarness(false);
-  await settled();
-  assert.match(elements["last-checked"].textContent, /Checked: never/);
-});
-
-test("a background update reports the moment of the check", async () => {
-  const { elements, progress } = panelHarness(false, { libraryResult: { ok: false, error: "offline" } });
-  await settled();
-  elements["last-checked"].textContent = "";
-  progress({ changed: true, lastCheckedAt: Date.now() - 300000 });
-  await settled();
-  assert.match(elements["last-checked"].textContent, /Checked: 5 min ago/);
+test("there is no separate checked line and no permanent connection label", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
+  for (const gone of ['id="drive-bar"', 'id="drive-dot"', 'id="drive-status"', 'id="last-checked"']) {
+    assert.equal(html.includes(gone), false, gone + " must stay removed");
+  }
+  // The status line is the only report, and it is announced to screen readers.
+  assert.match(html, /id="status-bar"/);
+  assert.match(html, /id="status" aria-live="polite"/);
+  const script = fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8");
+  assert.equal(/renderDriveBar|renderLastChecked|Checked: never/.test(script), false,
+    "the code behind the removed labels must be gone too");
 });
 
 test("Sync sends the queue and never reads the library back", async () => {

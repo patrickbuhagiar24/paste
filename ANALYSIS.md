@@ -69,15 +69,17 @@ reaches WCAG AA, most of them AAA:
 
 **Highlights elsewhere:**
 
-- **Drive status dot** (green ready / blue loading / red failed) next to its
-  text — colour is never the only signal, the text stays;
 - **Status line** in the header is coloured by result (green ok, red error) and
-  made heavier;
+  made heavier. It is the panel's only report: a permanent connection label and
+  a "checked N min ago" line were removed, because two more truncated labels
+  pushed the one message that matters out of view, and a long Drive error now
+  wraps instead of ending in an ellipsis;
 - **Selection count** becomes a filled red chip ("2 selected") when items are
   selected, so the bottom bar is immediately visible;
-- **Row actions** (✎ 📝 🗑) appear on hover, on the selected row **and on
-  keyboard focus** (`:focus-within`) — previously they never appeared for
-  keyboard users at all. The delete button turns red under the pointer.
+- **Row actions** (✎ Edit with its Rename / Edit text / Move menu, and 🗑)
+  appear on hover, on the selected row **and on keyboard focus**
+  (`:focus-within`) — previously they never appeared for keyboard users at all.
+  The delete button turns red under the pointer.
 - **Dark theme** follows the system preference (`prefers-color-scheme`), with
   its contrast also tested (e.g. selected text 7.34:1).
 - **`prefers-contrast: more`** thickens borders and adds a black frame to the
@@ -354,7 +356,7 @@ writes to Drive and then gives rows their Drive id, and the refusal of
 
 | File | Change |
 | --- | --- |
-| `extension/sidepanel.css` | rewritten: theme variables, primary/danger/secondary buttons, idle/hover/selected rows, status dot, selection chip, dark theme, prefers-contrast, reduced-motion |
+| `extension/sidepanel.css` | rewritten: theme variables, primary/danger/secondary buttons, idle/hover/selected rows, selection chip, dark theme, prefers-contrast, reduced-motion |
 | `extension/sidepanel.html` | `primary`/`danger` classes on the right buttons |
 | `extension/sidepanel.js` | `setStatus(text, tone)`, row `data-kind`, Drive state (the dot), selection chip, delete coloured on hover, primary Sync when Drive is down |
 | `extension/content.js`, `assets/launcher-preview.html` | the ⚡ launcher aligned with the panel indigo |

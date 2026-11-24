@@ -145,6 +145,15 @@ function notifyPanelsDropped(reason) {
   });
 }
 
+// A queued write is waiting for something only the user can change (Drive will
+// not let this account create files). The panel says so; nothing is dropped.
+function notifyPanelsBlocked(reason) {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ blocked: true, reason: reason || "" }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
 function notifyPanelsChanged(lastCheckedAt) {
   progressPorts.forEach(function (port) {
     try { port.postMessage({ changed: true, lastCheckedAt: lastCheckedAt || Date.now() }); }
@@ -568,7 +577,14 @@ async function queueLocalEdit(command) {
     // the edit would look saved and never leave the machine.
     throw new Error("The edit could not be queued for Drive.");
   }
-  if (!result.skipped && entry) await deferredQueue.push([entry]);
+  if (!result.skipped && entry) {
+    // The edit itself travels with the entry. A flush that reads the library
+    // back cannot see a write Drive has not accepted yet, so the entry is
+    // replayed onto the fresh snapshot: without this the row would disappear
+    // from the panel while its text is still waiting in the queue.
+    entry.command = command;
+    await deferredQueue.push([entry]);
+  }
   // Nothing is scheduled here on purpose. The write waits until the tab this
   // panel belongs to is closed, which the content script reports as the page
   // goes away; an edit on a site never sends a request to Drive by itself.
@@ -606,7 +622,12 @@ async function flushSoon(options) {
     flushRunning = false;
     // The writes are on Drive now; one full read turns every local id into the
     // id Drive gave the row, so the cache matches Drive again.
-    if (readBack) { try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ } }
+    if (readBack) {
+      try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+      // Anything still queued is not on Drive yet, so it is put back on top of
+      // what the read returned.
+      await replayPendingEdits();
+    }
     // A flush that cannot report what it did leaves a silent gap, so the
     // result says how many entries are still waiting.
     reportFlush(await pendingCount());
@@ -734,6 +755,14 @@ async function sendQueued(entry, session) {
     });
   } catch (err) {
     var failure = err && err.message ? err.message : String(err);
+    if (isStorageQuotaRefusal(failure)) {
+      // Kept, not dropped: see isStorageQuotaRefusal. The panel is told at once
+      // so the reason is visible without pressing Sync, and the row stays in
+      // the cache because the write is still going to happen.
+      lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure, kept: true });
+      notifyPanelsBlocked(failure);
+      return { ok: false, retry: true, error: failure };
+    }
     if (isPermanentFailure(failure)) {
       // Refused for good. The entry cannot be retried, but dropping it in
       // silence is how a write disappears without a word: the panel is told,
@@ -751,6 +780,32 @@ async function sendQueued(entry, session) {
   }
   await deferredQueue.remove([entry.id]);
   return { ok: true, id: result && result.id };
+}
+
+// Replay the edits that are still waiting onto a freshly read snapshot, so the
+// panel never shows a library that forgot a local change. Only entries that
+// carry their command can be replayed; an older entry is left alone.
+async function replayPendingEdits() {
+  var entries;
+  try { entries = await deferredQueue.all(); } catch (ignored) { return 0; }
+  var replay = entries.filter(function (entry) { return entry && entry.command; });
+  if (!replay.length) return 0;
+  await libraryCache.mutateLocal(async function (snapshot) {
+    replay.forEach(function (entry) {
+      try { PastexQueue.apply(snapshot, entry.command); } catch (ignored) { /* keep the rest */ }
+    });
+    return [];
+  });
+  notifyPanelsLocal(await pendingCount());
+  return replay.length;
+}
+
+// A service account may not create files at all, and Drive says so with a 403.
+// That is a configuration problem the user can fix (move the library into a
+// Shared Drive), not a write that is wrong, so the entry is kept: the text in
+// it is user content and dropping it would lose work.
+function isStorageQuotaRefusal(message) {
+  return /storage quota|storageQuotaExceeded/i.test(String(message || ""));
 }
 
 // A write that Drive refuses for good is not worth retrying; a network or

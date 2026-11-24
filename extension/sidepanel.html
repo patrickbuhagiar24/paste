@@ -16,10 +16,10 @@
         <button id="btn-text" class="primary" title="New snippet">＋ Text</button>
         <button id="btn-folder" class="primary" title="New folder">＋ Folder</button>
       </div>
-      <div id="drive-bar">
-        <span id="drive-dot" aria-hidden="true"></span>
-        <span id="drive-status" aria-live="polite">Drive: not connected.</span>
-        <span id="last-checked" title="When the library was last checked in Google Drive">Checked: never</span>
+      <!-- One status line. The connection state and the age of the last check
+           are not shown separately: a failure has to be readable, and two more
+           truncated labels next to it only pushed the message out of view. -->
+      <div id="status-bar">
         <span id="status" aria-live="polite"></span>
       </div>
     </header>

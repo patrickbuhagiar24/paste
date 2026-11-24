@@ -282,13 +282,16 @@ not listed in `pastex-sites.json` are not injected or targeted.
 
 ## Troubleshooting
 
-- If a **folder** can be created but a **snippet** cannot, the problem is on the
-  Drive side: the same account can add folders but may not own new files. Run
-  `scripts/check-drive-write.sh` in the project (it writes each kind of item
-  once, prints Drive's exact answer and removes what it created). A service
-  account has no storage quota of its own, so a snippet it creates in a personal
-  folder is refused with 403 while a folder it creates works, because the folder
-  belongs to the folder's owner.
+- If a **folder** can be created but a **snippet** cannot, and the status line
+  says *Service Accounts do not have storage quota*, the problem is on the Drive
+  side: a service account may not own new files, so it cannot create a `.txt`
+  snippet (or `pastex-index.json`), while a folder it creates belongs to the
+  folder's owner and is allowed. The snippet you typed is **not lost**: it stays
+  queued and the panel says so. Fix it by moving the library into a **Shared
+  Drive** and adding the service account as a **Content manager**; existing
+  snippets and folders keep working meanwhile. `scripts/check-drive-write.sh`
+  writes one of each and prints Drive's exact answer for every step, then
+  removes what it created.
 - If APT has installed a newer version but Chrome still displays the older
   extension, fully exit and restart Chrome. Verify the installed package version
   with `dpkg-query -W pastex` and compare it with `chrome://extensions`. As a

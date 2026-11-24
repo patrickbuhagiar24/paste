@@ -1,3 +1,27 @@
+pastex (2.22.0-1) unstable; urgency=medium
+
+  * Fixed: a snippet that Drive would not accept was thrown away. A service
+    account may not create files in a personal folder, so Drive answers 403
+    "Service Accounts do not have storage quota"; that 403 was treated like a
+    permanent rejection, the queued write was dropped and the panel reported
+    "refused" until the queue was empty. It is a configuration problem the user
+    can fix, so the write is now kept, the reason is shown at once, and the
+    text you typed is never lost.
+  * Fixed: a flush that read the library back removed rows whose write had not
+    landed yet, so a snippet could vanish from the list while its text was
+    still queued. A queued edit now travels with its entry and is replayed onto
+    the snapshot the read produced.
+  * BREAKING: the panel has one status line. The permanent connection label
+    ("Google Drive connected" / "Google Drive unavailable") and the
+    "Checked: N min ago" line are removed, along with the coloured status dot.
+    A long Drive error now wraps instead of being cut off, so the reason stays
+    readable.
+  * The Drive error for a full or missing storage quota is spelled out: it says
+    to move the library into a Shared Drive and add the service account as a
+    Content manager.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 01:10:00 +0000
+
 pastex (2.21.0-1) unstable; urgency=medium
 
   * Fixed: a reorder or a fold could never be saved. The index was stored as a

@@ -225,7 +225,19 @@
           var parsed = JSON.parse(text);
           if (parsed && parsed.error && parsed.error.message) detail = parsed.error.message;
         } catch (ignored) { /* keep the raw text */ }
-        throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + String(detail).slice(0, 300));
+        var message = String(detail);
+        // The one Drive failure that is not about Pastex at all, and the one
+        // that looks like a Pastex bug: a service account may not create files,
+        // so a snippet cannot be added while a folder still can. Drive's own
+        // wording does not say what to do, so the sentence is spelled out.
+        if (/storage quota|storageQuotaExceeded/i.test(message)) {
+          throw new Error("Google will not let the service account create files: " +
+            "a service account has no storage of its own. Move the folder into a " +
+            "Shared Drive and add the service account as a Content manager " +
+            "(folders and existing snippets keep working, creating new ones does not). " +
+            "Drive said: " + message.slice(0, 200));
+        }
+        throw new Error("Drive API " + (options.method || "GET") + " " + path + " failed (HTTP " + res.status + "): " + message.slice(0, 300));
       }
       var contentType = res.headers.get("content-type") || "";
       if (!options.textResponse && contentType.indexOf("json") !== -1) return res.json();

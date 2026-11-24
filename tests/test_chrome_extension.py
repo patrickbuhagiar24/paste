@@ -124,19 +124,21 @@ def test_the_background_interval_grows_while_nothing_changes():
     assert "chrome.alarms.onAlarm.addListener" in background
 
 
-def test_the_panel_shows_the_last_check_and_keeps_the_sync_button():
+def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
-    assert 'id="last-checked"' in panel
-    assert "lastCheckedAt" in script
+    # One status line: the permanent connection label and the "checked" line
+    # were removed on request, because two more truncated labels pushed the
+    # message that matters out of view.
+    assert 'id="status-bar"' in panel
+    assert 'id="status" aria-live="polite"' in panel
+    for gone in ('id="drive-bar"', 'id="drive-dot"', 'id="drive-status"', 'id="last-checked"'):
+        assert gone not in panel, gone + " must stay removed"
+    assert "lastCheckedAt" not in script
+    assert "renderDriveBar" not in script
     assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
     assert "↻ Sync" in panel, "the button is labelled Sync"
     assert "Refresh" not in panel, "the old label is gone"
-    # The state dot is its own flex item before the label: painted inside the
-    # truncated label it sat flush against the edge. Markup order matters.
-    bar = panel.split('id="drive-bar"')[1].split("</div>")[0]
-    assert bar.index('id="drive-dot"') < bar.index('id="drive-status"'), "the dot precedes the label"
-    assert panel.index('id="drive-dot"') > panel.index('id="drive-bar"')
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
     order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
@@ -496,7 +498,7 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "<footer" not in html
     assert 'id="status"' in html and html.index('id="status"') < html.index("</header>")
     assert "btn-collapse-all" in script
-    assert "Google Drive • session cache · " in script
+    assert "(cache)" in script, "a cached read is still marked in the status"
     assert "Session cache: " not in script
     assert "Snippets loaded from session cache." not in script
     # The central index is the only writer of order and collapse state; the
