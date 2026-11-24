@@ -134,7 +134,23 @@ echo "Service account : $service_email"
 echo "Library folder  : $FOLDER_ID"
 echo
 
-echo "1. Can the service account see the folder?"
+echo "1. Is the folder a Shared Drive folder?"
+out="$(drive GET "https://www.googleapis.com/drive/v3/files/$FOLDER_ID?fields=id,name,driveId&supportsAllDrives=true")"
+status="$(printf '%s' "$out" | tail -n 1)"; body="$(printf '%s' "$out" | sed '$d')"
+if [ "$status" = "200" ]; then
+  drive_id="$(printf '%s' "$body" | jq -r '.driveId // empty')"
+  if [ -n "$drive_id" ]; then
+    echo "  YES   this folder lives in a Shared Drive ($drive_id)"
+  else
+    echo "  NO    this folder is in My Drive, where a service account may not"
+    echo "        create files. Move the library into a Shared Drive."
+  fi
+else
+  echo "  FAIL  could not read the folder (HTTP $status)"
+fi
+echo
+
+echo "2. Can the service account see the folder?"
 out="$(drive GET "https://www.googleapis.com/drive/v3/files/$FOLDER_ID?fields=id,name,mimeType,capabilities/canAddChildren&supportsAllDrives=true")"
 status="$(printf '%s' "$out" | tail -n 1)"; body="$(printf '%s' "$out" | sed '$d')"
 report "read the folder" "$status" "$body"
@@ -147,7 +163,7 @@ echo "        name: $(printf '%s' "$body" | jq -r '.name')"
 echo "        can add children: $(printf '%s' "$body" | jq -r '.capabilities.canAddChildren // "unknown"')"
 echo
 
-echo "2. Can it create a folder?"
+echo "3. Can it create a folder?"
 printf '%s' "{\"name\":\"pastex-write-check-folder\",\"mimeType\":\"application/vnd.google-apps.folder\",\"parents\":[\"$FOLDER_ID\"]}" > "$tmpdir/folder.json"
 out="$(drive POST "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id" "$tmpdir/folder.json")"
 status="$(printf '%s' "$out" | tail -n 1)"; body="$(printf '%s' "$out" | sed '$d')"
@@ -156,7 +172,7 @@ made_folder="$(printf '%s' "$body" | jq -r '.id // empty' 2>/dev/null)"
 [ -n "$made_folder" ] && created+=("$made_folder")
 echo
 
-echo "3. Can it upload a text file? (this is what adding a snippet does)"
+echo "4. Can it upload a text file? (this is what adding a snippet does)"
 printf 'Pastex write check.' > "$tmpdir/body.txt"
 boundary="pastex-check-$$"
 {
@@ -176,7 +192,7 @@ made_file="$(printf '%s' "$body" | jq -r '.id // empty' 2>/dev/null)"
 [ -n "$made_file" ] && created+=("$made_file")
 echo
 
-echo "4. Can it write the order/collapse index?"
+echo "5. Can it write the order/collapse index?"
 if [ -n "$made_file" ]; then
   printf '%s' '{"v":2,"order":{},"collapsed":{}}' > "$tmpdir/index.json"
   out="$(drive PATCH "https://www.googleapis.com/upload/drive/v3/files/$made_file?uploadType=media&supportsAllDrives=true&fields=id" \
@@ -184,11 +200,11 @@ if [ -n "$made_file" ]; then
   status="$(printf '%s' "$out" | tail -n 1)"; body="$(printf '%s' "$out" | sed '$d')"
   report "replace a file body" "$status" "$body"
 else
-  echo "  SKIP  no file was created in step 3"
+  echo "  SKIP  no file was created in step 4"
 fi
 echo
 
-echo "5. Cleaning up what this check created"
+echo "6. Cleaning up what this check created"
 for id in "${created[@]}"; do
   printf '%s' '{"trashed":true}' > "$tmpdir/trash.json"
   out="$(drive PATCH "https://www.googleapis.com/drive/v3/files/$id?supportsAllDrives=true&fields=id,trashed" "$tmpdir/trash.json")"
@@ -198,7 +214,7 @@ done
 
 echo
 cat <<'NEXT'
-If step 3 failed with "Service Accounts do not have storage quota":
+If step 4 failed with "Service Accounts do not have storage quota":
   A service account has no storage of its own and cannot own new files in a
   personal folder. Folders it creates are owned by the folder owner, which is
   why creating a folder appears to work. Fix it in one of two ways:
