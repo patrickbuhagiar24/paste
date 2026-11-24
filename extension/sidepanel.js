@@ -119,6 +119,45 @@
     }
   }
 
+  // --- newline on insert -------------------------------------------------
+  //
+  // One setting, two ways to use it, and they do not overlap: the toolbar
+  // toggle decides what a plain row click appends, while each row's own ⏎
+  // button appends a newline once and leaves the setting exactly as it was.
+  var NEWLINE_KEY = "pastex-newline-on-insert";
+  var newlineOnInsert = false;
+
+  function reportNewline() {
+    var toggle = $("btn-newline");
+    if (!toggle) return;
+    toggle.setAttribute("aria-pressed", String(newlineOnInsert));
+    toggle.title = newlineOnInsert ? "Newline when inserting: on" : "Newline when inserting: off";
+  }
+
+  // The text a click inserts: the snippet verbatim, plus one newline when the
+  // setting asks for it and the snippet does not already end with one.
+  function textForInsert(node, forceNewline) {
+    var text = typeof node.text === "string" ? node.text : "";
+    if (!forceNewline && !newlineOnInsert) return text;
+    if (text === "" || /\n$/.test(text)) return text;
+    return text + "\n";
+  }
+
+  async function setNewlineOnInsert(on) {
+    newlineOnInsert = !!on;
+    reportNewline();
+    try { await chrome.storage.local.set({ [NEWLINE_KEY]: newlineOnInsert }); }
+    catch (ignored) { /* the setting simply does not survive a restart */ }
+  }
+
+  async function readNewlineOnInsert() {
+    try {
+      var saved = await chrome.storage.local.get(NEWLINE_KEY);
+      if (saved && saved[NEWLINE_KEY] === true) newlineOnInsert = true;
+    } catch (ignored) { /* keep the default */ }
+    reportNewline();
+  }
+
   function miniButton(title, text, onClick) {
     var button = document.createElement("button");
     button.className = "mini";
@@ -136,6 +175,14 @@
   // row, so they live in one menu behind a single Edit button.
   function appendRowActions(row, node) {
     if (selecting) return;
+    // Placed to the left of Edit and deliberately not the same thing as the
+    // toolbar toggle: this one appends a newline to this insertion only, so the
+    // setting is untouched and the next click behaves as before.
+    var newline = miniButton("Insert with a newline", "⏎", function () {
+      insertNode(node, true);
+    });
+    newline.setAttribute("data-kind", "newline");
+    row.appendChild(newline);
     var edit = miniButton("Edit", "✎", function () { openEditMenu(node, edit); });
     edit.setAttribute("aria-haspopup", "menu");
     edit.setAttribute("aria-expanded", "false");
@@ -471,15 +518,16 @@
 
   // --- insert into the page (or copy as the fallback) ---
 
-  async function insertNode(node) {
+  async function insertNode(node, forceNewline) {
     if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError, "error"); return; }
     setStatus("Inserting…");
     var response = null;
+    var text = textForInsert(node, forceNewline);
     try {
       response = await chrome.runtime.sendMessage({
         type: "pastex-sidepanel-insert",
         id: node.id,
-        text: typeof node.text === "string" ? node.text : "",
+        text: text,
       });
     } catch (err) {
       response = { ok: false };
@@ -498,7 +546,7 @@
       return;
     }
     try {
-      await navigator.clipboard.writeText(node.text || "");
+      await navigator.clipboard.writeText(text);
       setStatus("Copied. Press Ctrl+V.", "ok");
     } catch (err) {
       setStatus("Could not insert or copy.", "error");
@@ -963,6 +1011,9 @@
     if (query) { query = ""; $("search").value = ""; }
     await persistCollapsed(ids, true);
   });
+  $("btn-newline").addEventListener("click", function () {
+    setNewlineOnInsert(!newlineOnInsert);
+  });
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;
     selectedItems.clear();
@@ -992,6 +1043,8 @@
   });
   // Use the shared session cache on open; explicit refresh reloads Drive.
   renderButtons();
+  reportNewline();
+  readNewlineOnInsert();
   announcePanelState(true);
   refresh(false);
   readPending();

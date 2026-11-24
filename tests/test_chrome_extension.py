@@ -146,7 +146,18 @@ def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
     order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
-    assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]
+    assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder",
+                     "btn-newline"]
+    # Collapse all and the newline toggle are icon buttons: a glyph, a title and
+    # (for the toggle) a pressed state carry the meaning instead of a word.
+    for button in ("btn-collapse-all", "btn-newline"):
+        tag = re.search(r'<button id="' + button + r'"[^>]*>([^<]*)</button>', panel).group(1)
+        assert len(tag.strip()) <= 2, f"{button} must carry an icon, not a label"
+        assert 'aria-label="' in re.search(r'<button id="' + button + r'"[^>]*>', panel).group(0)
+        assert 'class="icon"' in re.search(r'<button id="' + button + r'"[^>]*>', panel).group(0)
+    assert 'aria-pressed="false"' in re.search(r'<button id="btn-newline"[^>]*>', panel).group(0)
+    glyph = re.search(r'<button id="btn-collapse-all"[^>]*>([^<]*)</button>', panel).group(1)
+    assert "Collapse" not in glyph, "the button carries an icon, not the words"
 
 
 def test_background_sync_only_runs_while_the_user_is_away():
@@ -569,6 +580,11 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content
     assert 'typeof node.text === "string" ? node.text : ""' in script
+    # The newline behaviour lives in one helper, used by the row click, the row
+    # button and the clipboard fallback, so the three cannot disagree.
+    assert "function textForInsert(node, forceNewline)" in script
+    assert script.count("textForInsert(") >= 2
+    assert "pastex-newline-on-insert" in script
 
 
 # --- the built .deb is a well-formed Debian package ------------------------

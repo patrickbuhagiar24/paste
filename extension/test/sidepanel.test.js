@@ -29,7 +29,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "status-bar", "btn-sync", "btn-collapse-all", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
+  const ids = ["search", "tree", "empty", "status-bar", "btn-sync", "btn-collapse-all", "btn-newline", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -146,7 +146,8 @@ function panelHarness(fail, options = {}) {
       return { ok: true };
     },
   };
-  const context = vm.createContext({ document, window, chrome: { runtime, storage: { local: { get: async () => ({}), set: async () => {} } } }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
+  const storageLocal = { get: async (key) => (key in (options.storage || {}) ? { [key]: options.storage[key] } : {}), set: async () => {} };
+  const context = vm.createContext({ document, window, chrome: { runtime, storage: { local: storageLocal } }, navigator: { clipboard: { writeText: async (text) => { clipboardTexts.push(text); } } }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../sidepanel.js"), "utf8"), context);
   return { elements, records, context, imports, messages, clipboardTexts, pickerCalls: () => pickerCalls,
     progress: (message) => progress(message) };
@@ -290,10 +291,10 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   await settled();
   let row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   const buttons = row.children.filter((child) => child.className === "mini");
-  assert.deepEqual(buttons.map((child) => child.title), ["Edit", "Delete"],
-    "the row has one Edit button, not a Rename button next to it");
+  assert.deepEqual(buttons.map((child) => child.title), ["Insert with a newline", "Edit", "Delete"],
+    "one Edit button, not a Rename button next to it, with the newline button leftmost");
   // A snippet offers rename, an edit of its text and a move.
-  buttons[0].listeners.click({ stopPropagation() {} });
+  buttons[1].listeners.click({ stopPropagation() {} });
   assert.equal(elements["row-menu"].hidden, false);
   assert.deepEqual(elements["row-menu"].children.map((item) => item.textContent),
     ["Rename", "Edit text", "Move to folder…"]);
@@ -304,7 +305,7 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   elements["editor-cancel"].listeners.click();
   // A folder can be renamed and moved, but has no text to edit.
   const folderRow = elements.tree.children.find((r) => allText(r).includes("Empty Folder"));
-  folderRow.children.filter((child) => child.className === "mini")[0].listeners.click({ stopPropagation() {} });
+  folderRow.children.filter((child) => child.className === "mini")[1].listeners.click({ stopPropagation() {} });
   assert.deepEqual(elements["row-menu"].children.map((item) => item.textContent),
     ["Rename folder", "Move to folder…"]);
   elements["row-menu"].children[0].listeners.click({ stopPropagation() {} });
@@ -314,7 +315,8 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   elements.search.listeners.input({ target: elements.search });
   await new Promise((resolve) => setTimeout(resolve, 170));
   row = elements.tree.children[0];
-  assert.deepEqual(row.children.filter((child) => child.className === "mini").map((child) => child.title), ["Edit", "Delete"]);
+  assert.deepEqual(row.children.filter((child) => child.className === "mini").map((child) => child.title),
+    ["Insert with a newline", "Edit", "Delete"]);
   row.listeners.click();
   await settled();
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
@@ -364,7 +366,7 @@ test("a folder cannot be moved into itself or into its own content", async () =>
   const { elements } = panelHarness(false, { records });
   await settled();
   const outer = elements.tree.children.find((r) => allText(r).includes("Outer"));
-  outer.children.filter((child) => child.className === "mini")[0].listeners.click({ stopPropagation() {} });
+  outer.children.filter((child) => child.className === "mini")[1].listeners.click({ stopPropagation() {} });
   elements["row-menu"].children.find((item) => item.textContent === "Move to folder…").listeners.click({ stopPropagation() {} });
   const offered = elements["editor-parent"].children.map((option) => option.textContent);
   // The folder itself and everything inside it are not destinations.
@@ -379,6 +381,61 @@ test("a failed insertion does not silently copy the snippet", async () => {
   await settled();
   assert.deepEqual(clipboardTexts, []);
   assert.match(elements.status.textContent, /Could not insert/);
+});
+
+test("the toolbar newline toggle appends one newline to every insert, and survives a repaint", async () => {
+  const { elements, messages } = panelHarness(false);
+  await settled();
+  const row = () => elements.tree.children.find((r) => allText(r).includes("Synced"));
+  // Off by default: the snippet goes in verbatim.
+  assert.equal(elements["btn-newline"]["aria-pressed"], "false");
+  row().listeners.click();
+  await settled();
+  const inserted = () => messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
+  assert.deepEqual(inserted(), ["from Google Drive"]);
+  // On: one newline is appended.
+  elements["btn-newline"].listeners.click();
+  assert.equal(elements["btn-newline"]["aria-pressed"], "true");
+  assert.match(elements["btn-newline"].title, /on$/);
+  row().listeners.click();
+  await settled();
+  assert.deepEqual(inserted()[1], "from Google Drive\n");
+  elements["btn-newline"].listeners.click();
+  assert.equal(elements["btn-newline"]["aria-pressed"], "false", "a second click turns it off");
+  assert.match(elements["btn-newline"].title, /off$/);
+});
+
+test("the setting is remembered and never adds a second trailing newline", async () => {
+  const records = [{ id: "item1", name: "Padded.txt", mimeType: "text/plain", text: "already padded\n", parent: "root" }];
+  const { elements, messages } = panelHarness(false, { records, storage: { "pastex-newline-on-insert": true } });
+  await settled();
+  assert.equal(elements["btn-newline"]["aria-pressed"], "true", "a saved setting is restored on open");
+  elements.tree.children[0].listeners.click();
+  await settled();
+  const inserted = messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
+  assert.deepEqual(inserted, ["already padded\n"], "one trailing newline, never two");
+});
+
+test("the row newline button appends once and leaves the toolbar setting alone", async () => {
+  const { elements, messages } = panelHarness(false);
+  await settled();
+  const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
+  const newlineButton = row.children.find((child) => child.title === "Insert with a newline");
+  assert.ok(newlineButton, "the newline button sits on the row");
+  const titles = row.children.filter((child) => child.className === "mini").map((child) => child.title);
+  assert.equal(titles[0], "Insert with a newline", "it is the leftmost row button, before Edit");
+  assert.equal(titles[1], "Edit");
+  newlineButton.listeners.click({ stopPropagation() {} });
+  await settled();
+  const inserted = () => messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
+  assert.deepEqual(inserted(), ["from Google Drive\n"]);
+  // Unlike the toolbar toggle, the row button is an action, not a mode.
+  assert.equal(elements["btn-newline"]["aria-pressed"], "false");
+  // The next plain click is back to verbatim: the row button did not switch
+  // anything on.
+  elements.tree.children.find((r) => allText(r).includes("Synced")).listeners.click();
+  await settled();
+  assert.deepEqual(inserted()[1], "from Google Drive");
 });
 
 test("clipboard fallback runs only when no editable field is focused", async () => {
@@ -460,7 +517,7 @@ test("the toolbar moves the create buttons to the end", () => {
   const html = fs.readFileSync(path.join(__dirname, "../sidepanel.html"), "utf8");
   const toolbar = html.split('<div class="toolbar"')[1].split("</div>")[0];
   const order = [...toolbar.matchAll(/<button id="(btn-[a-z-]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]);
+  assert.deepEqual(order, ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder", "btn-newline"]);
 });
 
 test("there is no separate checked line and no permanent connection label", () => {

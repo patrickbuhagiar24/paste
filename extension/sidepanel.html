@@ -9,12 +9,17 @@
     <header>
       <input id="search" type="search" placeholder="Search snippets…" aria-label="Search snippets" />
       <div class="toolbar" role="toolbar" aria-label="Snippet actions">
-        <button id="btn-collapse-all" title="Collapse all folders" disabled>▸ Collapse all</button>
+        <button id="btn-collapse-all" class="icon" title="Collapse all folders" aria-label="Collapse all folders" disabled>⤡</button>
         <button id="btn-select" aria-pressed="false" title="Select items to move or delete">Select</button>
         <button id="btn-sync" title="Read the library from Google Drive again">↻ Sync</button>
         <button id="btn-config" title="Import configuration files">Config</button>
         <button id="btn-text" class="primary" title="New snippet">＋ Text</button>
         <button id="btn-folder" class="primary" title="New folder">＋ Folder</button>
+        <!-- Newline on insert: the toggle decides what a click on a row appends;
+             the row button keeps its own, one-time meaning. Icon only, so the
+             state is read from the pressed style and the title. -->
+        <button id="btn-newline" class="icon" aria-pressed="false"
+                title="Newline when inserting: off" aria-label="Append a newline when inserting a snippet">⏎</button>
       </div>
       <!-- One status line. The connection state and the age of the last check
            are not shown separately: a failure has to be readable, and two more

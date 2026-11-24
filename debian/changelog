@@ -1,3 +1,24 @@
+pastex (2.29.0-1) unstable; urgency=medium
+
+  * Newline on insert, as a setting and as a one-off. The toolbar gains an
+    icon-only **⏎** toggle: off, a click inserts the snippet exactly as stored;
+    on, one newline is appended at the end. A snippet that already ends with a
+    newline never gets a second one, and the setting is kept in
+    `chrome.storage.local`, so it survives a panel reload. Its pressed style
+    and its title (*Newline when inserting: on / off*) say which way it is set.
+  * Every row gains its own **⏎** button, placed to the left of **Edit**. It is
+    not the toggle: it appends a newline to that single insertion and leaves the
+    setting untouched, so the next click behaves as it did before. One helper
+    produces the text for both, so the row click, the row button and the
+    clipboard fallback can never disagree.
+  * **Collapse all** is now an icon only (**⤡**), with the words kept in its
+    title and `aria-label`. The two icon buttons get a fixed square so they are
+    not stretched by the words next to them.
+  * The configuration is unchanged: still one picked JSON file of any name, read
+    through the single `https://www.googleapis.com/auth/drive` scope.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 06:00:00 +0000
+
 pastex (2.28.0-1) unstable; urgency=medium
 
   * BREAKING: the requested scope is now `https://www.googleapis.com/auth/drive`

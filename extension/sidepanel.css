@@ -272,6 +272,19 @@ header {
   font-weight: 500;
 }
 
+/* Two toolbar buttons carry no text, so they must not stretch with the words
+ * around them: a fixed square keeps the row even and the glyph centred. The
+ * meaning lives in the title and, for the toggle, in the pressed style. */
+.toolbar button.icon {
+  flex: 0 0 auto;
+  min-width: 30px;
+  padding: 4px 6px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+}
+
+
 #status-bar {
   display: flex;
   align-items: center;

@@ -284,14 +284,18 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. The toolbar reads **▸ Collapse all**, **Select**, **↻ Sync**,
-**Config**, **＋ Text** and **＋ Folder**. **＋ Text** and **＋ Folder** are
-filled primary buttons; **Sync** takes that role while Drive is
-unavailable, because it is the action that helps then. **Collapse all** folds
-every folder and clears the search first. The drive bar shows a state dot and
-`Google Drive • session cache · N snippets` when the list came from the
-session or local cache, and the moment of the last check with Drive is shown
-next to it.
+snippets. The toolbar reads **⤡**, **Select**, **↻ Sync**, **Config**,
+**＋ Text**, **＋ Folder** and **⏎**. **＋ Text** and **＋ Folder** are filled
+primary buttons; **Sync** takes that role while Drive is unavailable, because it
+is the action that helps then. **⤡** is the icon-only *Collapse all*: it folds
+every folder and clears the search first. **⏎** is the icon-only newline toggle:
+off, a click inserts the snippet exactly as it is stored; on, one newline is
+appended at the end, and a snippet that already ends with a newline is never
+given a second one. The toggle keeps its state in `chrome.storage.local`, so it
+survives a panel reload, and its pressed style and title (**Newline when
+inserting: on / off**) show which way it is set. The single status line reports
+`N snippets (cache)` when the list came from the session or local cache, and it
+is the only place a state is written.
 
 ## Reading from the cache, writing when you leave
 
@@ -327,7 +331,7 @@ cache already holds the whole library. The flush finishes with one full read
 so the cache matches Drive again, including the ids Drive gave new rows.
 One rule holds everywhere: while any allowed site still has a visible tab, the
 queue waits, and so does the background check.
-The drive bar shows how many changes are waiting. A write Drive refuses
+The status line reports how many changes are waiting. A write Drive refuses
 permanently (the row was deleted elsewhere) is dropped from both the queue and
 the cache instead of being retried forever.
 
@@ -368,11 +372,13 @@ stops when the system asks for reduced motion, and the rim grows when the
 system asks for more contrast. `assets/launcher-preview.html` shows the
 launcher on all three backgrounds. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it; its row has an **Edit** button, which opens a small menu holding
-**Rename**, **Edit text** and **Move to folder…**, and a **Delete** button. The
-complete snippet text is inserted verbatim, including newlines and trailing
-spaces, into textareas and editable fields; a single-line input cannot display
-line breaks. The allowlist is cached for 30 seconds so a click does not have to
+to insert it; its row has a **⏎** button, then an **Edit** button, which opens a
+small menu holding **Rename**, **Edit text** and **Move to folder…**, then a
+**Delete** button. The row **⏎** is not the toolbar toggle: it appends a newline
+to that one insertion and leaves the setting alone, so the next click behaves as
+before. Apart from that appended newline the complete snippet text is inserted
+verbatim, including newlines and trailing spaces, into textareas and editable
+fields; a single-line input cannot display line breaks. The allowlist is cached for 30 seconds so a click does not have to
 re-read the configuration; repicking the file refreshes it immediately. If no editable field is focused on an allowed page, the text is
 copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
 not listed under `pastex-sites` are not injected or targeted.

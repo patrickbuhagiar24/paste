@@ -26,8 +26,8 @@ values:
 | Row action icons (opacity 0.5) | **2.48:1** | hard to read |
 | Status text ok/error | identical | no result colour |
 
-Every button — Collapse all, Select, Sync, Config, Text, Folder, Save, Cancel,
-Delete — also used one single style, so there was **no hierarchy**: "Save" and
+Every button — the collapse-all icon, Select, Sync, Config, Text, Folder, Save,
+Cancel, Delete — also used one single style, so there was **no hierarchy**: "Save" and
 "Delete" looked the same.
 
 ### What changed
@@ -59,8 +59,8 @@ reaches WCAG AA, most of them AAA:
 - **Primary** (indigo gradient, white text): `＋ Text`, `＋ Folder`,
   `＋ New snippet`, `Save` — safe actions that are the next step;
 - **Danger** (red gradient): `🗑 Delete` and `🗑 Delete` in the selection bar;
-- **Secondary** (strong 3.9:1 border): Collapse all, Select, Sync, Config,
-  Cancel and the row actions (rename/edit/delete);
+- **Secondary** (strong 3.9:1 border): the collapse-all icon, Select, Sync,
+  Config, Cancel and the row actions (newline/edit/delete);
 - disabled primary/danger buttons lose the strong fill and return to a plain
   outline, so an action that cannot be clicked does not shout louder than one
   that can;
