@@ -251,6 +251,16 @@ queue is not empty, and an ordinary panel open is served from the cached
 snapshot. Drive is asked again when something really changed — a queued write,
 a different configuration, or the idle check finding a difference.
 
+An edit can land while a read is running: the idle check, a Sync, or the read a
+flush does after its writes. Sending a write invalidates the cached snapshot, so
+a row typed in that window has no snapshot to be applied to. It is never dropped
+and never reported as saved when it is not: the edit waits for the write in
+flight to settle, is applied to the snapshot that write left behind, and its own
+write joins the queue. A listing that was read before the row existed is what
+the check returns, so the row is put back on top of it: only rows Drive does not
+have (a `local-` id) are restored, and a row Drive reports is described by
+Drive's answer, not by the older copy.
+
 Cached content can be stale, including after a folder is changed or access is
 revoked elsewhere. Reopening the panel reads the cached list; a configuration
 change or a fresh install performs the full sync. Explicit Drive permission

@@ -226,6 +226,10 @@ async function runIdleSync(assumeIdle) {
     // a body; only a real difference falls back to the full listing.
     var result = await libraryCache.verify();
     if (result && result.skipped) result = await libraryCache.sync();
+    // A row typed while the check was reading is not on Drive, so the listing
+    // that just landed does not contain it. Patching it back keeps a background
+    // sync from deleting a snippet the user had just written.
+    await replayMissingRows().catch(function () {});
     nextSyncAt = 0;
     // A skipped check never touched Drive, so it does not move the interval.
     if (result && !result.skipped) {
@@ -629,8 +633,23 @@ function validateLocalEdit(command) {
   return command;
 }
 
-async function queueLocalEdit(command) {
-  validateLocalEdit(command);
+// A write invalidates the stored snapshot, so an edit that arrives while one is
+// running has nothing to be applied to and would be dropped silently -- the row
+// the user just typed would vanish from the panel while its write waited in the
+// queue. The queue is only ever written while a site is being used, and a site
+// being used is exactly when a flush is running (it started when the previous
+// site was left), so the edit waits for the write to settle and then applies to
+// the snapshot it left behind.
+var FLUSH_SETTLE_MS = 50;
+var FLUSH_SETTLE_LIMIT = 40;   // two seconds: a flush is a handful of requests
+
+async function settleFlush() {
+  for (var i = 0; i < FLUSH_SETTLE_LIMIT && flushRunning; i++) {
+    await new Promise(function (resolve) { setTimeout(resolve, FLUSH_SETTLE_MS); });
+  }
+}
+
+async function applyLocalEdit(command) {
   var localId = "";
   var result = await libraryCache.mutateLocal(async function (snapshot) {
     var applied = PastexQueue.apply(snapshot, command);
@@ -639,6 +658,20 @@ async function queueLocalEdit(command) {
     if (command.kind === "create" && applied && applied.length) localId = applied[0];
     return applied;
   });
+  return { result: result, localId: localId };
+}
+
+async function queueLocalEdit(command) {
+  validateLocalEdit(command);
+  var attempt = await applyLocalEdit(command);
+  // A skip with a write in flight means the snapshot was simply not there yet;
+  // it is not an edit that cannot be applied.
+  if (attempt.result.skipped && flushRunning) {
+    await settleFlush();
+    attempt = await applyLocalEdit(command);
+  }
+  var result = attempt.result;
+  var localId = attempt.localId;
   var entry = queuedCommand(command, localId);
   if (!result.skipped && !entry) {
     // Accepted by the cache but with nothing to send is a bug, not a no-op:
@@ -707,6 +740,11 @@ async function flushSoon(options) {
     if (adopted || (before && before.tree)) {
       try { await libraryCache.restore(before); } catch (ignored) { /* the next open syncs */ }
     }
+    // A row created while this flush was already sending is not in the copy
+    // taken before it started, and its own entry arrived after the queue was
+    // read, so nothing else will put it back. It goes on top of the snapshot
+    // here; its write waits for the next flush like any other.
+    await replayMissingRows().catch(function () {});
     if (readBack) {
       // A row whose id was not learned still points at `local-`, and only a
       // real read turns it into the id Drive gave it. The read is skipped when
@@ -944,6 +982,34 @@ async function sendQueued(entry, session, resolved) {
     await deferredQueue.remove([entry.id]);
     return { ok: true, id: result && result.id };
   }
+}
+
+// Put back a row the fresh snapshot does not have. A load that started before a
+// row was typed returns a library that has never heard of it, and the queue is
+// the only record of that row. Replaying the whole command list works but is
+// wrong for a command that edits a row Drive now describes differently; this
+// only adds what is missing, so a fresh listing is never reverted.
+async function replayMissingRows() {
+  var entries;
+  try { entries = await deferredQueue.all(); } catch (ignored) { return 0; }
+  var creates = entries.filter(function (entry) {
+    return entry && entry.command && entry.command.kind === "create" && entry.item && entry.item.localId;
+  });
+  if (!creates.length) return 0;
+  var added = await libraryCache.mutateLocal(async function (snapshot) {
+    var present = new Set();
+    (function walk(nodes) {
+      (nodes || []).forEach(function (node) { present.add(node.id); if (node.kind === "folder") walk(node.children); });
+    })(snapshot.tree || []);
+    var put = 0;
+    creates.forEach(function (entry) {
+      if (present.has(entry.item.localId)) return;
+      try { if (PastexQueue.apply(snapshot, entry.command).length) put++; } catch (ignored) { /* keep the rest */ }
+    });
+    return put ? [put] : [];
+  });
+  if (added && added.applied && added.applied.length) notifyPanelsLocal(await pendingCount());
+  return added && added.applied ? added.applied.length : 0;
 }
 
 // Replay the edits that are still waiting onto a freshly read snapshot, so the

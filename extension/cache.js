@@ -59,6 +59,10 @@
     var mutating = 0;
     var silentTimer = 0;
     var fullSyncStale = true;
+    // Bumped by every local edit. A load that started before a bump describes
+    // the library as it was then, so its result must not be treated as fresh.
+    var localEdits = 0;
+
 
     async function identity() {
       var config = await native.readConfig();
@@ -474,9 +478,14 @@
         return loadFromDrive(key, onUpdate, options);
       }
       var started = revision;
+      var editsAtStart = localEdits;
+      // Taken inside the flight, not before it: an await here would let a second
+      // open slip past the `inflight` check above and read Drive twice for the
+      // same library.
       var flight = { identity: key };
       flight.promise = (async function () {
         var previous = memory && memory.identity === key ? memory : null;
+        var held = await readStored();
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
         }, { bodies: bodies, texts: texts, deferCollapsed: false, index: index,
@@ -484,6 +493,16 @@
           metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
         mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
+        // A row created here while the read was running is not on Drive, so the
+        // listing that just arrived does not contain it. Installing that listing
+        // replaced the user's row with a library that had never heard of it: the
+        // text vanished from the panel while its write was still queued. The
+        // fresh read is what Drive has; the edits that came after it started are
+        // put back on top, exactly as a flush replays a queue it could not send.
+        var landedDuringLoad = localEdits !== editsAtStart;
+        // The rows the user has at the end of the read, which is the only copy
+        // that contains what was typed while it ran.
+        var localRows = landedDuringLoad && held && held.tree ? JSON.parse(JSON.stringify(held.tree)) : [];
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [],
           cached: false, lastCheckedAt: Date.now(), pending: pendingCount(result.tree, texts) };
         // Never replace a complete snapshot with a partial/error listing.
@@ -505,6 +524,17 @@
           }
           if (started !== revision) { await clearSnapshot(); throw new Error("Drive library changed while loading; refresh again."); }
         }
+        // A row that was created while this read was running is not on Drive,
+        // so the listing cannot contain it. Only rows the read is missing are
+        // put back: a row Drive reports is described better by Drive's answer,
+        // and a row that was edited since is not resurrected from this copy.
+        if (landedDuringLoad && !response.warnings.length) {
+          var restored = restoreLocalRows(response.tree, localRows);
+          if (restored) {
+            response.pending = pendingCount(response.tree, texts);
+            await writeSnapshot(key, response.rootId, response.tree, result.metadata);
+          }
+        }
         // The panel shows when the library was last confirmed with Drive.
         response.lastCheckedAt = response.lastCheckedAt || Date.now();
         return response;
@@ -522,6 +552,41 @@
         // rather than on every open.
         if (options.firstLoad) fullSyncStale = true;
       }
+    }
+
+    // Put back a row that exists only here. A created row has a `local-` id, and
+    // the queue is the record that it has not reached Drive; a real id missing
+    // from a fresh listing means Drive no longer has it, which is Drive's answer
+    // and not something to undo.
+    function restoreLocalRows(tree, localRows) {
+      var present = new Set();
+      (function walk(nodes) {
+        (nodes || []).forEach(function (node) { present.add(node.id); if (node.kind === "folder") walk(node.children); });
+      })(tree);
+      var put = 0;
+      (function walk(rows, parentId) {
+        (rows || []).forEach(function (node) {
+          if (node.kind === "folder" && node.children) walk(node.children, node.id);
+          if (present.has(node.id) || String(node.id).indexOf("local-") !== 0) return;
+          var copy = JSON.parse(JSON.stringify(node));
+          if (!parentId) { tree.push(copy); present.add(copy.id); put++; return; }
+          var holder = findNode(tree, parentId);
+          if (holder && holder.children) { holder.children.push(copy); present.add(copy.id); put++; }
+        });
+      })(localRows, "");
+      return put;
+    }
+
+    function findNode(nodes, id) {
+      var found = null;
+      (function walk(rows) {
+        (rows || []).forEach(function (node) {
+          if (found) return;
+          if (node.id === id) { found = node; return; }
+          if (node.kind === "folder") walk(node.children);
+        });
+      })(nodes);
+      return found;
     }
 
     // Called by the background idle alarm. It never reports progress to the
@@ -620,7 +685,12 @@
       // copy back to restore(), which must not store it under another library.
       if (!saved || !saved.tree) return null;
       return { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId,
-        identity: saved.identity || "", index: JSON.parse(JSON.stringify(saved.index || { order: {}, collapsed: {} })) };
+        identity: saved.identity || "",
+        // The edit generation the copy was taken from. restore() compares it: a
+        // row typed after the copy was made is not in it, and putting the copy
+        // back would delete that row.
+        edits: localEdits,
+        index: JSON.parse(JSON.stringify(saved.index || { order: {}, collapsed: {} })) };
     }
 
     // --- edits made while the user is on a site ----------------------------
@@ -641,6 +711,8 @@
             return { applied: [], pending: 0, skipped: true };
           }
           var applied = await apply(saved);
+          // The load in flight (if any) started before this row existed.
+          localEdits++;
           saved.savedAt = Date.now();
           if (key) await persistTree(key, saved);
           return { applied: applied || [], pending: pendingCount(saved.tree, texts), skipped: false };
@@ -671,6 +743,11 @@
         try {
           var current = await identity();
           if (current !== key) return false;
+          // A copy is only as good as the snapshot it came from. If the user
+          // typed something while the flush was sending, that row is not in the
+          // copy, and putting the copy back would delete it. The ids the copy
+          // carries are then learned on the next read instead.
+          if (localEdits > (snapshot.edits || 0)) return false;
           await persistTree(key, snapshot);
           return true;
         } finally { mutating--; }

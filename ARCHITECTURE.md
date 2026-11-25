@@ -226,6 +226,10 @@ way to do the same thing:
 - **A second copy of the panel state in the page** — the worker owns whether the
   panel is showing, because a closed panel runs no code. The page asks for the
   answer instead of remembering the click it made.
+- **An edit applied to a snapshot that a write has invalidated** — the edit waits
+  for the write to settle and is applied afterwards, and a read that started
+  before it puts the row back. Answering "saved" for an edit that had nowhere to
+  go is how a snippet disappears.
 - Helper exports nothing calls (the full list is in the 2.16.0 changelog entry).
 
 If one of these features is needed again, add **one** new path with tests —

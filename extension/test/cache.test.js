@@ -310,6 +310,59 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   assert.equal((await cache.sync()).changed, false, "a metadata-only move does not change the visible tree");
 });
 
+test("a snippet typed while a sync is reading is not deleted by the listing that lands", async () => {
+  // The failure: a background check (or a flush read-back) starts, the user
+  // types a snippet while it runs, and the listing that arrives was read before
+  // that row existed. Installing it replaces the library with one that has
+  // never heard of the row, so the text disappears from the panel while its
+  // write is still queued.
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  // The next read stalls in the middle, after the snapshot exists.
+  let stalled = true;
+  const realList = w.drive.listChildren;
+  w.drive.listChildren = async (token, parent) => {
+    const page = await realList(token, parent);
+    while (stalled) await new Promise((r) => setTimeout(r, 2));
+    return page;
+  };
+  // A forced read is the writer's path (Sync, a configuration change); the idle
+  // check refuses to run while a mutation is in flight, which is a separate
+  // rule. Both end in the same loadFromDrive, which is what this covers.
+  const reading = cache.get(true);
+  await new Promise((r) => setTimeout(r, 20));
+  const edit = await cache.mutateLocal(async (snapshot) => {
+    snapshot.tree.push({ id: "local-typed", kind: "text", name: "Typed",
+      driveName: "Typed.txt", text: "mine" });
+    return ["local-typed"];
+  });
+  assert.equal(edit.skipped, false, "the edit is applied while the read is in flight");
+  stalled = false;
+  await reading;
+  const after = await cache.get(false);
+  assert.ok(after.tree.some((node) => node.name === "Typed"),
+    "the row typed during the read must not be deleted by the listing");
+});
+
+test("restore() never puts back a copy older than the row typed since it", async () => {
+  // A flush captures the snapshot before its first write and hands it back
+  // afterwards so the new ids can be adopted. A row typed in between is not in
+  // that copy, so putting it back would delete the row.
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const captured = await cache.current();
+  await cache.mutateLocal(async (snapshot) => {
+    snapshot.tree.push({ id: "local-typed", kind: "text", name: "Typed",
+      driveName: "Typed.txt", text: "mine" });
+    return ["local-typed"];
+  });
+  assert.equal(await cache.restore(captured), false, "the stale copy is refused");
+  const after = await cache.get(false);
+  assert.ok(after.tree.some((node) => node.name === "Typed"), "the row is still there");
+});
+
 test("an idle sync never runs while a mutation is in flight", async () => {
   const x = setup();
   const cache = x.make();
@@ -420,7 +473,7 @@ function nestedWorld() {
   };
   const native = { readConfig: async () => structuredClone(config) };
   const make = () => Cache.create(native, drive, Library, sessionArea, webcrypto, localArea);
-  return { data, localData, sessionArea, localArea, make,
+  return { data, localData, sessionArea, localArea, make, drive,
     get downloads() { return downloads; }, get listings() { return listings; } };
 }
 

@@ -1,3 +1,25 @@
+pastex (2.32.1-1) unstable; urgency=medium
+
+  * Fixed: a snippet typed while a sync was running could disappear. Sending a
+    write invalidates the cached snapshot, and an edit that arrived in exactly
+    that window had no snapshot to be applied to. It was answered as "saved"
+    and queued, but the row vanished from the list and, once the flush had
+    finished reading the queue, its write was not sent either.
+  * An edit that arrives during a write now waits for that write to settle and
+    is applied to the snapshot it leaves behind, so the row stays on screen and
+    its write joins the queue.
+  * Fixed: a read that started before a row was typed (the idle check, or the
+    read a flush does after its writes) installed a library that had never heard
+    of that row, deleting it from the panel. Such a read now puts back the rows
+    Drive does not have; a row Drive does report is still described by Drive's
+    answer.
+  * A copy of the snapshot handed back after a flush is refused when anything
+    was written since it was taken, instead of overwriting that write.
+  * Fixed: two panel opens at the same moment read the library twice instead of
+    sharing one read.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 28 Nov 2026 10:00:00 +0000
+
 pastex (2.32.0-1) unstable; urgency=medium
 
   * The Select button is an icon button again. Entering select mode wrote
