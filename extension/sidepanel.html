@@ -10,11 +10,14 @@
       <input id="search" type="search" placeholder="Search snippets…" aria-label="Search snippets" />
       <div class="toolbar" role="toolbar" aria-label="Snippet actions">
         <button id="btn-collapse-all" class="icon" title="Collapse all folders" aria-label="Collapse all folders" disabled>⤡</button>
-        <button id="btn-select" aria-pressed="false" title="Select items to move or delete">Select</button>
-        <button id="btn-sync" title="Read the library from Google Drive again">↻ Sync</button>
-        <button id="btn-config" title="Import configuration files">Config</button>
-        <button id="btn-text" class="primary" title="New snippet">＋ Text</button>
-        <button id="btn-folder" class="primary" title="New folder">＋ Folder</button>
+        <button id="btn-select" class="icon" aria-pressed="false"
+                title="Select items to move or delete" aria-label="Select items to move or delete">☑</button>
+        <button id="btn-sync" class="icon" title="Sync: read the library from Google Drive"
+                aria-label="Sync with Google Drive">↻</button>
+        <button id="btn-config" class="icon" title="Config: read the configuration file"
+                aria-label="Config: read the configuration file">⚙</button>
+        <button id="btn-text" class="icon primary" title="New snippet" aria-label="New snippet">📝</button>
+        <button id="btn-folder" class="icon primary" title="New folder" aria-label="New folder">📁</button>
         <!-- Newline on insert: the toggle decides what a click on a row appends;
              the row button keeps its own, one-time meaning. Icon only, so the
              state is read from the pressed style and the title. -->
@@ -33,7 +36,7 @@
       <div id="empty" hidden>
         <div class="empty-icon">📁</div>
         <p>Connect to Google Drive to show your snippets.</p>
-        <button id="btn-empty-text" class="primary">＋ New snippet</button>
+        <button id="btn-empty-text" class="icon primary" title="New snippet" aria-label="New snippet">📝</button>
       </div>
     </main>
     <div id="editor-overlay" hidden>
@@ -48,18 +51,20 @@
           <textarea id="editor-text" rows="10"></textarea>
         </div>
         <div class="editor-buttons">
-          <button id="editor-save" class="primary">Save</button>
-          <button id="editor-cancel">Cancel</button>
+          <button id="editor-save" class="icon primary" title="Save" aria-label="Save">✓</button>
+          <button id="editor-cancel" class="icon" title="Cancel" aria-label="Cancel">✕</button>
         </div>
       </div>
     </div>
     <div id="row-menu" role="menu" aria-label="Edit row" hidden></div>
     <div id="selection-actions" role="toolbar" aria-label="Selected item actions" hidden>
       <span id="selection-count">0 selected</span>
-      <button id="btn-up" disabled>↑ Up</button>
-      <button id="btn-down" disabled>↓ Down</button>
-      <button id="btn-move-selected" disabled>Move…</button>
-      <button id="btn-delete-selected" class="danger" disabled>🗑 Delete</button>
+      <button id="btn-up" class="icon" disabled title="Move up" aria-label="Move up">↑</button>
+      <button id="btn-down" class="icon" disabled title="Move down" aria-label="Move down">↓</button>
+      <button id="btn-move-selected" class="icon" disabled title="Move to folder…"
+              aria-label="Move the selected items to a folder">↪</button>
+      <button id="btn-delete-selected" class="icon danger" disabled title="Delete selected"
+              aria-label="Delete the selected items">🗑</button>
     </div>
     <script src="store.js"></script>
     <script src="sites.js"></script>

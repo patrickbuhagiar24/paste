@@ -1,3 +1,22 @@
+pastex (2.30.0-1) unstable; urgency=medium
+
+  * Every button in the side panel is now an icon button. Select, Sync, Config,
+    Text, Folder, the empty-state call to action, Save, Cancel and the whole
+    select-mode bar (up, down, move, delete) lost their words and kept their
+    glyph. No button carries a label any more, so the toolbar reads as seven
+    even squares instead of a row of stretched words.
+  * The meaning moved to where an icon button keeps it: `title` for the tooltip
+    and `aria-label` for screen readers, on every button, including the row
+    actions. The only text left in a bar is `#selection-count`, which is a
+    count, not an action.
+  * One `.icon` rule gives all of them the same square, centred glyph and
+    minimum size, so the editor buttons and the bottom bar line up with the
+    toolbar instead of stretching with their old labels.
+  * The row Edit menu keeps its words: it is a menu of choices, not a button,
+    and reading Rename / Edit text / Move to folder is the point of it.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 09:00:00 +0000
+
 pastex (2.29.0-1) unstable; urgency=medium
 
   * Newline on insert, as a setting and as a one-off. The toolbar gains an

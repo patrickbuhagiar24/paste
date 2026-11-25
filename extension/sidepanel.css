@@ -272,16 +272,28 @@ header {
   font-weight: 500;
 }
 
-/* Two toolbar buttons carry no text, so they must not stretch with the words
- * around them: a fixed square keeps the row even and the glyph centred. The
- * meaning lives in the title and, for the toggle, in the pressed style. */
-.toolbar button.icon {
+/* Every button in the panel is an icon button: none of them carries a word any
+ * more, so one rule gives them all a fixed square, a centred glyph and a size
+ * that does not depend on the text around it. The meaning lives in the title
+ * and the aria-label; a toggle shows its state through the pressed style. */
+button.icon {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 30px;
+  min-height: 26px;
   padding: 4px 6px;
   text-align: center;
   font-size: 13px;
   line-height: 1;
+  font-weight: 500;
+}
+
+/* The create pair keeps the primary fill but stays square, so the toolbar does
+ * not read as two wide blocks next to six small ones. */
+.toolbar button.icon.primary {
+  min-width: 34px;
 }
 
 
@@ -471,7 +483,7 @@ main {
 }
 
 #empty button {
-  min-width: 140px;
+  min-width: 44px;
 }
 
 @media (prefers-contrast: more) {
@@ -559,8 +571,11 @@ main {
   margin-top: 14px;
 }
 
+/* Save and Cancel are icon buttons too, so the dialog does not end in two wide
+ * labelled blocks after a form of labels. */
 .editor-buttons button {
-  min-width: 84px;
+  min-width: 44px;
+  min-height: 30px;
 }
 
 /* --- selection bar ------------------------------------------------------ */
@@ -636,8 +651,9 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-#selection-actions button {
-  font-size: 12.5px;
+#selection-actions button.icon {
+  min-width: 32px;
+  min-height: 26px;
 }
 
 @media (prefers-reduced-motion: reduce) {

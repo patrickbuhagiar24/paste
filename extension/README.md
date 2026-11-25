@@ -284,16 +284,18 @@ needed to keep the same extension identity across upgrades.
 ## Usage
 
 Open the side panel with the toolbar icon to create, edit, search and organize
-snippets. The toolbar reads **⤡**, **Select**, **↻ Sync**, **Config**,
-**＋ Text**, **＋ Folder** and **⏎**. **＋ Text** and **＋ Folder** are filled
-primary buttons; **Sync** takes that role while Drive is unavailable, because it
-is the action that helps then. **⤡** is the icon-only *Collapse all*: it folds
-every folder and clears the search first. **⏎** is the icon-only newline toggle:
-off, a click inserts the snippet exactly as it is stored; on, one newline is
-appended at the end, and a snippet that already ends with a newline is never
-given a second one. The toggle keeps its state in `chrome.storage.local`, so it
-survives a panel reload, and its pressed style and title (**Newline when
-inserting: on / off**) show which way it is set. The single status line reports
+snippets. Every button in the panel is an icon button: the meaning lives in the
+tooltip (`title`) and in the `aria-label` a screen reader reads, never in a word
+next to the glyph. The toolbar is **⤡**, **☑**, **↻**, **⚙**, **📝**, **📁** and
+**⏎**. **📝** and **📁** are filled primary buttons; **↻** takes that role while
+Drive is unavailable, because it is the action that helps then. **⤡** is
+*Collapse all*: it folds every folder and clears the search first. **☑** is
+*Select*, **↻** is *Sync*, **⚙** is *Config*, **📝** is *Text*, **📁** is
+*Folder*. **⏎** is the newline toggle: off, a click inserts the snippet exactly
+as it is stored; on, one newline is appended at the end, and a snippet that
+already ends with a newline is never given a second one. The toggle keeps its
+state in `chrome.storage.local`, so it survives a panel reload, and its pressed
+style and title (**Newline when inserting: on / off**) show which way it is set. The single status line reports
 `N snippets (cache)` when the list came from the session or local cache, and it
 is the only place a state is written.
 
@@ -372,9 +374,11 @@ stops when the system asks for reduced motion, and the rim grows when the
 system asks for more contrast. `assets/launcher-preview.html` shows the
 launcher on all three backgrounds. There is
 no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
-to insert it; its row has a **⏎** button, then an **Edit** button, which opens a
+to insert it; its row has a **⏎** button, then an **✎** button, which opens a
 small menu holding **Rename**, **Edit text** and **Move to folder…**, then a
-**Delete** button. The row **⏎** is not the toolbar toggle: it appends a newline
+**🗑** button. Select mode adds a bottom bar with **↑**, **↓**, **↪** and **🗑**
+next to the selection count; the count stays text because it is a number, not an
+action. The editor ends in **✓** (save) and **✕** (cancel). The row **⏎** is not the toolbar toggle: it appends a newline
 to that one insertion and leaves the setting alone, so the next click behaves as
 before. Apart from that appended newline the complete snippet text is inserted
 verbatim, including newlines and trailing spaces, into textareas and editable

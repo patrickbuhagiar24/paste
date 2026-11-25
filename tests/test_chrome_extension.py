@@ -141,20 +141,21 @@ def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     assert "lastCheckedAt" not in script
     assert "renderDriveBar" not in script
     assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
-    assert "↻ Sync" in panel, "the button is labelled Sync"
+    assert 'aria-label="Sync with Google Drive"' in panel, "the icon still says it is Sync"
     assert "Refresh" not in panel, "the old label is gone"
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
     order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
     assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder",
                      "btn-newline"]
-    # Collapse all and the newline toggle are icon buttons: a glyph, a title and
-    # (for the toggle) a pressed state carry the meaning instead of a word.
-    for button in ("btn-collapse-all", "btn-newline"):
-        tag = re.search(r'<button id="' + button + r'"[^>]*>([^<]*)</button>', panel).group(1)
-        assert len(tag.strip()) <= 2, f"{button} must carry an icon, not a label"
-        assert 'aria-label="' in re.search(r'<button id="' + button + r'"[^>]*>', panel).group(0)
-        assert 'class="icon"' in re.search(r'<button id="' + button + r'"[^>]*>', panel).group(0)
+    # Every button in the panel is an icon button: a glyph plus an accessible
+    # name, never a word. No toolbar button may carry a label again.
+    buttons = re.findall(r'<button ([^>]*)>([^<]*)</button>', panel, re.S)
+    assert len(buttons) >= 14, "the panel keeps its buttons"
+    for attributes, glyph in buttons:
+        assert 'class="icon' in attributes, f"a button lost its icon class: {attributes.strip()[:60]}"
+        assert 'aria-label="' in attributes or 'title="' in attributes, f"an icon button has no name: {attributes[:60]}"
+        assert len(glyph.strip()) <= 2, f"a button carries a word, not an icon: {glyph.strip()!r}"
     assert 'aria-pressed="false"' in re.search(r'<button id="btn-newline"[^>]*>', panel).group(0)
     glyph = re.search(r'<button id="btn-collapse-all"[^>]*>([^<]*)</button>', panel).group(1)
     assert "Collapse" not in glyph, "the button carries an icon, not the words"

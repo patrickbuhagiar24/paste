@@ -177,9 +177,9 @@ test("the stylesheet styles every state the side panel sets", () => {
   assert.ok(css.includes("#selection-count.has-items"), "missing the selection chip rule");
 
   // The intent of an action is expressed in the markup, not guessed by colour.
-  assert.ok(html.includes('<button id="editor-save" class="primary">'), "Save must be the primary action");
-  assert.ok(html.includes('<button id="btn-delete-selected" class="danger"'), "Delete must be destructive");
-  assert.ok(html.includes('id="btn-text" class="primary"'), "New snippet must be a primary action");
+  assert.ok(/<button id="editor-save" class="[^"]*primary[^"]*"/.test(html), "Save must be the primary action");
+  assert.ok(/<button id="btn-delete-selected" class="[^"]*danger[^"]*"/.test(html), "Delete must be destructive");
+  assert.ok(/<button id="btn-text" class="[^"]*primary[^"]*"/.test(html), "New snippet must be a primary action");
 });
 
 test("buttons keep a visible boundary and disabled actions step back", () => {

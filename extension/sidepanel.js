@@ -182,12 +182,15 @@
       insertNode(node, true);
     });
     newline.setAttribute("data-kind", "newline");
+    newline.setAttribute("aria-label", "Insert with a newline");
     row.appendChild(newline);
     var edit = miniButton("Edit", "✎", function () { openEditMenu(node, edit); });
+    edit.setAttribute("aria-label", "Edit: rename, edit text or move");
     edit.setAttribute("aria-haspopup", "menu");
     edit.setAttribute("aria-expanded", "false");
     row.appendChild(edit);
     var remove = miniButton("Delete", "🗑", function () { deleteNodes([node]); });
+    remove.setAttribute("aria-label", "Delete");
     remove.setAttribute("data-kind", "danger");
     row.appendChild(remove);
   }

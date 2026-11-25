@@ -39,7 +39,7 @@ BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", "
 
 # Non-ASCII characters the project uses on purpose: UI glyphs, typography and
 # the German/French accented words in the UTF-8 test fixture.
-ALLOWED_NON_ASCII = set("—–…→←↑↓↻▸▾▼│•·×≥≥⚡＋☑☐⚠✎📝📄📁🗑✓😀üöéï’‘“”§≤⤡⏎")
+ALLOWED_NON_ASCII = set("—–…→←↑↓↻▸▾▼│•·×≥≥⚡＋☑☐⚠✎📝📄📁🗑✓😀üöéï’‘“”§≤⤡⏎⚙✕↪")
 
 # Indonesian function words and everyday nouns. None of these are English words.
 INDONESIAN = (
