@@ -12,8 +12,8 @@
         <button id="btn-collapse-all" class="icon" title="Collapse all folders" aria-label="Collapse all folders" disabled>⤡</button>
         <button id="btn-select" class="icon" aria-pressed="false"
                 title="Select items to move or delete" aria-label="Select items to move or delete">☑</button>
-        <button id="btn-sync" class="icon" title="Sync: read the library from Google Drive"
-                aria-label="Sync with Google Drive">↻</button>
+        <button id="btn-sync" class="icon" title="Sync: send the changes waiting in the queue to Google Drive"
+                aria-label="Sync: send the waiting changes to Google Drive">↻</button>
         <button id="btn-config" class="icon" title="Config: read the configuration file"
                 aria-label="Config: read the configuration file">⚙</button>
         <button id="btn-text" class="icon primary" title="New snippet" aria-label="New snippet">📝</button>
@@ -33,11 +33,10 @@
     </header>
     <main>
       <div id="tree" role="tree" aria-label="Snippets"></div>
-      <div id="empty" hidden>
-        <div class="empty-icon">📁</div>
-        <p>Connect to Google Drive to show your snippets.</p>
-        <button id="btn-empty-text" class="icon primary" title="New snippet" aria-label="New snippet">📝</button>
-      </div>
+      <!-- The empty state is empty on purpose: the status line above already
+           says what happened, and a second sentence inside the list would be a
+           second place to read the same thing. -->
+      <div id="empty" hidden></div>
     </main>
     <div id="editor-overlay" hidden>
       <div id="editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
@@ -58,7 +57,7 @@
     </div>
     <div id="row-menu" role="menu" aria-label="Edit row" hidden></div>
     <div id="selection-actions" role="toolbar" aria-label="Selected item actions" hidden>
-      <span id="selection-count">0 selected</span>
+      <span id="selection-count" aria-label="number selected">0</span>
       <button id="btn-up" class="icon" disabled title="Move up" aria-label="Move up">↑</button>
       <button id="btn-down" class="icon" disabled title="Move down" aria-label="Move down">↓</button>
       <button id="btn-move-selected" class="icon" disabled title="Move to folder…"

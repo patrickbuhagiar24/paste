@@ -454,7 +454,7 @@ async function applyDriveCommand(session, command) {
       var parent = parents[j] || session.rootId;
       order.order[parent] = (groups[j] || []).slice();
     }
-    await PastexDrive.writeIndexFile(token, session.rootId, order, undefined, { id: session.indexFileId });
+    await PastexDrive.writeIndexFile(token, session.indexFileId, order);
     session.index = order;  // the next write in this flush builds on this one
     return {};
   }
@@ -463,7 +463,7 @@ async function applyDriveCommand(session, command) {
     var next = command.index || {};
     Object.keys(next.order || {}).forEach(function (parent) { merged.order[parent] = next.order[parent]; });
     Object.keys(next.collapsed || {}).forEach(function (id) { merged.collapsed[id] = next.collapsed[id]; });
-    await PastexDrive.writeIndexFile(token, session.rootId, merged, undefined, { id: session.indexFileId });
+    await PastexDrive.writeIndexFile(token, session.indexFileId, merged);
     // The session follows the label it just wrote, so a later write in the
     // same flush builds on it instead of overwriting it.
     session.index = merged;
@@ -474,7 +474,7 @@ async function applyDriveCommand(session, command) {
     (command.ids || []).filter(Boolean).forEach(function (id) {
       folded.collapsed[id] = command.collapsed ? "1" : "0";
     });
-    await PastexDrive.writeIndexFile(token, session.rootId, folded, undefined, { id: session.indexFileId });
+    await PastexDrive.writeIndexFile(token, session.indexFileId, folded);
     session.index = folded;
     return {};
   }
@@ -516,19 +516,29 @@ function queuedCommand(command, createdId) {
     // Neither carries an item, which is why the id check above comes later.
     // A reorder carries the panel's groups/parents shape verbatim; a collapse
     // carries the ids and the folded flag.
+    //
+    // A row that never reached Drive has a `local-` id, which is not a Drive id:
+    // putting one in the order made the read-back list it as a file and ask
+    // Drive for it. It is dropped here, and the row joins the order on the first
+    // reorder after its upload, when its real id is known.
+    var driveIds = function (ids) {
+      return (ids || []).filter(function (id) { return id && String(id).indexOf("local-") !== 0; });
+    };
     return { id: localId(), kind: "order", queuedAt: Date.now(), item: {},
       // The panel sends groups/parents; an older caller sends ids. Both are
       // one group of one parent here.
       groups: command.kind === "reorder"
-        ? (command.groups && command.groups.length ? command.groups : [command.ids || []]).map(function (g) { return (g || []).slice(); })
+        ? (command.groups && command.groups.length ? command.groups : [command.ids || []]).map(driveIds)
         : undefined,
       parents: command.kind === "reorder" ? (command.parents && command.parents.length ? command.parents.slice() : [""]) : undefined,
-      collapse: command.kind === "collapse" ? { ids: (command.ids || []).slice(), collapsed: !!command.collapsed } : undefined };
+      collapse: command.kind === "collapse" ? { ids: driveIds(command.ids), collapsed: !!command.collapsed } : undefined };
   }
   // A move names its targets in ids and the folder they go to. Like a delete it
   // carries no item, so its id check comes below with the delete's.
   if (command.kind === "move") {
-    var moving = (command.ids || []).filter(Boolean);
+    // A `local-` id is a row Drive has not seen yet; its own create entry puts it
+    // in the right folder, so there is nothing to move.
+    var moving = (command.ids || []).filter(function (id) { return id && String(id).indexOf("local-") !== 0; });
     if (!moving.length) return null;
     return { id: localId(), kind: "move", queuedAt: Date.now(), item: {},
       ids: moving, parentId: command.parentId || "" };
@@ -626,7 +636,10 @@ async function flushSoon(options) {
     var session = null;
     try { session = await PastexLibrary.connect(PastexConfig, PastexDrive); }
     catch (ignored) { /* each entry retries its own connect and reports why */ }
-    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session);
+    // The map lives for this flush only: a later flush learns it again from the
+    // read-back, which is where the real ids come from.
+    var resolved = new Map();
+    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session, resolved);
   } finally {
     flushRunning = false;
     // The writes are on Drive now; one full read turns every local id into the
@@ -706,8 +719,23 @@ function queuedIndex(entry, session, snapshot) {
   return { action: "order", index: index };
 }
 
+// A row that never reached Drive is named by a `local-` id. A queued write that
+// points at one can only be sent after the write that creates it, so the flush
+// keeps the local -> Drive id map it learns and asks again next time. Anything
+// still unknown is deferred, never sent with a placeholder: an empty or local
+// parent is what Drive answers with "File not found: ." (one GET /files, one 404).
+function resolveDriveId(id, resolved) {
+  var value = id === undefined || id === null ? "" : String(id);
+  if (value.indexOf("local-") !== 0) return value;
+  return (resolved && resolved.get(value)) || "";
+}
+
+function unresolvedParent(parentId, resolved) {
+  return String(parentId || "").indexOf("local-") === 0 && !resolveDriveId(parentId, resolved);
+}
+
 // A queued edit, in Drive terms, with the ids already resolved.
-function driveCommandFor(entry, session, snapshot) {
+function driveCommandFor(entry, session, snapshot, resolved) {
   var rootId = session.rootId;
   var item = entry.item || {};
   if (entry.kind === "order") {
@@ -723,21 +751,29 @@ function driveCommandFor(entry, session, snapshot) {
     // A row that never reached Drive has no parent there; it is uploaded in the
     // right folder by its own create entry, so there is nothing to move.
     var movable = (entry.ids || []).filter(function (id) { return String(id).indexOf("local-") !== 0; });
-    return movable.length ? { action: "move", ids: movable, parentId: entry.parentId || rootId } : null;
+    if (unresolvedParent(entry.parentId, resolved)) return movable.length ? { defer: true } : null;
+    return movable.length ? { action: "move", ids: movable,
+      parentId: resolveDriveId(entry.parentId, resolved) || rootId } : null;
   }
 
   // A row that never reached Drive is uploaded whatever the last edit called
   // itself: editing a brand-new row must not become a rename of a file that
   // does not exist yet.
   if (entry.kind === "create" || item.isNew) {
+    var createParent = item.parentId || rootId;
+    // Its folder has not reached Drive yet: sending now would ask Drive for a
+    // folder id that does not exist.
+    if (unresolvedParent(createParent, resolved)) return { defer: true };
     return { action: "save", mode: item.kind === "folder" ? "new-folder" : "new-text",
-      name: entry.name, parentId: item.parentId || rootId, text: entry.text || "", rootId: rootId };
+      name: entry.name, parentId: resolveDriveId(createParent, resolved) || rootId,
+      text: entry.text || "", rootId: rootId };
   }
   // An edit of a row that already exists on Drive. A text row always takes the
   // body-writing mode: the body may have changed and the same call also
   // applies a rename, while "rename-text" would silently drop the body.
   return { action: "save", mode: item.kind === "folder" ? "rename-folder" : "edit-text",
-    name: entry.name, parentId: item.parentId || rootId, text: entry.text, rootId: rootId,
+    name: entry.name, parentId: resolveDriveId(item.parentId || rootId, resolved) || rootId,
+    text: entry.text, rootId: rootId,
     node: { id: item.id, kind: item.kind, name: item.driveName || entry.name,
       driveName: item.driveName || entry.name } };
 }
@@ -745,7 +781,7 @@ function driveCommandFor(entry, session, snapshot) {
 // session may be passed in: a flush connects once and reuses it, because a
 // connect is an OAuth token plus a folder read and a queue of ten entries
 // would otherwise pay for twenty requests.
-async function sendQueued(entry, session) {
+async function sendQueued(entry, session, resolved) {
   // A revoked OAuth token answers 401 once. Forgetting the token and signing in
   // again is enough, so a single retry is allowed here instead of leaving the
   // whole queue stuck until the browser restarts. The retry is its own small
@@ -760,8 +796,11 @@ async function sendQueued(entry, session) {
       // and a read taken once per flush would miss the previous entry's write.
       var snapshot = await libraryCache.current();
       result = await libraryCache.mutate(async function () {
-        var command = driveCommandFor(entry, active, snapshot);
+        var command = driveCommandFor(entry, active, snapshot, resolved);
         if (!command) return { skipped: true };
+        // Nothing is dropped: the entry waits in the queue until the write it
+        // depends on has produced an id.
+        if (command.defer) return { defer: true };
         var written = await applyDriveCommand(active, command);
         // A created row now has its Drive id, and the cached snapshot follows at
         // once: this runs while the write still holds the library lock, before
@@ -799,6 +838,11 @@ async function sendQueued(entry, session) {
       // Offline, a rate limit or a missing configuration: keep it for later.
       return { ok: false, retry: true, error: failure };
     }
+    if (result && result.defer) return { ok: false, retry: true, error: "its folder has not reached Drive yet" };
+    // A create's Drive id is remembered for the rest of the flush, so the row
+    // created inside a new folder is uploaded into that folder.
+    if (resolved && result && result.id && entry.item && entry.item.localId)
+      resolved.set(entry.item.localId, result.id);
     await deferredQueue.remove([entry.id]);
     return { ok: true, id: result && result.id };
   }

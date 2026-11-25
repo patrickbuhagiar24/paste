@@ -373,7 +373,11 @@
   // every id, so two rows already overflow it and every reorder or fold was
   // refused with HTTP 400.
   async function readIndexFile(token, indexId, fetchImpl) {
-    if (!indexId) return { id: "", index: null };
+    // Placement and fold state are written only to a file the configuration
+    // names: `writeIndexFile` has no create-a-second-file path any more, so a
+    // missing link cannot make the session look read-only while an edit is
+    // silently dropped.
+    if (!indexId) return { id: "", index: null, missing: true };
     var raw;
     try {
       raw = await readFileText(token, indexId, fetchImpl);
@@ -389,17 +393,18 @@
     return { id: indexId, index: data };
   }
 
-  async function writeIndexFile(token, indexId, rootId, index, fetchImpl) {
-    var body = JSON.stringify(index);
-    if (indexId) {
-      await updateText(token, indexId, body, fetchImpl);
-      return indexId;
+  async function writeIndexFile(token, indexId, index, fetchImpl) {
+    // There is exactly one place order and collapse state can live: the file the
+    // `pastex-index` link names. Without that link there is nowhere to write, and
+    // creating a second file would be a second source of truth for the same fact,
+    // so the caller is told instead of being given a new id.
+    if (!indexId) {
+      throw new Error("The configuration file has no pastex-index link, so the " +
+        "empty order/collapse file has yet to be made. Open Drive, create a new " +
+        "empty file, and put its link on pastex-index in your configuration file.");
     }
-    // No link was configured. The file is created in the library folder and its
-    // new id is reported back so the rest of the session edits it instead of
-    // creating a second one.
-    var made = await uploadNew(token, rootId, "pastex-index.json", body, fetchImpl, true);
-    return (made && made.id) || "";
+    await updateText(token, indexId, JSON.stringify(index), fetchImpl);
+    return indexId;
   }
 
   // Move a file or a folder into another folder. Drive has no move endpoint:

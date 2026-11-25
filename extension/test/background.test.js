@@ -1132,6 +1132,51 @@ test("a flush that reads the library back keeps the edits still waiting", async 
     "the row the user typed is still in the list");
 });
 
+test("a text created inside a new folder is uploaded into that folder on sync", async () => {
+  // The exact failure users hit: create a folder, create a text inside it, press
+  // Sync. The folder is still only a `local-` id when the text's write is
+  // queued, so sending that parent would ask Drive for a folder id that does
+  // not exist ("File not found: ."). The text must wait for the folder's real id
+  // and then land inside it.
+  const { browser, send, writes } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const fromPanel = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  await fromPanel({ type: "pastex-panel-library" });
+
+  const drive = browser.context.PastexDrive;
+  const uploaded = [];
+  drive.listChildren = async (t, parent) => { uploaded.push(parent); return []; };
+  drive.createFolder = async () => "made-folder";
+  drive.uploadNew = async (t, parent, name, text) => {
+    writes.push(["text", name, text, parent]);
+    return { id: "made-text" };
+  };
+
+  // The folder first, then the text inside it, exactly in that order.
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "New folder", parentId: "root",
+    item: { kind: "folder", name: "New folder", parentId: "root", localId: "" },
+  } });
+  const snapshot = await browser.context.libraryCache.current();
+  const folder = snapshot.tree.find((node) => node.name === "New folder");
+  assert.ok(folder && String(folder.id).indexOf("local-") === 0, "the folder is local until it is sent");
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Inside", text: "body", parentId: folder.id,
+    item: { kind: "text", name: "Inside", parentId: folder.id, localId: "" },
+  } });
+
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  const textWrite = writes.find((write) => write[0] === "text");
+  assert.ok(textWrite, "the text was uploaded");
+  assert.equal(textWrite[3], "made-folder", "and it went into the folder's real Drive id");
+  assert.equal(uploaded.includes(""), false, "no write ever used an empty parent");
+  const after = await send({ type: "pastex-panel-status" });
+  assert.equal(after.result.pending, 0, "nothing is left waiting after the sync");
+});
+
 test("a row that never reached Drive is not moved in Drive", async () => {
   const { browser, send } = editScenario();
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };

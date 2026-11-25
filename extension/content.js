@@ -68,6 +68,15 @@
         var start = target.selectionStart === null ? target.value.length : target.selectionStart;
         var end = target.selectionEnd === null ? target.value.length : target.selectionEnd;
         target.setRangeText(text, start, end, "end");
+        // A single-line input silently swallows the newline: setRangeText has no
+        // line to break to, so the appended "\n" never appeared and the newline
+        // buttons looked broken. The newline is only real in a textarea, so the
+        // page is told instead of the field pretending it took it.
+        var isSingleLine = tag === "input" && !/^(textarea|search)$/i.test(target.type || "");
+        if (isSingleLine && /[\r\n]/.test(text)) {
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          return "single-line";
+        }
         target.dispatchEvent(new Event("input", { bubbles: true }));
         return true;
       } catch (ignored) {
@@ -297,7 +306,11 @@
         return true;
       }
       var done = insertText(target, message.text || "");
-      sendResponse({ ok: done });
+      // "single-line" is the honest answer for a newline that cannot exist in
+      // the focused field; anything else is a plain success.
+      sendResponse(done === "single-line" ?
+        { ok: false, reason: "single-line" } :
+        { ok: done });
       return true;
     }
     return false;

@@ -280,13 +280,13 @@ test("an index link that no longer opens leaves the library readable", async () 
   }
 });
 
-test("an index write edits the linked file, and creates it only when there is no link", async () => {
+test("an index write edits the linked file, and refuses to invent a second one", async () => {
   const index = { v: 2, order: { root: ["b", "a"] }, collapsed: { f: "1" } };
   const body = JSON.stringify(index);
 
   // With a link: one media PATCH to that file.
   const linked = stubFetch(async () => jsonResponse({ id: "index-file" }));
-  assert.equal(await Drive.writeIndexFile("tok", "index-file", "root", index, linked), "index-file");
+  assert.equal(await Drive.writeIndexFile("tok", "index-file", index, linked), "index-file");
   assert.equal(linked.calls.length, 1);
   const patch = linked.calls[0];
   assert.equal(patch.options.method, "PATCH");
@@ -294,15 +294,15 @@ test("an index write edits the linked file, and creates it only when there is no
   assert.ok(patch.url.includes("uploadType=media"));
   assert.equal(patch.options.body, body, "the whole label is written, unclipped");
 
-  // Without a link: one multipart POST into the library folder, whose new id is
-  // reported back so the session edits that file from then on.
+  // Without a link there is nowhere to write, and creating a file would make a
+  // second source of truth for the same fact. The caller is told what to do.
   const created = stubFetch(async () => jsonResponse({ id: "new-index" }));
-  assert.equal(await Drive.writeIndexFile("tok", "", "root", index, created), "new-index");
-  const post = created.calls[0];
-  assert.equal(post.options.method, "POST");
-  assert.ok(post.url.startsWith("https://www.googleapis.com/upload/drive/v3/files"));
-  assert.ok(post.options.body.includes("pastex-index.json"));
-  assert.ok(post.options.body.includes(body));
+  await assert.rejects(Drive.writeIndexFile("tok", "", index, created), (err) => {
+    assert.match(err.message, /pastex-index link/);
+    assert.match(err.message, /create a new\s+empty file/);
+    return true;
+  });
+  assert.equal(created.calls.length, 0, "no second index file is ever created");
 });
 
 test("the index no longer has to fit in 124 bytes, which is what refused every reorder", async () => {
@@ -314,7 +314,7 @@ test("the index no longer has to fit in 124 bytes, which is what refused every r
   const body = JSON.stringify(index);
   assert.ok(body.length > 124, "the label is far larger than a property can hold");
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
-  await Drive.writeIndexFile("tok", "index-file", "root", index, fetchImpl);
+  await Drive.writeIndexFile("tok", "index-file", index, fetchImpl);
   assert.equal(fetchImpl.calls[0].options.body, body);
   assert.equal(Drive.setIndex, undefined, "there is no property writer any more");
 });
@@ -410,7 +410,7 @@ test("writing the index keeps shared-drive support", async () => {
   const fetchImpl = stubFetch(async (url) => (url.startsWith("https://www.googleapis.com/upload/")
     ? jsonResponse({ id: "index-file" })
     : jsonResponse({ files: [] })));
-  await Drive.writeIndexFile("tok", "index-file", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl);
+  await Drive.writeIndexFile("tok", "index-file", { v: 2, order: {}, collapsed: {} }, fetchImpl);
   const patch = fetchImpl.calls.find((call) => call.options.method === "PATCH");
   assert.equal(new URL(patch.url).searchParams.get("supportsAllDrives"), "true");
 });
@@ -424,7 +424,7 @@ test("no per-item order or collapse writer is exported any more", () => {
 
 test("a linked index file costs one write, not a listing first", async () => {
   const fetchImpl = stubFetch(async () => jsonResponse({ id: "index-file" }));
-  await Drive.writeIndexFile("tok", "index-file", "root", { v: 2, order: {}, collapsed: {} }, fetchImpl);
+  await Drive.writeIndexFile("tok", "index-file", { v: 2, order: {}, collapsed: {} }, fetchImpl);
   assert.equal(fetchImpl.calls.length, 1, "the id from the link is reused");
   assert.equal(fetchImpl.calls[0].options.method, "PATCH");
 });

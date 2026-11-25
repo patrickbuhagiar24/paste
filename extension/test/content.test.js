@@ -72,7 +72,8 @@ function setupContent(options = {}) {
   function runTimers(ms) {
     for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); }
   }
-  return { root, target, events, windowEvents, document, runTimers, messages, get inserted() { return inserted; } };
+  return { root, target, events, windowEvents, document, runTimers, messages,
+    element: (tag) => new Element(tag), get inserted() { return inserted; } };
 }
 async function tick() { await new Promise(setImmediate); }
 
@@ -127,6 +128,26 @@ test("multiline snippets are inserted into a textarea verbatim", async () => {
   assert.equal(result.ok, true);
   assert.equal(page.inserted, text);
   assert.equal(page.target.value, text);
+});
+
+test("a trailing newline reaches a textarea, and a one-line input is told so", async () => {
+  // The newline buttons append "\n". In a textarea that is a real line; in a
+  // single-line input there is no line to break to, and pretending otherwise is
+  // what made the buttons look broken.
+  const page = setupContent();
+  page.target.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "snippet\n" }, { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  assert.equal(page.target.value, "snippet\n", "the textarea keeps the appended newline");
+
+  // The same message against an <input> answers honestly instead.
+  const input = page.root.appendChild(page.element("input"));
+  input.type = "text";
+  input.focus(); await tick();
+  page.events.message({ type: "pastex-insert", text: "snippet\n" }, { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "single-line");
 });
 
 test("hiding a tab reports visibility but never sends the queue", async () => {

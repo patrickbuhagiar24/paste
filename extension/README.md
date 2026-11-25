@@ -119,7 +119,7 @@ The file must contain these four keys:
 | Key | Points at | Notes |
 | --- | --- | --- |
 | `pastex-folder` | the library folder in Drive | the snippets and folders Pastex manages |
-| `pastex-index` | the order/collapse file | the id is read, never the listing; if the link does not open, the library still loads in Drive's order |
+| `pastex-index` | the order/collapse file | **required for reordering and folding**: create one empty file in Drive and paste its link here. The id is read, never the listing; if the link does not open, the library still loads in Drive's order |
 | `pastex-sites` | the site allowlist | either an inline array (as above) or a link to a JSON file holding `{"allowed_sites": [...]}` |
 | `client_id` | the OAuth client from the guide above | public, not a secret |
 
@@ -248,17 +248,19 @@ errors clear the cached snapshot. An internet connection is
 required for the initial load and all changes. Account or configuration changes
 invalidate the snapshot. No snippet changes are queued for offline sync.
 
-**Select** enables multi-selection instead of pasting. Use **Up** or **Down**
-to move selected items within their own folders, and **Delete** to move them to
-Drive trash after confirmation. Click the folder arrow to expand or collapse it
+**Select** enables multi-selection instead of pasting. In the bottom bar, **↑**
+or **↓** moves the selected items within their own folders and **🗑** moves them
+to Drive trash after confirmation; the number next to them is how many are
+selected. Click the folder arrow to expand or collapse it
 while selecting. Moving is disabled during search; clear the search first.
 Manual order and the collapsed state of the folders are stored together in one
-small file in the library folder, `pastex-index.json`. One reorder or one
+small file, the one the `pastex-index` link names. Pastex never creates a second
+one: without that link it refuses the write and says which key is missing. One reorder or one
 **Collapse all** is therefore a single Drive write instead of one write per
 item, and the structure survives a panel reload, a browser restart and a move
 to another computer using the same Drive folder. The file is Pastex's own
-metadata: it is never shown as a snippet, and it can be deleted at any time —
-the library then appears in Drive's own order with every folder open. It used
+metadata: it is never shown as a snippet, and its contents can be cleared at any
+time — the library then appears in Drive's own order with every folder open. It used
 to be a custom property on the root folder, which Drive limits to 124 bytes
 including the key; two rows already exceeded that, so every reorder and every
 fold was refused. Libraries that were ordered with earlier versions keep their
@@ -286,9 +288,13 @@ needed to keep the same extension identity across upgrades.
 Open the side panel with the toolbar icon to create, edit, search and organize
 snippets. Every button in the panel is an icon button: the meaning lives in the
 tooltip (`title`) and in the `aria-label` a screen reader reads, never in a word
-next to the glyph. The toolbar is **⤡**, **☑**, **↻**, **⚙**, **📝**, **📁** and
-**⏎**. **📝** and **📁** are filled primary buttons; **↻** takes that role while
-Drive is unavailable, because it is the action that helps then. **⤡** is
+next to the glyph, and they are all the same square so the rows line up. The
+Config button also carries the state of this installation: an outlined red gear
+means no configuration has been picked yet, a filled gear with its tooltip
+saying *configured* means one is in use. The toolbar is **⤡**, **☑**, **↻**,
+**⚙**, **📝**, **📁** and **⏎**. **📝** and **📁** are filled primary buttons;
+**↻** takes that role while Drive is unavailable, because it is the action that
+helps then. **⤡** is
 *Collapse all*: it folds every folder and clears the search first. **☑** is
 *Select*, **↻** is *Sync*, **⚙** is *Config*, **📝** is *Text*, **📁** is
 *Folder*. **⏎** is the newline toggle: off, a click inserts the snippet exactly
@@ -377,8 +383,8 @@ no Pastex keyboard shortcut or context-menu entry. Click a side-panel snippet
 to insert it; its row has a **⏎** button, then an **✎** button, which opens a
 small menu holding **Rename**, **Edit text** and **Move to folder…**, then a
 **🗑** button. Select mode adds a bottom bar with **↑**, **↓**, **↪** and **🗑**
-next to the selection count; the count stays text because it is a number, not an
-action. The editor ends in **✓** (save) and **✕** (cancel). The row **⏎** is not the toolbar toggle: it appends a newline
+next to the selection count, which is the number alone (`0`, `2`) because the bar is
+already the selection bar. The editor ends in **✓** (save) and **✕** (cancel). The row **⏎** is not the toolbar toggle: it appends a newline
 to that one insertion and leaves the setting alone, so the next click behaves as
 before. Apart from that appended newline the complete snippet text is inserted
 verbatim, including newlines and trailing spaces, into textareas and editable
@@ -426,7 +432,9 @@ not listed under `pastex-sites` are not injected or targeted.
 - If the order and the folded folders were forgotten, the `pastex-index` link
   probably points at a file the signed-in account cannot open; the library then
   loads in Drive's order with every folder open, and the next reorder writes the
-  file again.
+  file again. If it says the link is missing, Pastex will not create a second
+  index file behind your back: make one empty file in Drive, paste its link on
+  `pastex-index`, pick the configuration file again, then reorder once.
 - If Drive says 404, check the folder ID and that the signed-in account can see
   that folder. Token errors can mean a deleted OAuth client or a disabled Drive
   API. Snippets appear progressively while loading; a stalled Google request

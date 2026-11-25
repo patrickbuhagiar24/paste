@@ -1,3 +1,39 @@
+pastex (2.31.0-1) unstable; urgency=medium
+
+  * BREAKING: reordering and folding need a `pastex-index` link, and Pastex no
+    longer creates that file behind your back. A missing link used to make the
+    extension write a new `pastex-index.json` into the library folder, which was
+    a second place holding the same order, so a link-less configuration now
+    reports which key is missing instead.
+  * Fixed: a text created inside a folder that was itself created in the panel
+    could not be synced. Its queued write still carried the folder's `local-`
+    id, so Drive was asked for a folder that did not exist yet and answered
+    `GET /files failed (HTTP 404): File not found: .`. The flush now learns each
+    created folder's real id and sends the child write into it, and a write
+    whose parent is still unknown waits in the queue instead of being sent with
+    a placeholder.
+  * Fixed: the two newline buttons. A one-line `<input>` silently drops the
+    appended newline, so the buttons looked dead; a textarea keeps it, and a
+    single-line field now answers "a one-line field cannot hold a newline"
+    instead of doing nothing quietly. A snippet that has not been downloaded yet
+    (its folder is folded) now says so instead of inserting an empty string.
+  * The empty list is an empty box: `Connect to Google Drive to show your
+    snippets.` and its second new-snippet button are gone, and the status line
+    above the list is the only place a state is written.
+  * Select mode says how many rows are selected with the number alone; the word
+    is gone, like every other label on a button.
+  * Every icon button is now one square (32x28 in the bars, 22x20 on a row), so
+    the glyphs line up instead of being sized by their neighbours.
+  * A toggle that is on is filled with the primary indigo and its glyph turns
+    white; a toggle that is off has a dashed outline. The Config button carries
+    the state of the installation: an outlined red gear means nothing is
+    configured yet, a filled gear means a configuration is in use, and both say
+    so in the tooltip and the `aria-label`.
+  * Tooltips corrected: Sync now says it sends the queue (it never reads the
+    library back), and every row action names what it does.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 13:00:00 +0000
+
 pastex (2.30.0-1) unstable; urgency=medium
 
   * Every button in the side panel is now an icon button. Select, Sync, Config,

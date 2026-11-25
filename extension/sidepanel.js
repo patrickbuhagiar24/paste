@@ -150,6 +150,30 @@
     catch (ignored) { /* the setting simply does not survive a restart */ }
   }
 
+  // --- configuration state -----------------------------------------------
+  //
+  // The Config button says which case this installation is in: no
+  // configuration yet (click to pick one) or configured (click to change it).
+  // The state is written into data-configured, the title and the aria-label, so
+  // the colour is a reminder and never the message.
+  var configured = false;
+
+  function reportConfiguration() {
+    var button = $("btn-config");
+    if (!button) return;
+    button.setAttribute("data-configured", String(configured));
+    var label = configured ?
+      "Config: configured, click to choose another configuration file" :
+      "Config: no configuration yet, click to choose the configuration file";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  function markConfigured(value) {
+    configured = !!value;
+    reportConfiguration();
+  }
+
   async function readNewlineOnInsert() {
     try {
       var saved = await chrome.storage.local.get(NEWLINE_KEY);
@@ -293,10 +317,9 @@
       host.appendChild(row);
     });
     $("tree").appendChild(host);
+    // Nothing to show is an empty box, not a sentence with a second button in
+    // it: the status line already says what happened.
     $("empty").hidden = matches.length > 0;
-    if (!matches.length) {
-      $("empty").querySelector("p").innerHTML = "No snippets match.<br />Clear the search to browse everything.";
-    }
   }
 
   function render() {
@@ -309,11 +332,7 @@
         renderRow(node, 0, host);
       });
       $("tree").appendChild(host);
-      var hasNodes = tree.length > 0;
-      $("empty").hidden = hasNodes;
-      if (!hasNodes) {
-        $("empty").querySelector("p").textContent = ready ? "No snippets in the Google Drive folder yet." : "Connect to Google Drive to show your snippets.";
-      }
+      $("empty").hidden = tree.length > 0;
     }
     renderSelectionActions();
   }
@@ -328,7 +347,9 @@
     $("selection-actions").hidden = !selecting;
     $("btn-select").setAttribute("aria-pressed", String(selecting));
     $("btn-select").textContent = selecting ? "Done" : "Select";
-    $("selection-count").textContent = selectedItems.size + " selected";
+    // The number alone: the bar is already the selection bar, so the word said
+    // nothing the toolbar does not.
+    $("selection-count").textContent = String(selectedItems.size);
     $("selection-count").className = selectedItems.size ? "has-items" : "";
     $("btn-up").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, -1).length;
     $("btn-down").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, 1).length;
@@ -355,10 +376,9 @@
     $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
-    $("btn-empty-text").disabled = busy || !ready;
     // While Drive is unusable, Sync is the action that helps; the create
     // buttons keep their primary look only when a click can succeed.
-    $("btn-sync").className = ready ? "" : "primary";
+    $("btn-sync").className = ready ? "icon" : "icon primary";
   }
 
   // Saving is local, so a queued change is not an error; it is reported once,
@@ -481,6 +501,9 @@
       if (loadConfigVersion !== configVersion) return false;
       if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
       var result = response.result;
+      // The library could only be read because a configuration was picked, so
+      // that is also the moment the Config button can say it is configured.
+      markConfigured(true);
       tree = result.tree;
       rootId = result.rootId;
       fromCache = result.cached;
@@ -507,6 +530,9 @@
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
+      // "Choose your configuration file in Config first." is the one failure
+      // that means nothing is configured yet; the Config button reflects it.
+      if (/Choose your configuration file/i.test((err && err.message) || "")) markConfigured(false);
       if (!quiet) setStatus(err.message ? "Could not read the library. " + err.message : "Could not read the library.", "error");
       return false;
     } finally {
@@ -523,6 +549,12 @@
 
   async function insertNode(node, forceNewline) {
     if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError, "error"); return; }
+    // A row inside a folded folder is listed but not downloaded. Inserting it
+    // would insert an empty string, which looks exactly like a broken button.
+    if (node.deferred && typeof node.text === "string" && node.text === "") {
+      setStatus("Open this snippet's folder first, then insert it.", "error");
+      return;
+    }
     setStatus("Inserting…");
     var response = null;
     var text = textForInsert(node, forceNewline);
@@ -541,6 +573,12 @@
     }
     if (response && response.reason === "site-not-allowed") {
       setStatus("This site is not allowed.", "error");
+      return;
+    }
+    if (response && response.reason === "single-line") {
+      // The field is a one-line input, so a newline has nowhere to go. Telling
+      // the user is what stops the newline buttons looking broken.
+      setStatus("Inserted, but a one-line field cannot hold a newline.", "error");
       return;
     }
     if (!response || response.reason !== "no-editable") {
@@ -884,6 +922,7 @@
         if (!response || !response.ok) throw new Error((response && response.error) || "Site registration failed.");
       } catch (err) { issues.push("Site registration failed; restart the browser: " + (err.message || err)); }
       configVersion++;
+      markConfigured(true);
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
       rebuildIndex(); render(); renderButtons();
@@ -946,10 +985,6 @@
   });
 
   $("btn-text").addEventListener("click", function () {
-    openEditor("new-text", null);
-  });
-
-  $("btn-empty-text").addEventListener("click", function () {
     openEditor("new-text", null);
   });
 
@@ -1047,6 +1082,7 @@
   // Use the shared session cache on open; explicit refresh reloads Drive.
   renderButtons();
   reportNewline();
+  reportConfiguration();
   readNewlineOnInsert();
   announcePanelState(true);
   refresh(false);

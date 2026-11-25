@@ -57,7 +57,7 @@ reaches WCAG AA, most of them AAA:
 **Buttons now carry meaning:**
 
 - **Primary** (indigo gradient, white text): `＋ Text`, `＋ Folder`,
-  `＋ New snippet`, `Save` — safe actions that are the next step;
+  the **📝** snippet button, `Save` — safe actions that are the next step;
 - **Danger** (red gradient): `🗑 Delete` and `🗑 Delete` in the selection bar;
 - **Secondary** (strong 3.9:1 border): the collapse-all icon, Select, Sync,
   Config, Cancel and the row actions (newline/edit/delete);

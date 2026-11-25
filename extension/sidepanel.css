@@ -205,11 +205,22 @@ button.danger:hover:not(:disabled) {
   border-color: var(--danger-hover);
 }
 
+/* A toggle that is on has to be unmistakable, not a pale tint: the fill is the
+ * same indigo as a primary action and the glyph turns white, so "on" cannot be
+ * mistaken for "hovered" or for a disabled button. */
 button[aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--primary-text);
+  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  border-color: var(--focus-strong);
+  box-shadow: inset 0 0 0 1px var(--focus-strong), 0 1px 3px var(--shadow-row);
+  font-weight: 700;
+}
+
+/* And "off" is said out loud too: a dashed outline reads as "not latched" next
+ * to the filled buttons around it. */
+.toolbar button.icon[aria-pressed="false"] {
+  border-style: dashed;
+  color: var(--muted);
 }
 
 /* On a narrow panel the toolbar buttons share the width, so they are told
@@ -217,6 +228,22 @@ button[aria-pressed="true"] {
 .toolbar button[aria-pressed="true"],
 .toolbar button.primary {
   font-weight: 700;
+}
+
+/* The Config button says whether this installation is configured, in the same
+ * place it is clicked: an outlined gear means "no configuration yet, click me",
+ * a filled gear with a check means "configured, click to change it". The state
+ * is written to the title and aria-label too, so it is never colour alone. */
+#btn-config[data-configured="false"] {
+  color: var(--danger-ink);
+  border-color: var(--danger-ink);
+  border-style: dashed;
+}
+
+#btn-config[data-configured="true"] {
+  color: var(--primary-text);
+  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  border-color: var(--focus-strong);
 }
 
 @media (prefers-contrast: more) {
@@ -281,19 +308,21 @@ button.icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 30px;
-  min-height: 26px;
-  padding: 4px 6px;
+  /* One size for every icon button in the panel: the same square everywhere,
+   * so a row of them reads as a set and no glyph is stretched by its label. */
+  width: 32px;
+  height: 28px;
+  padding: 0;
   text-align: center;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
   font-weight: 500;
 }
 
-/* The create pair keeps the primary fill but stays square, so the toolbar does
- * not read as two wide blocks next to six small ones. */
+/* The create pair keeps the primary fill and the same square, so the toolbar
+ * does not read as two wide blocks next to five small ones. */
 .toolbar button.icon.primary {
-  min-width: 34px;
+  width: 32px;
 }
 
 
@@ -406,7 +435,12 @@ main {
 
 .row .mini {
   flex: 0 0 auto;
-  padding: 1px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
   font-size: 12px;
   line-height: 1.2;
   color: var(--ink);
@@ -468,22 +502,10 @@ main {
   font-weight: 650;
 }
 
+/* Empty is empty: no sentence, no second call to action. The box keeps a
+ * minimum height so the panel does not look broken when the list is empty. */
 #empty {
-  padding: 30px 14px;
-  color: var(--muted);
-  text-align: center;
-}
-
-#empty p {
-  margin: 10px 0 14px;
-}
-
-.empty-icon {
-  font-size: 34px;
-}
-
-#empty button {
-  min-width: 44px;
+  min-height: 120px;
 }
 
 @media (prefers-contrast: more) {
@@ -574,8 +596,8 @@ main {
 /* Save and Cancel are icon buttons too, so the dialog does not end in two wide
  * labelled blocks after a form of labels. */
 .editor-buttons button {
-  min-width: 44px;
-  min-height: 30px;
+  width: 32px;
+  height: 28px;
 }
 
 /* --- selection bar ------------------------------------------------------ */
@@ -651,9 +673,10 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+/* The bottom bar uses the same square as the toolbar, so the two bars match. */
 #selection-actions button.icon {
-  min-width: 32px;
-  min-height: 26px;
+  width: 32px;
+  height: 28px;
 }
 
 @media (prefers-reduced-motion: reduce) {

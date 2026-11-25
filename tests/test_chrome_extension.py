@@ -141,7 +141,7 @@ def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     assert "lastCheckedAt" not in script
     assert "renderDriveBar" not in script
     assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
-    assert 'aria-label="Sync with Google Drive"' in panel, "the icon still says it is Sync"
+    assert "Sync: send the waiting changes to Google Drive" in panel, "the icon still says it is Sync"
     assert "Refresh" not in panel, "the old label is gone"
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
@@ -151,7 +151,7 @@ def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     # Every button in the panel is an icon button: a glyph plus an accessible
     # name, never a word. No toolbar button may carry a label again.
     buttons = re.findall(r'<button ([^>]*)>([^<]*)</button>', panel, re.S)
-    assert len(buttons) >= 14, "the panel keeps its buttons"
+    assert len(buttons) >= 13, "the panel keeps its buttons"
     for attributes, glyph in buttons:
         assert 'class="icon' in attributes, f"a button lost its icon class: {attributes.strip()[:60]}"
         assert 'aria-label="' in attributes or 'title="' in attributes, f"an icon button has no name: {attributes[:60]}"

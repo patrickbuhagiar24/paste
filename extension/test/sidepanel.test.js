@@ -29,7 +29,7 @@ class Element {
 }
 
 function panelHarness(fail, options = {}) {
-  const ids = ["search", "tree", "empty", "status-bar", "btn-sync", "btn-collapse-all", "btn-newline", "btn-folder", "btn-text", "btn-empty-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
+  const ids = ["search", "tree", "empty", "status-bar", "btn-sync", "btn-collapse-all", "btn-newline", "btn-folder", "btn-text", "editor-title", "editor-parent-label", "editor-parent", "editor-text-wrap", "editor-name", "editor-text", "editor-overlay", "editor-save", "editor-cancel", "status", "btn-config", "btn-select", "selection-actions", "selection-count", "btn-up", "btn-down", "btn-move-selected", "btn-delete-selected", "row-menu", "editor-name-label"];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element("div")]));
   // The real markup starts with the editor dialog closed.
   elements["editor-overlay"].hidden = true;
@@ -168,7 +168,10 @@ test("side panel shows Drive errors rather than claiming an empty library", asyn
   const { elements } = panelHarness(true);
   await settled();
   assert.match(elements.status.textContent, /403 denied/);
-  assert.match(elements.empty.querySelector("p").textContent, /Connect/);
+  // The empty state is an empty box: the status line above it is the only place
+  // a failure is written, so nothing inside the list repeats or hides it.
+  assert.equal(elements.empty.hidden, false);
+  assert.equal(allText(elements.empty).trim(), "", "the empty state carries no text");
   assert.equal(elements["btn-text"].disabled, true);
 });
 
@@ -262,7 +265,7 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   assert.equal(elements["selection-actions"].hidden, false);
   rowFor("B").listeners.click();
   rowFor("C").listeners.click();
-  assert.equal(elements["selection-count"].textContent, "2 selected");
+  assert.equal(elements["selection-count"].textContent, "2", "the count is the number alone");
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
   assert.equal(elements["btn-up"].disabled, false);
   elements["btn-up"].listeners.click();
@@ -281,7 +284,7 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   assert.equal(records.find((r) => r.id === "B").trashed, undefined, "a delete waits in the queue");
   assert.equal(records.find((r) => r.id === "C").trashed, undefined);
   assert.doesNotMatch(allText(elements.tree), /B C/, "the rows are gone from the cache at once");
-  assert.equal(elements["selection-count"].textContent, "0 selected");
+  assert.equal(elements["selection-count"].textContent, "0");
   elements["btn-select"].listeners.click();
   assert.equal(elements["selection-actions"].hidden, true);
 });
@@ -403,6 +406,22 @@ test("the toolbar newline toggle appends one newline to every insert, and surviv
   elements["btn-newline"].listeners.click();
   assert.equal(elements["btn-newline"]["aria-pressed"], "false", "a second click turns it off");
   assert.match(elements["btn-newline"].title, /off$/);
+});
+
+test("the Config button says whether a configuration exists", async () => {
+  const { elements } = panelHarness(false);
+  await settled();
+  assert.equal(elements["btn-config"]["data-configured"], "true", "a readable configuration means configured");
+  assert.match(elements["btn-config"].title, /configured, click to choose another/);
+
+  // Nothing picked yet: the panel's read fails with the message that says so.
+  const missing = panelHarness(false, {
+    libraryResult: { ok: false, error: "Choose your configuration file in Config first." },
+  });
+  await settled();
+  assert.equal(missing.elements["btn-config"]["data-configured"], "false");
+  assert.match(missing.elements["btn-config"].title, /no configuration yet/);
+  assert.match(missing.elements["btn-config"]["aria-label"], /no configuration yet/);
 });
 
 test("the setting is remembered and never adds a second trailing newline", async () => {
