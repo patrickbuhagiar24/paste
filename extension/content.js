@@ -83,9 +83,21 @@
         return false;
       }
     }
-    // Contenteditable: execCommand preserves undo and notifies frameworks.
+    // Contenteditable: execCommand preserves undo and notifies frameworks, but
+    // it inserts the text as one run and a "\n" inside it becomes a space or
+    // nothing at all -- HTML has no newline in a text node, only an element.
+    // That is why the newline buttons did nothing on a chat box. The text is
+    // therefore inserted line by line, with a real <br> between the lines.
+    var lines = text.split(/\r?\n/);
     try {
-      if (document.execCommand("insertText", false, text)) {
+      if (lines.length > 1) {
+        var placed = true;
+        for (var i = 0; i < lines.length && placed; i++) {
+          if (i > 0) placed = document.execCommand("insertLineBreak");
+          if (placed && lines[i]) placed = document.execCommand("insertText", false, lines[i]);
+        }
+        if (placed) return true;
+      } else if (document.execCommand("insertText", false, text)) {
         return true;
       }
     } catch (ignored) {
@@ -97,8 +109,21 @@
         if (selection && selection.rangeCount > 0) {
           var range = selection.getRangeAt(0);
           range.deleteContents();
-          range.insertNode(document.createTextNode(text));
-          range.collapse(false);
+          var last = null;
+          text.split(/\r?\n/).forEach(function (line, index) {
+            if (index > 0) { last = document.createElement("br"); range.insertNode(last); }
+            if (line) {
+              last = document.createTextNode(line);
+              range.insertNode(last);
+            }
+          });
+          if (last) {
+            // After the last node, so the caret is where the user expects it.
+            range.setStartAfter(last);
+            range.collapse(true);
+            if (selection.removeAllRanges) selection.removeAllRanges();
+            if (selection.addRange) selection.addRange(range);
+          }
           target.dispatchEvent(new InputEvent("input", { bubbles: true }));
           return true;
         }

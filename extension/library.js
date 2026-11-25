@@ -113,7 +113,11 @@
     // A token for the signed-in account, signed in with the client id this
     // installation put in the configuration file. The first call of a session may
     // show Google's page, which is why it is interactive.
-    var token = await drive.getAuthToken({ clientId: config.oauth.client_id, interactive: true });
+    var token = await drive.getAuthToken({
+      clientId: config.oauth.client_id,
+      clientSecret: config.oauth.client_secret,
+      interactive: true,
+    });
     var rootId = config.drive.folderId;
     var folder;
     try {

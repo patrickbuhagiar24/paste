@@ -64,13 +64,28 @@ You need, once, about ten minutes:
    an existing folder or a snippet uploaded by hand reads as 404), and
    `auth/drive.item` is not in Google's scope tables at all.
 
-5. **Create the OAuth client.** *APIs & Services → Credentials → Create
-   credentials → OAuth client ID*. Application type: **Web application**. Name
-   it `Pastex (Chrome extension)`. Under *Authorized redirect URIs* click *Add
+5. **Create the OAuth client.** The shortest route is the **Personal mode**
+   onboarding page (*Google Auth Platform → Get started → Personal mode*). It
+   creates a project called `personal-mode-app` and an OAuth client in one step,
+   and a Personal mode project only ever authorizes the Google account that
+   created it. That has two consequences worth knowing before you start: no
+   verification, consent-screen review or security assessment is needed, and the
+   grant does not expire after seven days the way a *Testing* app's does. Personal
+   mode is a one-time choice — a Personal mode project cannot later be shared, and
+   an External project cannot be turned into one.
+
+   Choose *Web application* and complete the form as below. The onboarding page
+   shows the **client ID** and **client secret** together; copy both, because the
+   secret is not shown again after that dialog closes.
+
+   Alternatively, create it by hand: *APIs & Services → Credentials → Create
+   credentials → OAuth client ID*, application type **Web application**, named
+   `Pastex (Chrome extension)`. Under *Authorized redirect URIs* click *Add
    URI* and paste the redirect URL from step 1 **exactly**, including the
    trailing `/`. Leave *Authorized JavaScript origins* empty. Click *Create* and
    copy the **client ID** shown — it looks like
-   `123456789012-abcdefghijklmnop.apps.googleusercontent.com`.
+   `123456789012-abcdefghijklmnop.apps.googleusercontent.com` — and the
+   **client secret**, which looks like `GOCSPX-…`.
 
    Do not choose the *Chrome Extension* application type: Google only accepts
    that type for an extension published in the Chrome Web Store, and Pastex is
@@ -86,13 +101,21 @@ You need, once, about ten minutes:
    installation, leaving the app in *Testing* with yourself as a test user is
    the honest route.
 
-7. **Note the client ID.** It goes into `client_id` in the configuration file
-   described in the next section.
+7. **Note the client ID and the client secret.** They go into `client_id` and
+   `client_secret` in the configuration file described in the next section.
 
-That is the whole Google side. Nothing is shared with an e-mail address, no
-folder has to be handed over, and no credential is stored on disk: the grant
-stays with Google, and Pastex keeps only an access token in memory for about an
-hour.
+That is the whole Google side. Nothing is shared with an e-mail address and no
+folder has to be handed over.
+
+**Why a client secret in a self-hosted extension is acceptable here.** Pastex is
+one file you own, run by one account, configured by hand — it is not a published
+app whose bundle is handed to strangers. The secret is never compiled into the
+extension; it sits in the same JSON file as the client id, on your own disk, and
+it travels only to Google's token endpoint. What it buys is the part that makes
+the extension pleasant to use: the authorization-code flow with a **refresh
+token**. Without it every access token dies after an hour and the panel has to
+walk you through Google's window again; with it a discarded service worker
+renews silently and nothing needs your attention.
 
 ## Set up the configuration file
 
@@ -105,14 +128,15 @@ needs to be public, and the file is not a credential.
 four keys inside it, all of which are checked. The panel reports the name it
 used (`Using <name>.`), so a screen full of JSON files is never ambiguous.
 
-The file must contain these four keys:
+The file must contain these five keys:
 
 ```json
 {
   "pastex-folder": "https://drive.google.com/drive/folders/YOUR_LIBRARY_FOLDER_ID",
   "pastex-index": "https://drive.google.com/file/d/YOUR_INDEX_FILE_ID/view",
   "pastex-sites": ["https://example.com", "https://*.example.org"],
-  "client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"
+  "client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com",
+  "client_secret": "GOCSPX-your-client-secret"
 }
 ```
 
@@ -122,6 +146,7 @@ The file must contain these four keys:
 | `pastex-index` | the order/collapse file | **required for reordering and folding**: create one empty file in Drive and paste its link here. The id is read, never the listing; if the link does not open, the library still loads in Drive's order |
 | `pastex-sites` | the site allowlist | either an inline array (as above) or a link to a JSON file holding `{"allowed_sites": [...]}` |
 | `client_id` | the OAuth client from the guide above | public, not a secret |
+| `client_secret` | the same OAuth client's secret | optional, and needed by a *Web application* client (which is what Personal mode creates): it is sent only to `oauth2.googleapis.com/token`. A client created without one keeps working with the key left out |
 
 **The links are the ones Drive's Share button gives you.** Every shape is
 accepted and reduced to the id the API needs:
@@ -415,8 +440,20 @@ next to the selection count, which is the number alone (`0`, `2`) because the ba
 already the selection bar. The editor ends in **✓** (save) and **✕** (cancel). The row **⏎** is not the toolbar toggle: it appends a newline
 to that one insertion and leaves the setting alone, so the next click behaves as
 before. Apart from that appended newline the complete snippet text is inserted
-verbatim, including newlines and trailing spaces, into textareas and editable
-fields; a single-line input cannot display line breaks. The allowlist is cached for 30 seconds so a click does not have to
+verbatim, including newlines and trailing spaces.
+
+**Where a newline can exist** depends on the box, and Pastex treats the three
+cases differently instead of pretending they are one:
+
+| The focused box | What a newline does |
+| --- | --- |
+| `<textarea>` | the real newline is placed in the value, byte for byte |
+| contenteditable `<div>` (WhatsApp Web, chat boxes, mail composers) | a real `<br>` is inserted between the lines. HTML has no newline inside a text node, so inserting `"a\nb"` as one run is what made ⏎ silently do nothing on those sites |
+| a one-line `<input>` | the newline has nowhere to go, and the panel says `Inserted, but a one-line field cannot hold a newline.` instead of claiming success |
+
+On WhatsApp Web the composer is a contenteditable box where **Enter sends the
+message**. Pastex never presses Enter: the break is inserted as an element, so
+the message is not sent and the second line simply sits under the first. The allowlist is cached for 30 seconds so a click does not have to
 re-read the configuration; repicking the file refreshes it immediately. If no editable field is focused on an allowed page, the text is
 copied to the clipboard. Restricted browser pages cannot receive scripts. Sites
 not listed under `pastex-sites` are not injected or targeted.

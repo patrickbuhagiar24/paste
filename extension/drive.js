@@ -5,8 +5,19 @@
  * service account was used before and could not do this: it has no storage of
  * its own, so Google refused every new file.
  *
- * There is no client secret anywhere. The extension is a public client: its
- * bundle can be read by anyone, so a secret shipped in it would not be one.
+ * The flow is the authorization-code flow with PKCE, which is the only one that
+ * can return a refresh token, and a refresh token is the only thing that keeps
+ * the connection alive without showing Google's page again. The implicit flow
+ * used before handed back an access token that died after an hour and could not
+ * be renewed, which is why the panel had to ask for a sign-in again and again.
+ *
+ * The client secret travels with the token exchange instead of being assumed
+ * absent: Google's own Personal mode onboarding creates a "Web application"
+ * client and that client requires one. It lives in the configuration file next
+ * to the client id, so nothing is compiled into the extension. A secret in a
+ * self-hosted, single-user tool's own configuration file is not a secret shared
+ * with the world, and it is never written to the snippet library or to the
+ * snapshot cache.
  *
  * Snippet files are read and written directly in the configured Drive folder.
  */
@@ -25,6 +36,7 @@
   var DRIVE_URL = "https://www.googleapis.com/drive/v3";
   // Google's own sign-in page, and the endpoint that revokes a token.
   var AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+  var TOKEN_URL = "https://oauth2.googleapis.com/token";
   var REVOKE_URL = "https://oauth2.googleapis.com/revoke";
   var UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3";
   // Full, unrestricted Drive: every file and folder the signed-in account can
@@ -59,16 +71,14 @@
 
   // --- OAuth tokens ---------------------------------------------------------
   //
-  // Pastex has no server and no client secret, so it uses Google's implicit
-  // flow through chrome.identity.launchWebAuthFlow(): Chrome opens Google's
-  // consent page and hands the resulting redirect URL back to the extension.
-  // The access token arrives in that URL's fragment and is never written to
-  // disk. Every request then runs as the signed-in person, so the files Pastex
-  // creates belong to that person and count against their own Drive storage.
+  // Chrome opens Google's consent page (chrome.identity.launchWebAuthFlow) and
+  // hands the resulting redirect URL back. The code in that URL is exchanged for
+  // an access token and a refresh token; the refresh token is what makes the
+  // connection survive an hour, a browser restart and a discarded worker.
   //
-  // The client id is not compiled into the extension: this project is
-  // self-hosted, so each installation brings its own OAuth client, recorded in
-  // the configuration file (see the guide in README.md).
+  // The client id and secret are not compiled into the extension: this project
+  // is self-hosted, so each installation brings its own OAuth client, recorded
+  // in the configuration file (see the guide in README.md).
 
   function identityApi(overrides) {
     var api = (overrides && overrides.identity) || (typeof chrome !== "undefined" && chrome && chrome.identity);
@@ -79,7 +89,7 @@
   }
 
   // One token per client id, kept only in memory: an access token lives about
-  // an hour, and a discarded worker simply signs in silently again.
+  // an hour, and the refresh token in storage.local renews it silently.
   var tokens = new Map();
 
   function cachedToken(clientId) {
@@ -87,6 +97,58 @@
     if (!entry) return "";
     if (entry.expiresAt <= Date.now()) { tokens.delete(clientId); return ""; }
     return entry.token;
+  }
+
+  // Renewing needs somewhere durable, which only the worker and the panel have.
+  var tokenStore = null;
+  function setTokenStore(store) { tokenStore = store || null; }
+
+  var REFRESH_PREFIX = "pastex.refresh.v1:";
+  function refreshKey(clientId) { return REFRESH_PREFIX + clientId; }
+
+  async function readAllRefresh() {
+    if (!tokenStore) return {};
+    try {
+      var all = await tokenStore.get(null);
+      var found = {};
+      Object.keys(all || {}).forEach(function (key) {
+        if (key.indexOf(REFRESH_PREFIX) === 0 && typeof all[key] === "string" && all[key]) found[key] = all[key];
+      });
+      return found;
+    } catch (ignored) { return {}; }
+  }
+
+  async function readRefresh(clientId) {
+    if (!tokenStore || !clientId) return "";
+    try {
+      var saved = await tokenStore.get(refreshKey(clientId));
+      var value = saved && saved[refreshKey(clientId)];
+      return typeof value === "string" ? value : "";
+    } catch (ignored) { return ""; }
+  }
+
+  async function writeRefresh(clientId, value) {
+    if (!tokenStore || !clientId) return;
+    try {
+      if (value) await tokenStore.set({ [refreshKey(clientId)]: value });
+      else await tokenStore.remove(refreshKey(clientId));
+    } catch (ignored) { /* the next sign-in hands out another one */ }
+  }
+
+  function base64Url(bytes) {
+    var binary = Array.from(bytes, function (b) { return String.fromCharCode(b); }).join("");
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  // PKCE: the verifier never leaves this scope, and only its SHA-256 travels in
+  // the sign-in URL. The hash is stripped by a sparse array on purpose: a plain
+  // argument object would lose the algorithm name.
+  async function pkcePair() {
+    var bytes = new Uint8Array(32);
+    globalCrypto().getRandomValues(bytes);
+    var verifier = base64Url(bytes);
+    var digest = await globalCrypto().subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    return { verifier: verifier, challenge: base64Url(new Uint8Array(digest)) };
   }
 
   function storeToken(clientId, token, expiresIn) {
@@ -122,32 +184,38 @@
       var detail = fragment.get("error_description") || query.get("error_description") || failure;
       throw new Error(detail);
     }
-    var token = fragment.get("access_token") || query.get("access_token") || "";
-    if (!token) throw new Error("Google's answer held no access token.");
-    return { token: token, expiresIn: fragment.get("expires_in") || query.get("expires_in") };
+    // The authorization-code flow answers with a code, which is exchanged for
+    // tokens over HTTPS. The implicit flow used to put the token in the URL.
+    var code = query.get("code") || fragment.get("code") || "";
+    if (!code) throw new Error("Google's answer held no authorization code.");
+    return { code: code };
   }
 
-  function authUrl(clientId, redirectUri, interactive, state) {
+  function authUrl(clientId, redirectUri, interactive, state, challenge) {
     var url = new URL(AUTH_URL);
     url.searchParams.set("client_id", clientId);
     url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("response_type", "token");
+    url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", SCOPES);
     url.searchParams.set("state", state);
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    // offline is what makes Google hand out a refresh token at all.
+    url.searchParams.set("access_type", "offline");
     // A silent request never shows a page: it only works while the person has
     // already granted Pastex access, which is exactly when no page is wanted.
-    url.searchParams.set("prompt", interactive ? "select_account" : "none");
+    url.searchParams.set("prompt", interactive ? "consent" : "none");
     return url.toString();
   }
 
   // One trip through Chrome's sign-in window. `interactive` decides whether a
   // page may appear: false means Google must answer silently from a grant it
   // already holds, which is the normal case on every sync after the first.
-  function authorize(api, clientId, redirectUri, interactive) {
+  function authorize(api, clientId, redirectUri, interactive, challenge) {
     var state = randomState();
     return new Promise(function (resolve, reject) {
       try {
-        api.launchWebAuthFlow({ url: authUrl(clientId, redirectUri, interactive, state), interactive: interactive },
+        api.launchWebAuthFlow({ url: authUrl(clientId, redirectUri, interactive, state, challenge), interactive: interactive },
           function (redirectedTo) {
             var failure = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
             if (failure) { reject(new Error(failure.message || "Google sign-in failed.")); return; }
@@ -165,37 +233,117 @@
     });
   }
 
-  /* getAuthToken({ clientId, interactive }) -> access token string.
+  /* The code -> tokens exchange. This is the one request that carries the
+   * client secret, and it is also the only way to receive a refresh token. */
+  async function exchangeCode(clientId, clientSecret, code, redirectUri, verifier, fetchImpl) {
+    var body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: code,
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+    });
+    // Sent only when the configuration has one: a client that Google created
+    // without a secret still exchanges the code.
+    if (clientSecret) body.set("client_secret", clientSecret);
+    var res = await (fetchImpl || fetch)(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok || !data.access_token) {
+      var detail = data && data.error_description ? data.error_description : (data && data.error ? data.error : "HTTP " + res.status);
+      throw new Error("Google would not exchange the sign-in code: " + detail);
+    }
+    return data;
+  }
+
+  /* An access token from the refresh token, with no page at all.
    *
-   * The token comes from the browser's sign-in window, never from a key file.
-   * A cached, unexpired token is reused, so an ordinary sync costs nothing.
-   * Otherwise a silent attempt comes first: Chrome's worker is restarted often,
-   * and the grant Google already holds is enough, so no page appears. Only when
-   * that is refused — first run on this computer, or access withdrawn — is the
-   * interactive page opened, and only if the caller allows it. */
+   * This is what keeps the connection alive: the refresh token does not expire
+   * on an ordinary use, so a worker that was discarded can come back, renew, and
+   * carry on. Without it every restart depended on Google answering the
+   * sign-in window silently, and any hiccup there forced the person to sign in
+   * again by hand. */
+  async function refreshAccessToken(clientId, clientSecret, refreshToken, fetchImpl) {
+    var body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: clientId,
+    });
+    if (clientSecret) body.set("client_secret", clientSecret);
+    var res = await (fetchImpl || fetch)(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok || !data.access_token) {
+      var detail = data && data.error_description ? data.error_description : (data && data.error ? data.error : "HTTP " + res.status);
+      // invalid_grant means the grant is gone (revoked, or the account's access
+      // was withdrawn). The stored token is useless from now on. The code is
+      // checked as well as the sentence: Google's wording is not a contract.
+      var err = new Error("Google would not renew the connection: " + detail);
+      err.invalidGrant = /invalid_grant/i.test(String(detail)) || String(data && data.error) === "invalid_grant";
+      throw err;
+    }
+    return data;
+  }
+
+  /* getAuthToken({ clientId, clientSecret, interactive }) -> access token.
+   *
+   * Four steps, cheapest first: the in-memory token, the stored refresh token,
+   * a silent sign-in, and only then Google's page. The refresh token is the
+   * step that makes the rest unnecessary; the sign-in window exists for the
+   * first run and for the day the grant is withdrawn. */
   async function getAuthToken(options) {
     options = options || {};
     var clientId = String(options.clientId || "").trim();
+    var clientSecret = String(options.clientSecret || "").trim();
     if (!clientId) throw new Error("The configuration file needs the client_id of a Google OAuth client.");
     var cached = cachedToken(clientId);
     if (cached) return cached;
+
+    // 1. The stored refresh token: no page, no code, just the token endpoint.
+    var refreshToken = await readRefresh(clientId);
+    if (refreshToken) {
+      try {
+        var renewed = await refreshAccessToken(clientId, clientSecret, refreshToken, options.fetchImpl);
+        storeToken(clientId, renewed.access_token, renewed.expires_in);
+        // Google may rotate the refresh token; keeping the new one matters.
+        if (renewed.refresh_token) await writeRefresh(clientId, renewed.refresh_token);
+        return renewed.access_token;
+      } catch (err) {
+        if (err && err.invalidGrant) await writeRefresh(clientId, "");
+        else throw explainSignIn(err, "", true);
+      }
+    }
+
+    // 2. The sign-in window. A silent attempt first, then, if the caller allows
+    //    it, the page that asks the person.
     var api = identityApi(options);
     var redirectUri = options.redirectUri || api.getRedirectURL();
+    var pair = await pkcePair();
     var parsed;
     try {
-      parsed = await authorize(api, clientId, redirectUri, false);
+      parsed = await authorize(api, clientId, redirectUri, false, pair.challenge);
     } catch (err) {
-      // A silent refusal is not a bug to report: Google simply will not answer
-      // without asking the person, so the message says what to do instead.
       if (!options.interactive) throw explainSignIn(err, redirectUri, true);
+      // A new PKCE verifier, because the previous challenge is spent.
+      pair = await pkcePair();
       try {
-        parsed = await authorize(api, clientId, redirectUri, true);
+        parsed = await authorize(api, clientId, redirectUri, true, pair.challenge);
       } catch (prompted) {
         throw explainSignIn(prompted, redirectUri);
       }
     }
-    storeToken(clientId, parsed.token, parsed.expiresIn);
-    return parsed.token;
+    var exchanged = await exchangeCode(clientId, clientSecret, parsed.code, redirectUri, pair.verifier, options.fetchImpl);
+    storeToken(clientId, exchanged.access_token, exchanged.expires_in);
+    // offline access on a first grant returns one; a renewal may not, which is
+    // why the old one is only replaced when a new one arrives.
+    if (exchanged.refresh_token) await writeRefresh(clientId, exchanged.refresh_token);
+    return exchanged.access_token;
   }
 
   // The one sign-in failure that is a configuration value rather than a bug: the
@@ -229,11 +377,19 @@
     });
   }
 
-  /* Signing out revokes the token at Google as well as forgetting it here, so
-   * nothing that was handed out stays valid. */
+  /* Signing out revokes what Google handed out as well as forgetting it here,
+   * so nothing that was issued stays valid. The refresh token is revoked first:
+   * revoking only the access token would leave the stored refresh token able to
+   * renew the connection a minute later. */
   async function signOut() {
     var issued = Array.from(tokens.values()).map(function (entry) { return entry.token; });
     tokens.clear();
+    var grants = await readAllRefresh();
+    for (var key in grants) {
+      if (!Object.prototype.hasOwnProperty.call(grants, key)) continue;
+      issued.push(grants[key]);
+      await writeRefresh(key.replace(REFRESH_PREFIX, ""), "");
+    }
     for (var i = 0; i < issued.length; i++) {
       await withTimeout(async function (signal) {
         await fetch(REVOKE_URL, {
@@ -496,6 +652,9 @@
     TEXT_MIME: TEXT_MIME,
     SCOPES: SCOPES,
     getAuthToken: getAuthToken,
+    setTokenStore: setTokenStore,
+    refreshAccessToken: refreshAccessToken,
+    exchangeCode: exchangeCode,
     getRedirectURL: getRedirectURL,
     removeCachedToken: removeCachedToken,
     signOut: signOut,

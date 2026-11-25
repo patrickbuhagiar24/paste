@@ -1,3 +1,32 @@
+pastex (2.33.0-1) unstable; urgency=medium
+
+  * New configuration key `client_secret`, next to `client_id`. Google's
+    Personal mode onboarding creates a "Web application" OAuth client, and that
+    client needs its secret when a sign-in code is exchanged for tokens. The key
+    is optional: a client created without a secret still works with it left out,
+    and a value that is clearly not a secret is reported instead of being sent to
+    Google to be refused.
+  * The connection now survives instead of expiring. Pastex used Google's
+    implicit flow, which returns an access token that dies after an hour and
+    cannot be renewed, so every restart asked for a sign-in again. It now uses
+    the authorization-code flow with PKCE and `access_type=offline`, keeps the
+    refresh token in `chrome.storage.local`, and renews silently: a worker that
+    Chrome stopped comes back and carries on without showing a page. The access token
+    itself is still never written to storage.
+  * Signing out revokes the refresh token as well, so nothing can renew a
+    connection that was ended on purpose.
+  * Fixed: the newline buttons did nothing on a contenteditable field, which is
+    what WhatsApp Web, chat boxes and mail composers use. The text was inserted
+    as one run, and HTML has no newline inside a text node, so the appended
+    newline became nothing at all while the panel still said "Inserted.". Each
+    line is now inserted separately with a real line break between them. Pastex
+    never presses Enter, so a message on WhatsApp is not sent by inserting one.
+  * The README documents the Personal mode route end to end, including why the
+    secret lives in the user's own configuration file and why it is not compiled
+    into the extension.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 29 Nov 2026 09:00:00 +0000
+
 pastex (2.32.1-1) unstable; urgency=medium
 
   * Fixed: a snippet typed while a sync was running could disappear. Sending a

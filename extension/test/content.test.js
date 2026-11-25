@@ -205,3 +205,48 @@ test("the launcher takes the panel state from the worker, not from a click it as
   assert.equal(button.title, "Open Pastex side panel",
     "a close the page never heard about must not leave it offering to close");
 });
+
+test("a newline reaches a contenteditable as a real line break, not a space", async () => {
+  // The failure on WhatsApp Web: the box is a contenteditable <div>, and
+  // execCommand("insertText", "text\n") inserts one run with no line break at
+  // all, because a text node cannot hold one. The newline buttons therefore did
+  // nothing there, and the status still said "Inserted.".
+  const commands = [];
+  const page = setupContent();
+  page.document.execCommand = (command, _ui, text) => {
+    commands.push(text === undefined ? command : command + ":" + text);
+    return true;
+  };
+  const box = page.element("div");
+  box.isContentEditable = true;
+  box.textContent = "";
+  page.root.appendChild(box);
+  box.focus();
+  await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "line one\nline two" },
+    { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  // One line, a real break, then the next line: never a bare "line one\nline two".
+  assert.deepEqual(commands, ["insertText:line one", "insertLineBreak", "insertText:line two"],
+    "the newline must become a line break element, which is the only newline a contenteditable has");
+});
+
+test("a trailing newline also reaches a contenteditable", async () => {
+  // The ⏎ button appends one "\n" to the snippet. On a chat box that is the only
+  // content, so it must produce a break even when there is no text after it.
+  const commands = [];
+  const page = setupContent();
+  page.document.execCommand = (command, _ui, text) => {
+    commands.push(text === undefined ? command : command + ":" + text);
+    return true;
+  };
+  const box = page.element("div");
+  box.isContentEditable = true;
+  page.root.appendChild(box);
+  box.focus();
+  await tick();
+  page.events.message({ type: "pastex-insert", text: "snippet text\n" },
+    { id: "pastex-extension-id" }, () => {});
+  assert.deepEqual(commands, ["insertText:snippet text", "insertLineBreak"]);
+});

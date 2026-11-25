@@ -532,10 +532,15 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
     # `drive.file` may only appear in the note explaining why it is not used.
     assert all("auth/drive.file" not in line or "sees only what Pastex" in line
                for line in drive.splitlines()), "the narrowed scope is not requested"
-    # A public client has no secret, and a service account no longer exists.
+    # A service account no longer exists anywhere. A client secret does, on
+    # purpose: the Personal mode console creates a Web application client, and
+    # that client's code exchange requires its secret. It comes from the user's
+    # own configuration file, never from the bundle, so it is not compiled in.
     for gone in ("private_key", "client_email", "service_account", "jwt", "JWT",
-                 "grant-type:jwt-bearer", "client_secret"):
+                 "grant-type:jwt-bearer"):
         assert gone not in drive, f"drive.js still mentions {gone!r}"
+    assert "client_secret" in drive, "the code exchange carries the configured secret"
+    assert "GOCSPX" not in drive, "no client secret is compiled into the extension"
     for path in sorted(EXT.glob("*.js")):
         text = path.read_text(encoding="utf-8")
         assert "service-account.json" not in text, f"{path.name} still reads a key file"
@@ -547,6 +552,7 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
     # configuration, so no filename may be required or refused.
     assert "pastex-storage" not in source, "the configuration file name must be free"
     assert "client_id" in source
+    assert "client_secret" in source, "the secret is one of the configuration keys"
     assert "pastex-folder" in source and "pastex-index" in source and "pastex-sites" in source
     # No script in the repository signs in a service account any more.
     for script in sorted((ROOT / "scripts").glob("*.sh")):
@@ -556,11 +562,19 @@ def test_drive_access_is_oauth_and_the_service_account_is_gone():
 
 
 def test_drive_tokens_are_never_written_to_storage():
-    """The access token lives in memory; Chrome keeps the refresh token."""
+    """The access token lives in memory; only the refresh token is stored.
+
+    The refresh token is the one credential that has to outlive a worker, and it
+    is kept in chrome.storage.local under its own key. The access token, which
+    is short-lived and replayable as the signed-in person, never leaves memory.
+    """
     for name in ("drive.js", "library.js", "cache.js", "background.js"):
         text = (EXT / name).read_text(encoding="utf-8")
         for forbidden in ("access_token:", "set({ token", "storage.local.set({ token"):
             assert forbidden not in text, f"{name} persists a token"
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "pastex.refresh.v1:" in drive, "the refresh token is stored under its own key"
+    assert "tokenStore.set({ [refreshKey(clientId)]: value })" in drive
 
 
 def test_sidepanel_has_collapse_all_and_verbatim_insert():

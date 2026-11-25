@@ -26,6 +26,7 @@
   var CONFIG = "The configuration file";
   var LINK_FOLDER = "pastex-folder", LINK_SITES = "pastex-sites", LINK_INDEX = "pastex-index";
   var CLIENT = "client_id";
+  var SECRET = "client_secret";
   var FILE = "file ", CACHE = "pastex-config-cache";
   // The cached configuration shape is versioned. A record with another version
   // is treated as absent, which asks the user to pick the file again instead of
@@ -126,6 +127,16 @@
       if (!clientId) list.push(CONFIG + " needs the " + CLIENT + " of a Google OAuth client");
       else if (!validClient) list.push(CONFIG + " needs the " + CLIENT + " of a Google OAuth client (type Web application)");
 
+      // The secret is optional, because Google creates clients without one, but
+      // a "Web application" client (what Personal mode onboarding creates) needs
+      // it for the code exchange. A value that is clearly not a secret is
+      // reported rather than sent to Google to be refused.
+      var clientSecret = typeof storage[SECRET] === "string" ? storage[SECRET].trim() : "";
+      var validSecret = !clientSecret || /^[A-Za-z0-9_-]{10,}$/.test(clientSecret);
+      if (clientSecret && !validSecret) {
+        list.push(CONFIG + ": the " + SECRET + " does not look like one (it is one long value from the console)");
+      }
+
       // sites may also be an inline list, so a single file can describe the whole
       // installation; a link to a shared list is treated exactly like the id.
       var sitesValue = storage[LINK_SITES];
@@ -140,8 +151,8 @@
 
       return {
         list: list,
-        value: folderId && indexId && validClient && (sitesId || inline) ?
-          { folderId: folderId, indexId: indexId, clientId: clientId,
+        value: folderId && indexId && validClient && validSecret && (sitesId || inline) ?
+          { folderId: folderId, indexId: indexId, clientId: clientId, clientSecret: clientSecret,
             sitesId: sitesId, allowedSites: inline } : null,
       };
     }
@@ -175,7 +186,7 @@
         return {
           drive: { folderId: v.folderId, indexId: v.indexId },
           driveError: "",
-          oauth: { client_id: v.clientId },
+          oauth: { client_id: v.clientId, client_secret: v.clientSecret },
           oauthError: "",
           // The site list is either a link to fetch or an array already read
           // from the one configuration file.

@@ -208,3 +208,34 @@ test("a file larger than the cap is refused and named", async () => {
   await assert.rejects(source.chooseFile(huge), /big\.json is larger than 256 KiB/);
   assert.equal(store.peek()["pastex-config-cache"], undefined);
 });
+
+test("client_secret is read from the same file, optional but checked when present", async () => {
+  // Personal mode creates a "Web application" client, whose code exchange needs
+  // the secret. It belongs to the same JSON file as the four links: it is not a
+  // credential shared with anyone, and nothing is compiled into the extension.
+  const store = memoryStore();
+  const source = create(Sites, store);
+  await source.chooseFile(fileHandle("mine.json", storageFile({ client_secret: "GOCSPX-abcdefghijklmno" })));
+  const config = await source.readConfig(true);
+  assert.equal(config.oauth.client_secret, "GOCSPX-abcdefghijklmno");
+  // The name stays free: this file is called mine.json.
+  assert.equal(store.peek()["pastex-config-cache"].file, "mine.json");
+
+  // A client Google created without a secret still works.
+  const withoutSecret = create(Sites, memoryStore());
+  await withoutSecret.chooseFile(fileHandle("no-secret.json", storageFile()));
+  assert.equal((await withoutSecret.readConfig(true)).oauth.client_secret, "");
+
+  // Something that is obviously not a secret is named, not sent to Google.
+  const wrong = create(Sites, memoryStore());
+  await assert.rejects(
+    wrong.chooseFile(fileHandle("wrong.json", storageFile({ client_secret: "has spaces and dots. oops" }))),
+    /client_secret does not look like one/);
+  // A rejected file never replaces a working configuration.
+  const kept = create(Sites, store);
+  const before = (await kept.readConfig(true)).oauth.client_secret;
+  await assert.rejects(
+    kept.chooseFile(fileHandle("wrong.json", storageFile({ client_secret: "not a secret at all!" }))),
+    /client_secret/);
+  assert.equal((await kept.readConfig(true)).oauth.client_secret, before, "the previous configuration survives");
+});

@@ -13,6 +13,9 @@ importScripts("sites.js", "config-cache-reader.js", "drive.js", "hash.js", "libr
 // chosen folder. No offscreen document and no folder handle is involved.
 var PastexConfig = PastexConfigCacheReader.create(chrome.storage.local);
 
+// The refresh token lives in storage.local, so a worker that Chrome discarded
+// comes back and renews the access token instead of asking for a sign-in.
+PastexDrive.setTokenStore(chrome.storage.local);
 var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto, chrome.storage.local);
 var deferredQueue = PastexQueue.create(chrome.storage.local);
 // Every edit that has not reached Drive yet lives in the queue; a flush sends

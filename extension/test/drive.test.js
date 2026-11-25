@@ -39,9 +39,11 @@ function textResponse(text, status) {
 
 // --- the OAuth handshake ---------------------------------------------------
 //
-// The token comes from Google's sign-in page through Chrome, using the client
-// id this installation recorded in pastex-storage.json. There is no key file and
-// no client secret: the extension is a public client and its bundle is public.
+// The token comes from Google's token endpoint, after Google's sign-in page
+// handed back an authorization code through Chrome. The client id and secret
+// this installation recorded in its configuration file travel with that
+// exchange, and what it returns is a refresh token, which is the part that
+// keeps the connection alive without another page.
 
 const CLIENT = "123456789012-abcdefghijklmnop.apps.googleusercontent.com";
 // Every test uses its own client id: the token cache is keyed by it and lives
@@ -67,7 +69,31 @@ function fakeIdentity(answer) {
 function granted(options) {
   const url = new URL(options.url);
   const state = url.searchParams.get("state");
-  return REDIRECT + "#access_token=ya29.token&expires_in=3600&token_type=Bearer&state=" + state;
+  return REDIRECT + "?code=4/authorization-code&state=" + state;
+}
+
+// A token endpoint that answers the code exchange and the renewal. Every test
+// that needs a token supplies one; a call that reaches it without one is a bug
+// (the extension would be signing in to reach Google's token endpoint).
+function tokenEndpoint(answers) {
+  return async (url, options) => {
+    assert.equal(String(url), "https://oauth2.googleapis.com/token");
+    const form = new URLSearchParams(String(options.body));
+    return jsonResponse((answers || {})[form.get("grant_type")] || {
+      access_token: "ya29.token", expires_in: 3600, refresh_token: "1//refresh",
+    });
+  };
+}
+
+// A refresh-token store, which only a worker or the panel has.
+function memoryStore(initial) {
+  const data = { ...(initial || {}) };
+  return {
+    data,
+    async get(key) { return key === null ? { ...data } : { [key]: data[key] }; },
+    async set(values) { Object.assign(data, values); },
+    async remove(key) { delete data[key]; },
+  };
 }
 
 test("a Drive token comes from Google's sign-in page, never from a key file", async () => {
@@ -76,25 +102,115 @@ test("a Drive token comes from Google's sign-in page, never from a key file", as
   for (const gone of ["parseServiceAccount", "fetchAccessToken", "signJwt"]) {
     assert.equal(Drive[gone], undefined, gone + " must not exist");
   }
+  const store = memoryStore();
+  Drive.setTokenStore(store);
   const identity = fakeIdentity(granted);
-  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: CLIENT, interactive: true }), "ya29.token");
+  const fetchImpl = tokenEndpoint({ authorization_code: {
+    access_token: "ya29.token", expires_in: 3600, refresh_token: "1//refresh",
+  } });
+  assert.equal(await Drive.getAuthToken({
+    identity: identity, clientId: CLIENT, clientSecret: "GOCSPX-abc", interactive: true, fetchImpl: fetchImpl,
+  }), "ya29.token");
   const url = new URL(identity.asked[0].url);
   assert.equal(url.searchParams.get("client_id"), CLIENT);
   assert.equal(url.searchParams.get("redirect_uri"), REDIRECT);
-  assert.equal(url.searchParams.get("response_type"), "token");
+  assert.equal(url.searchParams.get("response_type"), "code", "a code, because only that flow can return a refresh token");
   assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/drive");
   assert.equal(url.searchParams.get("state").length, 32);
+  assert.equal(url.searchParams.get("access_type"), "offline", "offline is what makes Google hand out a refresh token");
+  assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(url.searchParams.get("code_challenge").length > 20, true, "PKCE challenge travels in the URL");
+  assert.equal(url.searchParams.get("client_secret"), null, "the secret never travels in a URL");
   // Even an interactive request tries silently first: Chrome's worker restarts
   // often, and a grant Google already holds needs no page.
   assert.deepEqual(identity.asked[0].interactive, false);
   assert.equal(url.searchParams.get("prompt"), "none");
+  // The refresh token is what makes the next start free.
+  assert.equal(store.data["pastex.refresh.v1:" + CLIENT], "1//refresh");
+});
+
+test("the client secret goes in the token exchange, and the refresh token renews silently", async () => {
+  Drive.setTokenStore(memoryStore());
+  const mine = client(7);
+  const exchanges = [];
+  const fetchImpl = stubFetch(async (url, options) => {
+    exchanges.push(new URLSearchParams(String(options.body)));
+    return jsonResponse({ access_token: "ya29.first", expires_in: 3600, refresh_token: "1//kept" });
+  });
+  const identity = fakeIdentity(granted);
+  await Drive.getAuthToken({ identity: identity, clientId: mine, clientSecret: "GOCSPX-secret", interactive: true, fetchImpl });
+  // The exchange carries both halves of the client, and the PKCE verifier.
+  assert.equal(exchanges[0].get("grant_type"), "authorization_code");
+  assert.equal(exchanges[0].get("client_secret"), "GOCSPX-secret");
+  assert.equal(exchanges[0].get("code"), "4/authorization-code");
+  assert.equal(exchanges[0].get("code_verifier").length > 20, true);
+});
+
+test("a stored refresh token renews the access token without opening a window", async () => {
+  const mine = client(8);
+  const store = memoryStore({ ["pastex.refresh.v1:" + mine]: "1//stored" });
+  Drive.setTokenStore(store);
+  // A different module instance would be needed to clear the cache; a new
+  // client id is the same effect and keeps the tests independent.
+  const identity = fakeIdentity(() => { throw new Error("no window may open"); });
+  const bodies = [];
+  const fetchImpl = stubFetch(async (url, options) => {
+    bodies.push(new URLSearchParams(String(options.body)));
+    return jsonResponse({ access_token: "ya29.renewed", expires_in: 3600 });
+  });
+  const token = await Drive.getAuthToken({ identity: identity, clientId: mine, clientSecret: "GOCSPX-secret", fetchImpl });
+  assert.equal(token, "ya29.renewed");
+  assert.equal(identity.asked.length, 0, "a renewal never opens Google's page");
+  assert.equal(bodies[0].get("grant_type"), "refresh_token");
+  assert.equal(bodies[0].get("refresh_token"), "1//stored");
+  assert.equal(bodies[0].get("client_secret"), "GOCSPX-secret");
+  // The stored grant survives a renewal that does not rotate it.
+  assert.equal(store.data["pastex.refresh.v1:" + mine], "1//stored");
+});
+
+test("a revoked refresh token is forgotten, and the sign-in page is asked again", async () => {
+  const mine = client(9);
+  const store = memoryStore({ ["pastex.refresh.v1:" + mine]: "1//revoked" });
+  Drive.setTokenStore(store);
+  const identity = fakeIdentity(granted);
+  let renewed = 0;
+  const fetchImpl = stubFetch(async (url, options) => {
+    const form = new URLSearchParams(String(options.body));
+    if (form.get("grant_type") === "refresh_token") {
+      renewed++;
+      return jsonResponse({ error: "invalid_grant", error_description: "Token has been expired or revoked." }, 400);
+    }
+    return jsonResponse({ access_token: "ya29.fresh", expires_in: 3600, refresh_token: "1//new" });
+  });
+  const token = await Drive.getAuthToken({ identity, clientId: mine, clientSecret: "GOCSPX-secret", interactive: true, fetchImpl });
+  assert.equal(token, "ya29.fresh");
+  assert.equal(renewed, 1, "the renewal was attempted first");
+  assert.equal(identity.asked.length, 1, "then Google's page");
+  assert.equal(store.data["pastex.refresh.v1:" + mine], "1//new", "the dead grant is replaced");
+});
+
+test("signing out revokes the refresh token, so nothing can renew the connection", async () => {
+  const mine = client(10);
+  const store = memoryStore({ ["pastex.refresh.v1:" + mine]: "1//stored" });
+  Drive.setTokenStore(store);
+  const fetchImpl = stubFetch(async () => jsonResponse({}));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    await Drive.signOut();
+  } finally { globalThis.fetch = realFetch; }
+  assert.equal(store.data["pastex.refresh.v1:" + mine], undefined, "the grant is gone from storage");
+  const revoked = fetchImpl.calls.map((call) => new URLSearchParams(String(call.options.body)).get("token"));
+  assert.ok(revoked.includes("1//stored"), "and it was revoked at Google, not just forgotten");
 });
 
 test("a token already held is reused instead of opening a window again", async () => {
+  Drive.setTokenStore(memoryStore());
   const identity = fakeIdentity(granted);
   const mine = client(2);
-  await Drive.getAuthToken({ identity: identity, clientId: mine, interactive: true });
-  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  const fetchImpl = tokenEndpoint();
+  await Drive.getAuthToken({ identity: identity, clientId: mine, interactive: true, fetchImpl });
+  await Drive.getAuthToken({ identity: identity, clientId: mine, fetchImpl });
   assert.equal(identity.asked.length, 1, "one sign-in serves the session");
 });
 
@@ -107,16 +223,23 @@ test("the sign-in page is opened only when a silent request is refused", async (
       asked.push(options);
       const state = new URL(options.url).searchParams.get("state");
       Promise.resolve().then(() => callback(options.interactive
-        ? REDIRECT + "#access_token=ya29.granted&expires_in=3600&state=" + state
-        : REDIRECT + "#error=interaction_required&state=" + state));
+        ? REDIRECT + "?code=4/granted&state=" + state
+        : REDIRECT + "?error=interaction_required&state=" + state));
     },
   };
-  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: client(3), interactive: true }), "ya29.granted");
+  Drive.setTokenStore(memoryStore());
+  assert.equal(await Drive.getAuthToken({
+    identity: identity, clientId: client(3), interactive: true, fetchImpl: tokenEndpoint(),
+  }), "ya29.token");
   assert.equal(asked.length, 2, "one silent attempt, then the page");
   assert.equal(asked[0].interactive, false);
   assert.equal(new URL(asked[0].url).searchParams.get("prompt"), "none");
   assert.equal(asked[1].interactive, true);
-  assert.equal(new URL(asked[1].url).searchParams.get("prompt"), "select_account");
+  assert.equal(new URL(asked[1].url).searchParams.get("prompt"), "consent", "a page that must return a refresh token");
+  // The two attempts use different PKCE verifiers, so a spent challenge is not
+  // replayed with the code that follows.
+  assert.notEqual(new URL(asked[0].url).searchParams.get("code_challenge"),
+    new URL(asked[1].url).searchParams.get("code_challenge"));
 
   // Non-interactive: a refusal is reported, never turned into a page.
   const quiet = fakeIdentity((options) => {
@@ -163,20 +286,24 @@ test("an unregistered redirect URL is named in the error", async () => {
 });
 
 test("a token Google has revoked is dropped so the next call can renew it", async () => {
+  Drive.setTokenStore(memoryStore());
   const identity = fakeIdentity(granted);
   const mine = client(6);
-  const token = await Drive.getAuthToken({ identity: identity, clientId: mine });
-  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: mine }), token);
+  const fetchImpl = tokenEndpoint();
+  const token = await Drive.getAuthToken({ identity: identity, clientId: mine, fetchImpl });
+  assert.equal(await Drive.getAuthToken({ identity: identity, clientId: mine, fetchImpl }), token);
   await Drive.removeCachedToken(token);
-  // A second call after the removal asks Google again.
-  await Drive.getAuthToken({ identity: identity, clientId: mine });
-  assert.equal(identity.asked.length, 2);
+  // After a 401 the token is dropped; the stored refresh token renews it, so no
+  // page is needed and the count of sign-in windows stays at one.
+  await Drive.getAuthToken({ identity: identity, clientId: mine, fetchImpl });
+  assert.equal(identity.asked.length, 1, "the refresh token did the work, not a window");
 });
 
 test("signing out revokes the token at Google and forgets it here", async () => {
+  Drive.setTokenStore(memoryStore());
   const identity = fakeIdentity(granted);
-  const mine = client(7);
-  await Drive.getAuthToken({ identity: identity, clientId: mine });
+  const mine = client(11);
+  await Drive.getAuthToken({ identity: identity, clientId: mine, fetchImpl: tokenEndpoint() });
   const revoked = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => { revoked.push({ url, body: options.body }); return jsonResponse({}); };
@@ -190,9 +317,12 @@ test("signing out revokes the token at Google and forgets it here", async () => 
   assert.ok(revoked.length >= 1);
   for (const call of revoked) assert.equal(call.url, "https://oauth2.googleapis.com/revoke");
   assert.ok(revoked.some((call) => /token=ya29\.token/.test(call.body)), "the token itself is revoked");
-  // Nothing is left to reuse.
-  await Drive.getAuthToken({ identity: identity, clientId: mine });
-  assert.equal(identity.asked.length, 2);
+  // Nothing is left to reuse: even after the in-memory token is gone, the next
+  // call has to reach Google's page again, because the grant was revoked.
+  await Drive.removeCachedToken("ya29.token");
+  await assert.rejects(
+    Drive.getAuthToken({ identity: fakeIdentity(() => REDIRECT + "?error=interaction_required&state=x"), clientId: mine, fetchImpl: tokenEndpoint() }),
+    /Google's answer did not match/);
 });
 
 test("the requested scope is the full Drive scope, and nothing is narrowed", () => {
