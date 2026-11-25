@@ -269,6 +269,55 @@ function trustedPanel(sender) {
   return sender && sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("sidepanel.html");
 }
 
+// --- who is showing the panel right now ------------------------------------
+//
+// The in-page launcher reads ⚡ (open it) or × (close it). A panel closed from
+// the toolbar icon or from Chrome's own panel switch used to leave the launcher
+// on ×, because the panel itself is the only thing that knew it was closing and
+// a hidden panel runs no code. The worker owns the fact instead: Chrome reports
+// every open and every close of an extension panel through onOpened/onClosed,
+// whichever switch was used, and the launcher asks for the answer every time it
+// is authorised instead of trusting a message it may have missed.
+var panelWindows = new Set();
+
+function markPanelWindow(windowId, open) {
+  if (!Number.isInteger(windowId)) return;
+  if (open) panelWindows.add(windowId);
+  else panelWindows.delete(windowId);
+}
+
+// Tell the launcher of the tab the user is looking at. Best effort: the panel
+// can be open in a window whose tabs have no content script.
+function announcePanelToWindow(windowId) {
+  if (!Number.isInteger(windowId) || !trustedPanelWindow(windowId)) return Promise.resolve();
+  return chrome.tabs.query({ active: true, windowId: windowId }).then(function (tabs) {
+    if (!tabs || !tabs[0]) return;
+    return messageToLauncher(tabs[0], { type: "pastex-panel-state", open: panelWindows.has(windowId) });
+  }).catch(function () { /* no launcher in this window */ });
+}
+
+function trustedPanelWindow(windowId) {
+  return Number.isInteger(windowId) && !!chrome.tabs;
+}
+
+if (chrome.sidePanel && chrome.sidePanel.onOpened && typeof chrome.sidePanel.onOpened.addListener === "function") {
+  chrome.sidePanel.onOpened.addListener(function (info) {
+    markPanelWindow(info && info.windowId, true);
+    return announcePanelToWindow(info && info.windowId);
+  });
+}
+if (chrome.sidePanel && chrome.sidePanel.onClosed && typeof chrome.sidePanel.onClosed.addListener === "function") {
+  chrome.sidePanel.onClosed.addListener(function (info) {
+    markPanelWindow(info && info.windowId, false);
+    return announcePanelToWindow(info && info.windowId);
+  });
+}
+
+// A window that is gone cannot show a panel any more.
+if (chrome.windows && chrome.windows.onRemoved) {
+  chrome.windows.onRemoved.addListener(function (windowId) { panelWindows.delete(windowId); });
+}
+
 // A content script on an approved site may report that its tab was left. It
 // can only trigger the flush that is already scheduled, never a Drive write of
 // its own, and it still needs a sender that belongs to this extension.
@@ -620,34 +669,54 @@ async function queueLocalEdit(command) {
 // Run the queue serially. A transient failure (offline, a rate limit) keeps
 // the entry for the next flush; a permanent one (the row is gone) drops it
 // from the cache and from the queue so it cannot be retried forever.
-// options.readBack: false sends the queue and stops there. A new row keeps
-// its local id until the next read; the panel already shows it and the next
-// open (or the next flush) assigns the Drive id.
+// options.readBack: false sends the queue and stops there.
 async function flushSoon(options) {
   var readBack = !(options && options.readBack === false);
   if (flushRunning) return { sent: 0, failed: 0 };
   var entries = await deferredQueue.all();
   if (!entries.length) return { sent: 0, failed: 0 };
   lastFlushRefusals = [];
+  // What the user is looking at, taken before the first write: a write
+  // invalidates the snapshot, and this is what puts it back afterwards with the
+  // new ids swapped in. Without it, sending the queue would cost a full read of
+  // the whole library just to learn the ids of the rows it just created.
+  var before = await libraryCache.current().catch(function () { return null; });
   flushRunning = true;
+  var renames = new Map();
   try {
     // One session for the whole flush; the identity cannot change halfway
     // through because a configuration change clears the queue.
     var session = null;
     try { session = await PastexLibrary.connect(PastexConfig, PastexDrive); }
     catch (ignored) { /* each entry retries its own connect and reports why */ }
-    // The map lives for this flush only: a later flush learns it again from the
-    // read-back, which is where the real ids come from.
+    // The map lives for this flush only: a later flush learns it from the rows
+    // it created, which is where the real ids come from.
     var resolved = new Map();
     for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session, resolved);
+    renames = resolved;
   } finally {
     flushRunning = false;
-    // The writes are on Drive now; one full read turns every local id into the
-    // id Drive gave the row, so the cache matches Drive again.
+    // The ids are the only thing the cache did not know: the rows, their order
+    // and their folded state are exactly what the user already sees, so they
+    // are put back as they were and only the `local-` ids are renamed.
+    var adopted = 0;
+    if (before && before.tree && renames.size) {
+      adopted = swapLocalIds(before.tree, renames);
+      dropLocalIds(before.index);
+    }
+    if (adopted || (before && before.tree)) {
+      try { await libraryCache.restore(before); } catch (ignored) { /* the next open syncs */ }
+    }
     if (readBack) {
-      try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+      // A row whose id was not learned still points at `local-`, and only a
+      // real read turns it into the id Drive gave it. The read is skipped when
+      // every id was adopted, which is the ordinary case; the panel already
+      // shows the rows either way.
+      if (!adopted) {
+        try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+      }
       // Anything still queued is not on Drive yet, so it is put back on top of
-      // what the read returned.
+      // what the snapshot holds.
       await replayPendingEdits();
     }
     // A flush that cannot report what it did leaves a silent gap, so the
@@ -655,6 +724,35 @@ async function flushSoon(options) {
     reportFlush(await pendingCount());
   }
   return { sent: entries.length };
+}
+
+// A created row is named by a `local-` id until Drive answers with the real
+// one. Renaming it is a rename of the row itself: the body is keyed by content
+// hash, so the text and its place in the tree are untouched.
+function swapLocalIds(tree, renames) {
+  var swapped = 0;
+  (function walk(nodes) {
+    (nodes || []).forEach(function (node) {
+      if (renames.has(node.id)) { node.id = renames.get(node.id); swapped++; }
+      if (node.kind === "folder") walk(node.children);
+    });
+  })(tree || []);
+  return swapped;
+}
+
+// The order and the folded map name rows by id, so a renamed row leaves a stale
+// entry there. It is dropped rather than rewritten: the row rejoins the order on
+// the next reorder, and neither map decides what exists.
+function dropLocalIds(index) {
+  if (!index) return;
+  Object.keys(index.order || {}).forEach(function (parent) {
+    index.order[parent] = (index.order[parent] || []).filter(function (id) {
+      return String(id).indexOf("local-") !== 0;
+    });
+  });
+  Object.keys(index.collapsed || {}).forEach(function (id) {
+    if (String(id).indexOf("local-") === 0) delete index.collapsed[id];
+  });
 }
 
 function reportFlush(pending) {
@@ -966,8 +1064,12 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
           closing.expires < Date.now() || closing.revision !== siteRevision) {
         sendResponse({ ok: false }); return false;
       }
-      chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true, closed: true }); })
-        .catch(function () { sendResponse({ ok: false }); });
+      chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () {
+        // The event does the same thing; setting it here too means a browser
+        // that has not fired it yet still answers the next request correctly.
+        markPanelWindow(sender.tab.windowId, false);
+        sendResponse({ ok: true, closed: true, open: false });
+      }).catch(function () { sendResponse({ ok: false }); });
       return true;
     }
     var grant = panelGrants.get(grantKey(sender));
@@ -978,7 +1080,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     // Do not await anything before this call: Chrome requires the user's
     // gesture, which arrives with the content script's mousedown message.
     try {
-      chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true }); })
+      chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(function () {
+        markPanelWindow(sender.tab.windowId, true);
+        // The state after the gesture, so the launcher never has to assume it.
+        sendResponse({ ok: true, open: true });
+      })
         .catch(function () { sendResponse({ ok: false }); });
     } catch (err) { sendResponse({ ok: false }); return false; }
     return true;
@@ -994,7 +1100,10 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!allowed) { panelGrants.delete(key); sendResponse({ allowed: false }); return; }
       var token = crypto.randomUUID();
       panelGrants.set(key, { token: token, url: sender.url, tabUrl: sender.tab.url, expires: Date.now() + 30000, revision: revision });
-      sendResponse({ allowed: true, capability: token });
+      // The launcher asks this on every focus, so the answer carries the panel
+      // state: a close the page never heard about is corrected here.
+      sendResponse({ allowed: true, capability: token,
+        panelOpen: Number.isInteger(sender.tab.windowId) && panelWindows.has(sender.tab.windowId) });
     }).catch(function () { panelGrants.delete(key); sendResponse({ allowed: false }); });
     return true;
   }
@@ -1005,6 +1114,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     activeTab().then(function (tab) {
       if (!tab) { sendResponse({ ok: true }); return; }
+      markPanelWindow(tab.windowId, !!message.open);
       return messageToLauncher(tab, { type: "pastex-panel-state", open: !!message.open });
     }).then(function () { sendResponse({ ok: true }); })
       .catch(function () { sendResponse({ ok: true }); });

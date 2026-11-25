@@ -39,7 +39,7 @@ If your Drive is full, Google says so and Pastex keeps the snippet queued.
 ### Requirements
 
 - Linux Mint (the only supported target)
-- Chrome or Chromium **141 or newer**
+- Chrome or Chromium **142 or newer**
 
 Chromium from Snap or Flatpak runs in its own sandbox and does **not** read
 `/usr/share/chromium/extensions`, so the `.deb` cannot register the extension

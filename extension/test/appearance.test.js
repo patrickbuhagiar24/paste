@@ -182,6 +182,20 @@ test("the stylesheet styles every state the side panel sets", () => {
   assert.ok(/<button id="btn-text" class="[^"]*primary[^"]*"/.test(html), "New snippet must be a primary action");
 });
 
+test("no button carries a word, in any state", () => {
+  // Every toolbar button is an icon: the glyph is in the markup and the meaning
+  // is in the tooltip. A button whose label is written by script (the old
+  // "Select" / "Done") is a text button that only looks like an icon one.
+  for (const m of html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)) {
+    const glyph = m[1].trim();
+    assert.ok(glyph.length > 0, "every button needs a glyph");
+    assert.equal(/[A-Za-z]{2,}/.test(glyph), false, "a button glyph must not be a word: " + glyph);
+  }
+  // The one toggle that used to write a word into itself is checked by name.
+  assert.equal(/btn-select"\)\.textContent\s*=/.test(script), false,
+    "the select button must not be relabelled with text");
+});
+
 test("buttons keep a visible boundary and disabled actions step back", () => {
   const button = block("button");
   assert.ok(button.includes("border: 1px solid var(--border-strong)"), "every button needs a visible outline");

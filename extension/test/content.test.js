@@ -56,8 +56,13 @@ function setupContent(options = {}) {
   const messages = [];
   const runtime = {
     id: "pastex-extension-id",
-    sendMessage: async (message) => { messages.push(message); return message.type === "pastex-site-allowed" ?
-      (options.allowed ? options.allowed() : { allowed: true, capability: "token" }) : { ok: true }; },
+    sendMessage: async (message) => {
+      messages.push(message);
+      if (message.type === "pastex-site-allowed") return options.allowed ? options.allowed() : { allowed: true, capability: "token" };
+      // The worker answers an open or a close with the state after the gesture.
+      if (message.type === "pastex-open-panel") return { ok: true, open: message.action !== "close" };
+      return { ok: true };
+    },
     onMessage: { addListener(fn) { events.message = fn; } },
   };
   const windowEvents = {};
@@ -175,4 +180,28 @@ test("closing the tab sends the queue", async () => {
   assert.equal(page.messages.filter((m) => m.type === "pastex-flush-now").length, 1,
     "the page going away is the one moment the queue is sent");
   assert.ok(page.messages.some((m) => m.type === "pastex-site-visible" && m.visible === false));
+});
+
+test("the launcher takes the panel state from the worker, not from a click it assumed worked", async () => {
+  // The bug: the panel was closed with the extension icon, the page never heard
+  // about it, and the launcher kept offering to close a panel that was gone.
+  // The worker owns the fact and answers with it on every authorization.
+  let panelOpen = false;
+  const page = setupContent({ allowed: () => ({ allowed: true, capability: "token", panelOpen }) });
+  page.target.focus();
+  await tick();
+  const host = page.root.children.find((el) => el.id === "pastex-float-host");
+  const button = host.__pastexButton;
+  assert.equal(button.title, "Open Pastex side panel", "nothing is open at first");
+  // The user opens it: the answer is the state after the gesture.
+  button.listeners.mousedown({ isTrusted: true, preventDefault() {} });
+  await tick();
+  assert.equal(button.title, "Close Pastex side panel");
+  // The panel is closed from the toolbar icon while this field keeps no focus
+  // changes to tell the page. The next authorization carries the truth.
+  panelOpen = false;
+  page.target.focus();
+  await tick();
+  assert.equal(button.title, "Open Pastex side panel",
+    "a close the page never heard about must not leave it offering to close");
 });

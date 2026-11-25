@@ -187,7 +187,7 @@ second way** of doing the same thing. What that means for a user:
 | Order and folded folders | May return to Drive's order with folders open. Arrange them again once. |
 | The snippet files in Google Drive | **Never** touched. Always intact, readable by any other app. |
 | Configuration file name | Yours to choose: any `.json` name works; the four keys are what matter. |
-| Browser requirement | Chrome/Chromium 141 or newer. |
+| Browser requirement | Chrome/Chromium 142 or newer. |
 
 If the panel looks odd after an update during development, run
 `./scripts/reset-pastex-state.sh --apply` (it clears only the local cache; Drive
@@ -220,8 +220,12 @@ way to do the same thing:
   the index never fitted there and every write was refused.
 - **Per-item labels as a fallback reader** — the index file is the only source;
   an unknown version is discarded and rebuilt.
-- **Support for Chrome before 141** — the panel toggle and `sidePanel.close`
-  are assumed, so no capability branch exists.
+- **Support for Chrome before 142** — the panel toggle, `sidePanel.close` and
+  the `sidePanel.onOpened`/`onClosed` events are assumed, so no capability
+  branch exists.
+- **A second copy of the panel state in the page** — the worker owns whether the
+  panel is showing, because a closed panel runs no code. The page asks for the
+  answer instead of remembering the click it made.
 - Helper exports nothing calls (the full list is in the 2.16.0 changelog entry).
 
 If one of these features is needed again, add **one** new path with tests —

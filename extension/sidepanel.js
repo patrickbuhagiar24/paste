@@ -346,7 +346,12 @@
   function renderSelectionActions() {
     $("selection-actions").hidden = !selecting;
     $("btn-select").setAttribute("aria-pressed", String(selecting));
-    $("btn-select").textContent = selecting ? "Done" : "Select";
+    // The button is an icon and stays one: writing "Select"/"Done" into it
+    // replaced the ☑ glyph with a word, which is exactly the rule every other
+    // button already follows. The pressed state and the tooltip carry it.
+    var selectLabel = selecting ? "Leave select mode" : "Select items to move or delete";
+    $("btn-select").setAttribute("title", selectLabel);
+    $("btn-select").setAttribute("aria-label", selectLabel);
     // The number alone: the bar is already the selection bar, so the word said
     // nothing the toolbar does not.
     $("selection-count").textContent = String(selectedItems.size);

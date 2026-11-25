@@ -616,7 +616,11 @@
       }
       // A copy, not the stored object: a write clears the snapshot in place,
       // so a caller holding the stored tree would see it emptied underneath.
-      return saved && saved.tree ? { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId } : null;
+      // The identity and the index travel with it because a flush hands the
+      // copy back to restore(), which must not store it under another library.
+      if (!saved || !saved.tree) return null;
+      return { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId,
+        identity: saved.identity || "", index: JSON.parse(JSON.stringify(saved.index || { order: {}, collapsed: {} })) };
     }
 
     // --- edits made while the user is on a site ----------------------------
@@ -644,6 +648,33 @@
       });
       mutations = operation.catch(function () {});
       return operation;
+    }
+
+    // Put back a snapshot the flush already held. Sending the queue does not
+    // change the shape of the library: the rows, their order and their folded
+    // state are exactly what the user is looking at, and the only thing the
+    // cache cannot know is the id Drive gave a row it just created. The flush
+    // captures the snapshot before its first write, swaps those ids in, and
+    // hands it back here, so a sync of six changes costs six writes instead of
+    // six writes plus a full download of the whole library.
+    async function restore(snapshot) {
+      if (!snapshot || !snapshot.tree) return false;
+      var key;
+      try { key = await identity(); } catch (ignored) { return false; }
+      // A configuration change since the capture makes the snapshot describe
+      // another library; it is dropped rather than stored under this identity.
+      if (snapshot.identity && snapshot.identity !== key) return false;
+      // The lock is taken for the whole write, so a read cannot be served the
+      // half-written snapshot and a later invalidation cannot be overtaken.
+      return mutations.then(async function () {
+        mutating++;
+        try {
+          var current = await identity();
+          if (current !== key) return false;
+          await persistTree(key, snapshot);
+          return true;
+        } finally { mutating--; }
+      });
     }
 
     // Rename a just-created row to its Drive id, inside a write that already
@@ -677,7 +708,7 @@
 
     return { get: get, sync: sync, verify: verify, fill: fill, mutate: mutate,
       configurationChanged: configurationChanged, mutateLocal: mutateLocal,
-      dropLocal: dropLocal, current: current };
+      restore: restore, dropLocal: dropLocal, current: current };
   }
   return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY };
 });

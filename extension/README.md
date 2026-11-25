@@ -9,7 +9,7 @@ working internet connection are required.
 
 ## Install
 
-Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 141 or newer is required.
+Follow the [APT repository instructions](https://github.com/patrickbuhagiar24/paste/blob/main/apt-repo/README.md), then run `sudo apt update` and `sudo apt install pastex`. Enable the extension and restart the browser. Chrome/Chromium 142 or newer is required.
 
 ## Create the Google OAuth client
 
@@ -237,9 +237,19 @@ Snippet bodies are stored under the SHA-256 of their content, which keeps
 them across a rebuild of the tree and recognizes an unchanged body even when
 its timestamp moved.
 
-The panel shows when the library was last confirmed with Google Drive, next to
-the drive status. **↻ Sync** sends the waiting changes; it does not read
-Drive, so the list on screen is never reloaded by it.
+**↻ Sync** sends the waiting changes and nothing else. It never reads the
+library back, so the list on screen is never reloaded by it, and the send is
+paid for once per change: an untouched library is not rewritten, a create is
+one upload, a rename is one rename, and a reorder or a fold is one index write.
+The ids Drive gives the rows it just created are adopted in place, so a sync of
+two snippets costs two writes instead of two writes plus a full download of
+every snippet you own. The rows, their order and their folders are exactly what
+the panel already shows, so nothing has to be re-read to display them.
+
+A browser start is quiet for the same reason: it touches Drive only when the
+queue is not empty, and an ordinary panel open is served from the cached
+snapshot. Drive is asked again when something really changed — a queued write,
+a different configuration, or the idle check finding a difference.
 
 Cached content can be stale, including after a folder is changed or access is
 revoked elsewhere. Reopening the panel reads the cached list; a configuration
@@ -248,7 +258,10 @@ errors clear the cached snapshot. An internet connection is
 required for the initial load and all changes. Account or configuration changes
 invalidate the snapshot. No snippet changes are queued for offline sync.
 
-**Select** enables multi-selection instead of pasting. In the bottom bar, **↑**
+**☑** is *Select*: it enables multi-selection instead of pasting, and it stays
+an icon in both states. Turning select mode on or off changes its pressed style
+and its tooltip (*Select items to move or delete* / *Leave select mode*), never
+its glyph: a button that writes a word into itself is a text button. In the bottom bar, **↑**
 or **↓** moves the selected items within their own folders and **🗑** moves them
 to Drive trash after confirmation; the number next to them is how many are
 selected. Click the folder arrow to expand or collapse it
@@ -296,8 +309,8 @@ saying *configured* means one is in use. The toolbar is **⤡**, **☑**, **↻*
 **↻** takes that role while Drive is unavailable, because it is the action that
 helps then. **⤡** is
 *Collapse all*: it folds every folder and clears the search first. **☑** is
-*Select*, **↻** is *Sync*, **⚙** is *Config*, **📝** is *Text*, **📁** is
-*Folder*. **⏎** is the newline toggle: off, a click inserts the snippet exactly
+*Select* (the same glyph pressed and unpressed), **↻** is *Sync*, **⚙** is
+*Config*, **📝** is *Text*, **📁** is *Folder*. **⏎** is the newline toggle: off, a click inserts the snippet exactly
 as it is stored; on, one newline is appended at the end, and a snippet that
 already ends with a newline is never given a second one. The toggle keeps its
 state in `chrome.storage.local`, so it survives a panel reload, and its pressed
@@ -366,12 +379,17 @@ The palette and these rules are checked numerically in
 The toolbar icon itself is a toggle: click it to open the side panel, click it
 again to close it (the browser owns that behavior through
 `sidePanel.setPanelBehavior`). The panel has no Close button of its own — the
-toolbar icon is the switch. Chrome/Chromium 141 or newer is required, so the
-toggle is always available.
+toolbar icon is the switch. Chrome/Chromium 142 or newer is required, so the
+toggle and the panel-state events are always available.
 
 On an allowed site, focus an editable field and click the floating
 **⚡** button to open the Pastex side panel. The same button is a toggle:
-while the panel is open it reads **×** and closes it again. The soundness of
+while the panel is open it reads **×** and closes it again. The state is not
+remembered by the page, because a panel closed from the toolbar icon or from
+Chrome's own panel switch can run no code and tell it nothing. The worker
+follows `sidePanel.onOpened`/`onClosed`, which Chrome fires for every way the
+panel closes, and every authorization of the page carries the current state, so
+the button never offers to close a panel that is already gone. The soundness of
 the click is unchanged: the same short-lived capability authorizes either
 action. The launcher is a deep indigo
 disc with a near-black rim, a white inner ring and a soft halo, so it reads

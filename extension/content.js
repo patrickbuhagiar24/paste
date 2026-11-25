@@ -157,14 +157,21 @@
       }).then(function (response) {
         if (!response || !response.ok) {
           // The page lost its authorization (for example the allowlist) or the
-          // browser refused; the button says what the next click will do.
+          // browser refused. The click said what it *wanted*; a refusal means it
+          // did not happen, so the label goes back to the state it had, and the
+          // next authorization brings the worker's own answer.
           setLauncherLabel(button);
           button.title = closing ? "Could not close Pastex; use the panel's own close button." :
             "Could not open Pastex; use its toolbar icon.";
           return;
         }
-        if (response.closed) panelOpen = false;
-        else if (!closing) panelOpen = true;
+        // The answer is the state after the click, not an assumption: closing a
+        // panel that Chrome already closed is a no-op, and saying × anyway is
+        // the bug this reports.
+        if (typeof response.open === "boolean") panelOpen = response.open;
+        else if (typeof response.closed === "boolean") panelOpen = !response.closed;
+        // A worker that answered ok without a state still did what was asked.
+        else panelOpen = !closing;
         setLauncherLabel(button);
       }).catch(function () { button.title = "Could not reach Pastex; use its toolbar icon."; });
     });
@@ -219,6 +226,10 @@
         return;
       }
       capability = response.capability;
+      // The worker owns the panel state, so the answer is applied rather than
+      // read once at load: a panel closed from the toolbar icon or by Chrome's
+      // own switch left this page showing × with nothing to open.
+      if (typeof response.panelOpen === "boolean") panelOpen = response.panelOpen;
       cancelHideButton();
       if (buttonHost) setLauncherLabel(buttonHost.__pastexButton);
       positionButton(el);

@@ -90,7 +90,12 @@ function harness(home, unavailable, shared, options) {
         open: (options) => { opened.push(options); return Promise.resolve(); },
         close: (options) => { closed.push(options); return Promise.resolve(); },
         setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); },
+        // Chrome 142 reports every open and close of an extension panel; the
+        // worker keeps the panel state for the in-page launcher with them.
+        onOpened: { addListener(fn) { listenersForApis.panelOpened = fn; } },
+        onClosed: { addListener(fn) { listenersForApis.panelClosed = fn; } },
       },
+      windows: { onRemoved: event("windowRemoved") },
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
     crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL,
@@ -1226,4 +1231,89 @@ test("the stored index is the one the loader applies, not a shape it ignores", a
   assert.deepEqual(again.tree.map((node) => node.id), ["b", "a"],
     "the order written to Drive is the order the next read shows");
   assert.ok(FOLDER && TEXT);
+});
+
+test("a sync sends only what changed instead of reading the whole library back", async () => {
+  // The failure this guards: sending two creates used to be followed by a full
+  // read of the library, so a sync of two edits downloaded every snippet the
+  // user owns. Sending the queue does not change the shape of the library, only
+  // the ids of the rows it creates, so the ids are adopted and nothing is read.
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.uploadNew = async (t, parent, name) => ({ id: driveId("new" + name) });
+  });
+  let loads = 0;
+  const realLoad = browser.context.PastexLibrary.load;
+  browser.context.PastexLibrary.load = async (...args) => { loads++; return realLoad(...args); };
+  await send({ type: "pastex-panel-library" });
+  loads = 0;
+  for (const name of ["One", "Two"]) {
+    await send({ type: "pastex-panel-local-edit", command: {
+      kind: "create", name, text: "x", parentId: "root",
+      item: { kind: "text", parentId: "root", localId: "" },
+    } });
+  }
+  await leave();
+  await settle(80);
+  assert.equal(loads, 0, "a flush must not re-read the library to learn the new ids");
+  // The rows carry the ids Drive gave them, so the next open offers the real
+  // rows instead of stale `local-` ones.
+  const snapshot = await browser.context.libraryCache.current();
+  const ids = snapshot.tree.map((node) => node.id);
+  assert.ok(ids.some((id) => id === driveId("newOne")), "the created row took Drive's id");
+  assert.ok(ids.some((id) => id === driveId("newTwo")));
+  assert.equal(ids.some((id) => String(id).indexOf("local-") === 0), false, "no local id is left behind");
+  // And a read taken afterwards still shows the rows: the snapshot was put back.
+  const reopened = await send({ type: "pastex-panel-library" });
+  assert.ok(reopened.result.tree.some((node) => node.name === "One"));
+});
+
+test("a panel closed from the toolbar icon reaches the page, so the launcher stops offering to close it", async () => {
+  // The bug: the in-page launcher read × and stayed there after the panel was
+  // closed with the extension icon or Chrome's own panel switch. A closed panel
+  // runs no code, so `pagehide` never fires and nothing could tell the page.
+  // Chrome reports the close instead, and the worker answers with the truth on
+  // the next authorization instead of trusting a message that never came.
+  const { browser, ask } = panelScenario();
+  await browser.listeners.startup();
+  await settle();
+  const opened = await ask({ type: "pastex-site-allowed" });
+  assert.equal(opened.panelOpen, false, "nothing is open yet");
+  // The launcher opens it through a user gesture.
+  const granted = await ask({ type: "pastex-open-panel", capability: opened.capability });
+  assert.equal(granted.ok, true);
+  assert.equal(granted.open, true, "the answer is the state after the gesture");
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+  // Chrome reports the close: the extension icon, or the browser's own switch.
+  // No message comes from the panel at all, because it is gone.
+  browser.listenersForApis.panelClosed({ windowId: 8 });
+  await settle();
+  const afterClose = await ask({ type: "pastex-site-allowed" });
+  assert.equal(afterClose.panelOpen, false, "the page is told, with no message from the panel");
+  // The close event reaches the launcher of the window's active tab as well.
+  const sent = [];
+  browser.context.chrome.tabs.query = async (query) => (query && query.windowId === 8
+    ? [{ id: 1, windowId: 8 }] : [{ id: 1, windowId: 8 }]);
+  browser.context.chrome.tabs.sendMessage = async (tabId, message) => { sent.push({ tabId, message }); };
+  browser.listenersForApis.panelClosed({ windowId: 8 });
+  await settle();
+  assert.ok(sent.some((item) => item.message.type === "pastex-panel-state" && item.message.open === false),
+    "the launcher is told the panel is closed");
+  // Closing twice is a no-op, and a panel opened again says so.
+  browser.listenersForApis.panelOpened({ windowId: 8 });
+  await settle();
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+});
+
+test("a window that is gone no longer counts as showing the panel", async () => {
+  const { browser, ask } = panelScenario();
+  await browser.listeners.startup();
+  await settle();
+  browser.listenersForApis.panelOpened({ windowId: 8 });
+  await settle();
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+  // The window is closed: Chrome reuses window ids, so the state must not
+  // outlive the window that had it.
+  browser.listeners.windowRemoved(8);
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, false,
+    "a closed window cannot be showing a panel");
 });

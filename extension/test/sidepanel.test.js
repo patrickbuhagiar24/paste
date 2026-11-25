@@ -263,6 +263,11 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
   elements["btn-select"].listeners.click();
   assert.equal(elements["selection-actions"].hidden, false);
+  // The button stays an icon button: no word is written into it in either
+  // state, the pressed style and the label carry the meaning.
+  assert.doesNotMatch(String(elements["btn-select"].textContent), /Select|Done/,
+    "select mode must not put a word in the button");
+  assert.match(elements["btn-select"].title, /select mode/i);
   rowFor("B").listeners.click();
   rowFor("C").listeners.click();
   assert.equal(elements["selection-count"].textContent, "2", "the count is the number alone");

@@ -1,3 +1,27 @@
+pastex (2.32.0-1) unstable; urgency=medium
+
+  * The Select button is an icon button again. Entering select mode wrote
+    "Select" and "Done" into it, overwriting the glyph with a word, which broke
+    the one rule every other button follows; the glyph now stays, and the
+    pressed style and the tooltip (Select items to move or delete / Leave select
+    mode) carry the state.
+  * Fixed: the in-page launcher kept offering to close a panel that was already
+    closed. Closing the panel from the extension icon or from Chrome's own panel
+    switch runs no code in the panel, so nothing told the page and the button
+    stayed on x. The worker now follows sidePanel.onOpened / onClosed, which
+    Chrome fires for every way a panel closes, and every authorization the page
+    asks for carries the current state, so the button recovers even after a
+    missed message. The minimum browser version is therefore Chrome/Chromium 142.
+  * Fixed: Sync was expensive. Sending the queue was followed by a full read of
+    the library, so syncing two snippets downloaded every snippet the user owns.
+    Sending a change does not change the shape of the library, only the ids of
+    the rows it creates, so those ids are adopted in place and the read is
+    skipped. A browser start still touches Drive only when the queue is not
+    empty, and only a real change (a queued write, another configuration, or the
+    idle check finding a difference) asks Drive again.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 27 Nov 2026 13:00:00 +0000
+
 pastex (2.31.0-1) unstable; urgency=medium
 
   * BREAKING: reordering and folding need a `pastex-index` link, and Pastex no
