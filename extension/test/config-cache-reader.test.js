@@ -97,3 +97,21 @@ test("invalidate clears the stored configuration", async () => {
   await config.invalidate();
   await assert.rejects(config.readConfig(), /Choose your configuration file in Config first/);
 });
+
+test("the worker passes the client secret on, because the panel is not the one signing in", async () => {
+  // The worker reads this record, not the file. A reader that dropped the
+  // secret sent the code exchange without one, and Google's Personal mode
+  // client refused every sign-in with "client_secret is missing".
+  const files = goodFiles();
+  files.client_secret = "GOCSPX-abcdefghijklmno";
+  const store = storage(record(files));
+  const result = await load(store).create(store).readConfig();
+  assert.equal(result.oauth.client_secret, "GOCSPX-abcdefghijklmno");
+
+  // A client created without a secret stays valid: an empty string, not a
+  // missing key, so the exchange knows the difference between absent and blank.
+  const without = goodFiles();
+  const blank = await load(storage(record(without))).create(storage(record(without))).readConfig();
+  assert.equal(blank.oauth.client_secret, "");
+  assert.equal(blank.oauthError, "");
+});

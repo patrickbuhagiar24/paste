@@ -1,3 +1,19 @@
+pastex (2.33.3-1) unstable; urgency=medium
+
+  * The background worker now hands the client secret to the token exchange.
+    The panel caches the parsed configuration and the worker reads it back from
+    storage, and that reader kept only the client id, so a Web application
+    client, which is what Google's Personal mode creates, refused every sign-in
+    with "client_secret is missing" even though the file held one. The library
+    now loads without a fresh sign-in on each open.
+  * When the configuration really has no client secret and Google asks for one,
+    the status line says where the value belongs: the Google Cloud console, under
+    APIs & Services, Credentials, and then the configuration file picked again in
+    Config. The exchange is not retried, because a missing value cannot fix
+    itself.
+
+ -- Pastex maintainers <pastex@example.org>  Wed, 02 Dec 2026 09:00:00 +0000
+
 pastex (2.33.2-1) unstable; urgency=medium
 
   * Two loads at once stop colliding in Google's sign-in window. The panel

@@ -2,9 +2,9 @@
  * worker.
  *
  * The configuration is one file the user picked, of any name, holding three
- * Drive links and the client id; the site list may also be inline in it, so one
- * file describes the whole installation. The panel read that file once and
- * stored the parsed object, which is all this reader uses.
+ * Drive links, the client id and the client secret; the site list may also be
+ * inline in it, so one file describes the whole installation. The panel read
+ * that file once and stored the parsed object, which is all this reader uses.
  *
  * The worker used to ask an offscreen document for configuration, and that
  * document tried to use the user's folder handle. File System Access handles
@@ -65,11 +65,19 @@
       var validIndex = /^[A-Za-z0-9_-]+$/.test(indexId);
       var clientId = storage && typeof storage.client_id === "string" ? storage.client_id.trim() : "";
       var validClient = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId);
+      // The secret is optional, but it has to reach the token exchange when it
+      // is there: the worker reads this record, not the file, and a reader that
+      // dropped the field left the exchange without a secret while the panel
+      // still held one. Google's Personal mode client requires it, so every
+      // sign-in failed with "client_secret is missing". It is validated the same
+      // way the panel validates it, and a value that is clearly not a secret is
+      // passed on anyway: Google's answer is more useful than a silent omission.
+      var clientSecret = storage && typeof storage.client_secret === "string" ? storage.client_secret.trim() : "";
       return {
         drive: validFolder && validIndex ? { folderId: folderId, indexId: indexId } : null,
         driveError: validFolder && validIndex ? "" :
           "The configuration file needs a pastex-folder link and a pastex-index link.",
-        oauth: validClient ? { client_id: clientId } : null,
+        oauth: validClient ? { client_id: clientId, client_secret: clientSecret } : null,
         oauthError: validClient ? "" : "The configuration file needs the client_id of a Google OAuth client.",
         sites: { fileId: sitesId, allowedSites: inline },
         sources: {},

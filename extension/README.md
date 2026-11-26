@@ -148,6 +148,13 @@ The file must contain these five keys:
 | `client_id` | the OAuth client from the guide above | public, not a secret |
 | `client_secret` | the same OAuth client's secret | optional, and needed by a *Web application* client (which is what Personal mode creates): it is sent only to `oauth2.googleapis.com/token`. A client created without one keeps working with the key left out |
 
+If Google answers *client_secret is missing* when the sign-in code is
+exchanged, the configuration file has no `client_secret` while the OAuth client
+requires one. Copy it from *APIs & Services → Credentials →* your OAuth client in
+the Google Cloud console, add it to the file, and pick the file again in
+**Config**. The value is read by the background worker as well as by the panel,
+so a secret that is in the file is always the one used to sign in.
+
 **The links are the ones Drive's Share button gives you.** Every shape is
 accepted and reduced to the id the API needs:
 

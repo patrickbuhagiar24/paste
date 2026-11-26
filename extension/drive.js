@@ -262,6 +262,20 @@
 
   /* The code -> tokens exchange. This is the one request that carries the
    * client secret, and it is also the only way to receive a refresh token. */
+  /* A client that needs a secret and did not get one is a configuration gap, not
+   * a Google outage. Google's own wording ("client_secret is missing") is kept
+   * as the reason, and the sentence around it says where the value belongs.
+   * Sending the exchange again without a secret cannot help, so it is not sent
+   * twice. */
+  function needsSecret(detail) {
+    return /client_secret/i.test(String(detail || "")) && /missing|required|invalid/i.test(String(detail || ""));
+  }
+
+  var SECRET_HELP = " This OAuth client is a Web application client, which Google's Personal mode " +
+    "creates, and such a client must have a client_secret next to client_id in the configuration file. " +
+    "Copy it from the Google Cloud console (APIs & Services, Credentials, the OAuth client) and pick " +
+    "the configuration file again in Config.";
+
   async function exchangeCode(clientId, clientSecret, code, redirectUri, verifier, fetchImpl) {
     var body = new URLSearchParams({
       grant_type: "authorization_code",
@@ -281,7 +295,8 @@
     var data = await res.json().catch(function () { return {}; });
     if (!res.ok || !data.access_token) {
       var detail = data && data.error_description ? data.error_description : (data && data.error ? data.error : "HTTP " + res.status);
-      throw new Error("Google would not exchange the sign-in code: " + detail);
+      throw new Error("Google would not exchange the sign-in code: " + detail +
+        (!clientSecret && needsSecret(detail) ? "." + SECRET_HELP : ""));
     }
     return data;
   }

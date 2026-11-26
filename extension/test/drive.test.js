@@ -625,3 +625,36 @@ test("a flow Chrome is still finishing is waited for, not reported as a failure"
     return true;
   });
 });
+
+test("a missing client secret is explained as a configuration gap, not repeated silently", async () => {
+  // Google's Personal mode client requires the secret. When the configuration
+  // has none, the exchange cannot succeed, and the message says where the value
+  // belongs instead of leaving the person with "client_secret is missing".
+  Drive.setTokenStore(memoryStore());
+  const mine = client(24);
+  const fetchImpl = stubFetch(async () => jsonResponse({
+    error: "invalid_request", error_description: "client_secret is missing.",
+  }, 400));
+  await assert.rejects(
+    Drive.getAuthToken({ identity: fakeIdentity(granted), clientId: mine, interactive: true, fetchImpl }),
+    (err) => {
+      assert.match(err.message, /client_secret is missing/);
+      assert.match(err.message, /client_secret next to client_id in the configuration file/);
+      assert.match(err.message, /Credentials/);
+      return true;
+    });
+  assert.equal(fetchImpl.calls.length, 1, "a secret cannot be conjured by asking again");
+
+  // When a secret was sent, Google's own reason stands alone.
+  Drive.setTokenStore(memoryStore());
+  const other = stubFetch(async () => jsonResponse({
+    error: "invalid_request", error_description: "client_secret is missing.",
+  }, 400));
+  await assert.rejects(
+    Drive.getAuthToken({ identity: fakeIdentity(granted), clientId: client(25), clientSecret: "GOCSPX-wrong", interactive: true, fetchImpl: other }),
+    (err) => {
+      assert.match(err.message, /client_secret is missing/);
+      assert.doesNotMatch(err.message, /Copy it from the Google Cloud console/);
+      return true;
+    });
+});
