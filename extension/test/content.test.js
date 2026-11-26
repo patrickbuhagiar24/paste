@@ -21,7 +21,7 @@ function setupContent(options = {}) {
     appendChild(el) { if (el.parent) el.remove(); el.parent = this; this.children.push(el); return el; }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter((x) => x !== this); this.parent = null; }
     setAttribute(name, value) { this[name] = value; }
-    dispatchEvent() { return true; }
+    dispatchEvent(event) { return this.onDispatch ? this.onDispatch(event) : true; }
     setRangeText(text, start, end) {
       inserted = text;
       this.value = this.value.slice(0, start) + text + this.value.slice(end);
@@ -71,7 +71,15 @@ function setupContent(options = {}) {
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
-  const context = vm.createContext({ window, document, chrome: { runtime }, console, Event: class Event { constructor(type) { this.type = type; } } });
+  class DataTransfer {
+    constructor() { this.data = {}; }
+    setData(type, value) { this.data[type] = value; }
+    getData(type) { return this.data[type] || ""; }
+  }
+  class ClipboardEvent {
+    constructor(type, init) { this.type = type; Object.assign(this, init); }
+  }
+  const context = vm.createContext({ window, document, location: { hostname: options.hostname || "example.com" }, DataTransfer, ClipboardEvent, chrome: { runtime }, console, Event: class Event { constructor(type) { this.type = type; } } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../content.js"), "utf8"), context);
   const target = root.appendChild(new Element("textarea"));
   function runTimers(ms) {
@@ -249,4 +257,36 @@ test("a trailing newline also reaches a contenteditable", async () => {
   page.events.message({ type: "pastex-insert", text: "snippet text\n" },
     { id: "pastex-extension-id" }, () => {});
   assert.deepEqual(commands, ["insertText:snippet text", "insertLineBreak"]);
+});
+
+
+test("WhatsApp receives multiline snippets as one plain-text paste", async () => {
+  const page = setupContent({ hostname: "web.whatsapp.com" });
+  const box = page.root.appendChild(page.element("div"));
+  box.isContentEditable = true;
+  const commands = [];
+  page.document.execCommand = (...args) => { commands.push(args); return true; };
+  let pasted;
+  box.onDispatch = (event) => { pasted = event; return false; };
+  box.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "first\nsecond\n" },
+    { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  assert.equal(pasted.type, "paste");
+  assert.equal(pasted.clipboardData.getData("text/plain"), "first\nsecond\n");
+  assert.equal(pasted.cancelable, true);
+  assert.equal(commands.length, 0, "a handled paste must not be inserted twice");
+});
+
+test("WhatsApp falls back to editing commands when paste is not handled", async () => {
+  const page = setupContent({ hostname: "web.whatsapp.com" });
+  const box = page.root.appendChild(page.element("div"));
+  box.isContentEditable = true;
+  const commands = [];
+  page.document.execCommand = (command, _ui, text) => { commands.push(text === undefined ? command : command + ":" + text); return true; };
+  box.focus(); await tick();
+  page.events.message({ type: "pastex-insert", text: "snippet\n" },
+    { id: "pastex-extension-id" }, () => {});
+  assert.deepEqual(commands, ["insertText:snippet", "insertLineBreak"]);
 });

@@ -83,6 +83,21 @@
         return false;
       }
     }
+    // WhatsApp's managed chat editor can reconcile individual editing commands
+    // and discard a trailing line break. Give its paste handler the complete
+    // plain-text snippet instead, so it can update its own editor state. Only
+    // treat the paste as handled if the page cancels the event; otherwise use
+    // the normal contenteditable path below.
+    if (target.isContentEditable && location.hostname === "web.whatsapp.com" && /[\r\n]/.test(text)) {
+      try {
+        var clipboard = new DataTransfer();
+        clipboard.setData("text/plain", text);
+        var paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard });
+        if (!target.dispatchEvent(paste)) return true;
+      } catch (ignored) {
+        /* The browser or page does not support synthetic paste; use editing commands. */
+      }
+    }
     // Contenteditable: execCommand preserves undo and notifies frameworks, but
     // it inserts the text as one run and a "\n" inside it becomes a space or
     // nothing at all -- HTML has no newline in a text node, only an element.

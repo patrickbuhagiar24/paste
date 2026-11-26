@@ -470,7 +470,7 @@ def test_release_requires_new_crx_secret():
     workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
     assert "secrets.PASTEX_CRX_PRIVATE_KEY" in workflow
     assert "secrets.PASTEX_CRX_KEY" not in workflow
-    assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]' in workflow
+    assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == workflow_dispatch ]]' in workflow
 
 
 def test_configuration_comes_only_from_a_single_picked_file():
