@@ -19,10 +19,11 @@
   else root.PastexConfigSource = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
-  // One file, three links and the client id. A link is what Drive's own Share
-  // button gives you, so the file can be written without knowing which id
-  // belongs to what. The file name is the user's choice; these keys are not: a
-  // file is a configuration because it carries all four, whatever it is called.
+  // One file: three links, the client id and the client secret. A link is what
+  // Drive's own Share button gives you, so the file can be written without
+  // knowing which id belongs to what. The file name is the user's choice; these
+  // keys are not: a file is a configuration because it carries them, whatever it
+  // is called.
   var CONFIG = "The configuration file";
   var LINK_FOLDER = "pastex-folder", LINK_SITES = "pastex-sites", LINK_INDEX = "pastex-index";
   var CLIENT = "client_id";
@@ -33,6 +34,39 @@
   // decoding an unknown shape. See DEVELOPMENT.md.
   var CACHE_VERSION = 5;
   var MAX_BYTES = 256 * 1024;
+
+  // Copying a configuration out of a chat window, or saving it from a phone
+  // editor, can put characters into it that no one can see: a zero-width space
+  // from a web page, a non-breaking space where an editor auto-indents. JSON
+  // refuses them and the file looks perfect, which is why the message used to
+  // say only "not valid JSON". They are removed rather than reported, because
+  // none of them can ever be part of a key or a link.
+  var INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/g;
+
+  function cleaned(text) {
+    return String(text || "")
+      // A byte-order mark is legal before the object, but not inside it, and a
+      // copy/paste can put one there.
+      .replace(INVISIBLE, "")
+      .replace(/\u00A0/g, " ");
+  }
+
+  // The first thing JSON.parse objects to, in the user's terms. Google's own
+  // message ("Unexpected token ...") names a character the file cannot show.
+  function explainJson(err, text) {
+    var message = String((err && err.message) || "");
+    var at = /position (\d+)/.exec(message);
+    var where = at ? Number(at[1]) : -1;
+    if (where >= 0) {
+      var before = text.slice(0, where);
+      var line = before.split("\n").length;
+      var column = where - before.lastIndexOf("\n");
+      return "line " + line + ", column " + column;
+    }
+    var unexpected = /Unexpected token '(.)'/i.exec(message);
+    if (unexpected) return "unexpected " + JSON.stringify(unexpected[1]);
+    return "";
+  }
 
   function create(sites, cacheStore) {
     var memoized = { config: null, configKey: "", sites: null, sitesKey: "" };
@@ -79,11 +113,17 @@
       catch (err) { throw new Error("That file could not be read. Choose it again."); }
       name = file.name || name;
       if (text.length > MAX_BYTES) throw new Error(name + " is larger than " + (MAX_BYTES / 1024) + " KiB.");
+      var clean = cleaned(text);
       var value;
-      try { value = JSON.parse(text.replace(/^\uFEFF/, "")); }
-      catch (err) { throw new Error(name + " is not valid JSON."); }
+      try { value = JSON.parse(clean); }
+      catch (err) {
+        var at = explainJson(err, clean);
+        throw new Error(name + " is not valid JSON" + (at ? " (" + at + ")" : "") +
+          ". Open it in a plain text editor: a trailing comma, a missing quote or a curly quote " +
+          "from a word processor are the usual causes.");
+      }
       if (!value || typeof value !== "object" || Array.isArray(value))
-        throw new Error(name + " must contain a JSON object.");
+        throw new Error(name + " must contain a JSON object, starting with { and ending with }.");
       return { name: name, value: value };
     }
 

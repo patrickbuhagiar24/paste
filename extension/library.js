@@ -158,7 +158,8 @@
     var text = await drive.downloadText(token, fileId);
     var data;
     try { data = JSON.parse(text); } catch (ignored) {
-      throw new Error("The pastex-sites file is not valid JSON.");
+      throw new Error("The pastex-sites file is not valid JSON. It must contain an object of the " +
+        'form {"allowed_sites": [...]}, with no trailing comma.');
     }
     if (!data || !Array.isArray(data.allowed_sites))
       throw new Error("The pastex-sites file needs an allowed_sites array.");

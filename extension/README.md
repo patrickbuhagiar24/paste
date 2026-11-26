@@ -124,8 +124,8 @@ Configuration is **one JSON file of Drive links on your computer**. Click
 needs to be public, and the file is not a credential.
 
 **The file name is yours to choose.** Any name works — `pastex-storage.json`,
-`drive-links.json`, even `my drive links.json` — because a configuration is the
-four keys inside it, all of which are checked. The panel reports the name it
+`pastex.json`, `drive-links.json`, even `my drive links.json` — because a
+configuration is the keys inside it, and every one of them is checked. The panel reports the name it
 used (`Using <name>.`), so a screen full of JSON files is never ambiguous.
 
 The file must contain these five keys:
@@ -160,6 +160,14 @@ https://drive.google.com/open?id=1AbCdEf...                (?id= link)
 ```
 
 A link that is none of those is reported by key name, not guessed at.
+
+**Characters you cannot see are removed before the file is read.** A
+configuration copied out of a chat window or saved by a phone editor can carry a
+zero-width space or a non-breaking space where an indent should be; JSON refuses
+those, and the file looks perfect. Pastex strips them, so a pasted file loads as
+it stands. A file that is genuinely malformed is reported with the line and
+column of the first problem, which is nearly always a trailing comma, a missing
+quote, or a curly quote from a word processor.
 
 The allowlist takes HTTP(S) origins only, without paths, ports, credentials or
 global wildcards; wildcard subdomains include the base domain. An empty list

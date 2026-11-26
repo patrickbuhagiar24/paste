@@ -239,3 +239,40 @@ test("client_secret is read from the same file, optional but checked when presen
     /client_secret/);
   assert.equal((await kept.readConfig(true)).oauth.client_secret, before, "the previous configuration survives");
 });
+
+test("a configuration copied out of a chat window still loads, invisible characters and all", async () => {
+  // The exact complaint: "pastex.json is not valid JSON." on a file that looks
+  // perfect. Copying the file out of WhatsApp (or saving it from a phone editor)
+  // adds characters that cannot be seen, and JSON refuses them.
+  const text = JSON.stringify(storageFile({ client_secret: "GOCSPX-abcdefghijklmno" }), null, 2);
+  const cases = {
+    "a byte-order mark at the start": "\uFEFF" + text,
+    "a byte-order mark inside the object": text.replace("{", "{\uFEFF"),
+    "a zero-width space after a brace": text.replace("{", "{\u200B"),
+    "a zero-width joiner in a value": text.replace("https://example.org", "https://example.org\u200D"),
+    "non-breaking-space indentation": text.replace(/^  /gm, "\u00A0\u00A0"),
+    "Windows line endings and a trailing newline": text.replace(/\n/g, "\r\n") + "\r\n",
+  };
+  for (const [label, contents] of Object.entries(cases)) {
+    const source = create(Sites, memoryStore());
+    const result = await source.chooseFile(fileHandle("pastex.json", contents));
+    assert.equal(result.storage, "file pastex.json", label + ": must load");
+    const config = await source.readConfig(true);
+    assert.equal(config.oauth.client_secret, "GOCSPX-abcdefghijklmno", label);
+    assert.equal(config.drive.folderId, "rootfolder", label);
+  }
+});
+
+test("a file that is really broken says where, not only that it is broken", async () => {
+  // "Unexpected token '}' in JSON at position 63" names a character the file
+  // cannot show, and gives no line. A trailing comma is the usual cause, so the
+  // message names the line and column and what to look for.
+  const text = '{\n  "pastex-folder": "https://drive.google.com/drive/folders/rootfolder",\n  "pastex-index": "x",\n}';
+  const source = create(Sites, memoryStore());
+  await assert.rejects(source.chooseFile(fileHandle("pastex.json", text)),
+    /pastex\.json is not valid JSON \(line 4, column 1\)/);
+  // A value that is not an object is a different mistake and says so.
+  const list = create(Sites, memoryStore());
+  await assert.rejects(list.chooseFile(fileHandle("pastex.json", '["a"]')),
+    /must contain a JSON object/);
+});

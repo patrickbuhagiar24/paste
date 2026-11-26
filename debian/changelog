@@ -1,3 +1,20 @@
+pastex (2.33.1-1) unstable; urgency=medium
+
+  * A configuration file that carries characters nobody can see now loads. A
+    file copied out of a chat window, or saved by a phone editor, can hold a
+    zero-width space or a non-breaking space where an indent should be; JSON
+    requires neither, so it refused the file while the file looked perfect, and
+    the panel answered only "pastex.json is not valid JSON", which says nothing
+    about where to look. Zero-width characters and non-breaking spaces are
+    stripped before the file is read, so a pasted file loads as it stands.
+  * A file that is genuinely malformed now says where the first problem is:
+    "not valid JSON (line 4, column 1)" instead of a bare refusal. The message
+    names the usual causes, a trailing comma, a missing quote or a curly quote
+    from a word processor. A file whose top level is not an object says that
+    instead, and the pastex-sites message names the shape it needs.
+
+ -- Pastex maintainers <pastex@example.org>  Mon, 30 Nov 2026 09:00:00 +0000
+
 pastex (2.33.0-1) unstable; urgency=medium
 
   * New configuration key `client_secret`, next to `client_id`. Google's
