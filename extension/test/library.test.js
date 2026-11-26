@@ -5,8 +5,11 @@ const Library = require("../library.js");
 function fakeDrive() {
   return {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
-    parseServiceAccount: (text) => JSON.parse(text), fetchAccessToken: async () => "token",
+    getAuthToken: async () => "token",
     getFolder: async () => ({ id: "root", mimeType: "application/vnd.google-apps.folder" }),
+    // The index is its own file, named by the configuration; this library has
+    // no index yet.
+    readIndexFile: async (token, indexId) => ({ id: indexId || "", index: null }),
     listChildren: async (token, parent) => parent === "root" ? [
       { id: "folder", name: "Folder", mimeType: "application/vnd.google-apps.folder" },
       { id: "empty", name: "Empty", mimeType: "application/vnd.google-apps.folder" },
@@ -16,7 +19,11 @@ function fakeDrive() {
     downloadText: async (token, id) => ({ top: "top content", nested: "nested content" })[id],
   };
 }
-const native = { readConfig: async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "y" } }) };
+const native = { readConfig: async () => ({
+  drive: { folderId: "root", indexId: "" },
+  oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+  sites: { fileId: "", allowedSites: ["https://example.org"] },
+}) };
 
 test("Drive library loads nested snippets, contents, ids, and empty folders", async () => {
   const result = await Library.load(native, fakeDrive());
@@ -30,11 +37,30 @@ test("Drive library loads nested snippets, contents, ids, and empty folders", as
 });
 
 test("Drive library reports missing configuration, invalid folder, and fetch errors", async () => {
-  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()), /service-account/);
-  await assert.rejects(Library.load({ readConfig: async () => ({ serviceAccount: {} }) }, fakeDrive()), /google-drive/);
+  await assert.rejects(Library.load({ readConfig: async () => ({}) }, fakeDrive()),
+    /configuration file/);
+  await assert.rejects(Library.load({ readConfig: async () => ({ drive: { folderId: "root" } }) }, fakeDrive()), /client_id/);
   const drive = fakeDrive();
   drive.getFolder = async () => ({ mimeType: "text/plain" });
-  await assert.rejects(Library.load(native, drive), /not a folder/);
+  await assert.rejects(Library.load(native, drive), /does not point at a folder/);
+  // A folder this grant cannot see comes back as 404 from Drive, which is not
+  // the same thing as a wrong link. The message has to say both and name the fix.
+  const invisible = fakeDrive();
+  invisible.getFolder = async () => {
+    throw new Error("Drive API GET /files/1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ failed (HTTP 404): File not found: 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ.");
+  };
+  const named = { readConfig: async () => ({
+    drive: { folderId: "1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ", indexId: "" },
+    oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
+  }) };
+  await assert.rejects(Library.load(named, invisible), (err) => {
+    assert.match(err.message, /cannot open the library folder 1CZ0skmI8Gy1EFd2WKxcnqBqyloy9AjnJ/);
+    assert.match(err.message, /pastex-folder link is the folder itself/);
+    assert.match(err.message, /shared with this account/);
+    assert.match(err.message, /pick your configuration file again/);
+    return true;
+  });
   const offline = fakeDrive();
   offline.listChildren = async () => { throw new Error("permission denied"); };
   await assert.rejects(Library.load(native, offline), /permission denied/);
@@ -67,23 +93,49 @@ test("Drive tree is reported progressively with bounded parallel downloads", asy
   assert.equal(max, 6);
 });
 
-test("Drive tree respects persistent item properties, then Drive order for unranked items", async () => {
+test("the folder's index label decides order, then Drive order for unnamed rows", async () => {
   const drive = fakeDrive();
+  // The root folder carries the centralized index; the rows themselves carry
+  // nothing. No per-item label is read any more.
+  // The index is its own file in the library, read before the listing.
+  let indexRead = null;
+  drive.readIndexFile = async () => (indexRead = { id: "idx",
+    index: { v: 2, order: { root: ["second", "first"] }, collapsed: {} } });
   drive.listChildren = async () => [
     { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
-    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
-    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
+    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
+    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME },
   ];
   drive.downloadText = async (token, id) => id;
   const result = await Library.load(native, drive);
-  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
+  assert.deepEqual(result.tree.map((node) => node.id), ["second", "first", "unranked"]);
+  assert.equal(indexRead.id, "idx", "the index file's id is kept for the next write");
 });
 
-test("folder collapse state is loaded from Drive metadata", async () => {
+test("an index with another version is discarded, not decoded", async () => {
   const drive = fakeDrive();
+  // v1 and an unversioned shape both mean "unknown": Drive's order wins.
+  drive.readIndexFile = async () => ({ id: "idx",
+    index: { order: { root: ["b", "a"] }, collapsed: { a: "1" } } });
+  drive.listChildren = async () => [
+    { id: "a", name: "A.txt", mimeType: drive.TEXT_MIME },
+    { id: "b", name: "B.txt", mimeType: drive.TEXT_MIME },
+    { id: "f", name: "F", mimeType: drive.FOLDER_MIME },
+  ];
+  drive.downloadText = async (token, id) => id;
+  const result = await Library.load(native, drive);
+  assert.deepEqual(result.tree.map((node) => node.id), ["a", "b", "f"]);
+  assert.equal(result.tree[2].collapsed, false, "an unknown index must not fold anything");
+});
+
+test("folder collapse state comes from the index label, never from the folder", async () => {
+  const drive = fakeDrive();
+  drive.readIndexFile = async () => ({ id: "idx",
+    index: { v: 2, order: {}, collapsed: { closed: "1" } } });
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
-    { id: "open", name: "Open", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+    // A per-item label is ignored even when it is present.
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
+    { id: "open", name: "Open", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
     { id: "unset", name: "Unset", mimeType: drive.FOLDER_MIME },
   ] : [];
   const result = await Library.load(native, drive);
@@ -96,7 +148,7 @@ test("cached text is reused by modifiedTime and stale bodies are refreshed", asy
   const drive = fakeDrive();
   const downloads = [];
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "folder", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "folder", name: "Closed", mimeType: drive.FOLDER_MIME },
     { id: "top", name: "Top.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" },
   ] : [{ id: "nested", name: "Nested.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v2" }];
   drive.downloadText = async (token, id) => { downloads.push(id); return "fresh " + id; };
@@ -168,17 +220,14 @@ test("only the branch that changed is listed and downloaded again", async () => 
   assert.equal(second.tree[1].children[0].text, "body rb");
 });
 
-test("the centralized index on the root folder orders and folds the library", async () => {
+test("the index file orders and folds the library", async () => {
   const drive = fakeDrive();
-  drive.getFolder = async () => ({
-    id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1",
-    properties: {
-      pastex_index: JSON.stringify({
-        order: { root: ["second", "first"] },
-        collapsed: { folder: "1" },
-      }),
-    },
-  });
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME, modifiedTime: "r1" });
+  drive.readIndexFile = async () => ({ id: "idx", index: {
+    v: 2,
+    order: { root: ["second", "first"] },
+    collapsed: { folder: "1" },
+  } });
   drive.listChildren = async (token, parent) => parent === "root" ? [
     { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME },
     { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME },
@@ -191,32 +240,25 @@ test("the centralized index on the root folder orders and folds the library", as
   assert.deepEqual(result.index.order.root, ["second", "first"]);
 });
 
-test("the legacy per-item labels still order a library without a central index", async () => {
-  const drive = fakeDrive();
-  drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "unranked", name: "New.txt", mimeType: drive.TEXT_MIME },
-    { id: "second", name: "Second.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "1" } },
-    { id: "first", name: "First.txt", mimeType: drive.TEXT_MIME, properties: { pastex_order: "0" } },
-  ] : [];
-  drive.downloadText = async (token, id) => id;
-  const result = await Library.load(native, drive);
-  assert.deepEqual(result.tree.map((node) => node.id), ["first", "second", "unranked"]);
-  assert.deepEqual(result.index, { order: {}, collapsed: {} });
-});
-
 test("text inside a collapsed folder is deferred until the folder is opened", async () => {
   const drive = fakeDrive();
   let downloads = 0;
+  // The index lives in its own file, so a fold is a different file body, not a
+  // different folder property.
+  const folderWith = (collapsed) => async () => ({ id: "idx",
+    index: { v: 2, order: {}, collapsed: { closed: collapsed } } });
+  drive.readIndexFile = folderWith("1");
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "1" } },
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
   drive.downloadText = async () => { downloads++; return "loaded"; };
   const closed = await Library.load(native, drive);
   assert.equal(closed.tree[0].children[0].deferred, true);
   assert.equal(closed.tree[0].children[0].loadError, undefined);
   assert.equal(downloads, 0);
+  drive.readIndexFile = folderWith("0");
   drive.listChildren = async (token, parent) => parent === "root" ? [
-    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME, properties: { pastex_collapsed: "0" } },
+    { id: "closed", name: "Closed", mimeType: drive.FOLDER_MIME },
   ] : [{ id: "inside", name: "Inside.txt", mimeType: drive.TEXT_MIME, modifiedTime: "v1" }];
   const opened = await Library.load(native, drive, undefined, { bodies: closed.bodies });
   assert.equal(opened.tree[0].children[0].text, "loaded");

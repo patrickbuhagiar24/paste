@@ -56,8 +56,13 @@ function setupContent(options = {}) {
   const messages = [];
   const runtime = {
     id: "pastex-extension-id",
-    sendMessage: async (message) => { messages.push(message); return message.type === "pastex-site-allowed" ?
-      (options.allowed ? options.allowed() : { allowed: true, capability: "token" }) : { ok: true }; },
+    sendMessage: async (message) => {
+      messages.push(message);
+      if (message.type === "pastex-site-allowed") return options.allowed ? options.allowed() : { allowed: true, capability: "token" };
+      // The worker answers an open or a close with the state after the gesture.
+      if (message.type === "pastex-open-panel") return { ok: true, open: message.action !== "close" };
+      return { ok: true };
+    },
     onMessage: { addListener(fn) { events.message = fn; } },
   };
   const windowEvents = {};
@@ -72,7 +77,8 @@ function setupContent(options = {}) {
   function runTimers(ms) {
     for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); }
   }
-  return { root, target, events, windowEvents, document, runTimers, messages, get inserted() { return inserted; } };
+  return { root, target, events, windowEvents, document, runTimers, messages,
+    element: (tag) => new Element(tag), get inserted() { return inserted; } };
 }
 async function tick() { await new Promise(setImmediate); }
 
@@ -121,12 +127,32 @@ test("another extension cannot ask a page to insert text", async () => {
 test("multiline snippets are inserted into a textarea verbatim", async () => {
   const page = setupContent();
   page.target.focus(); await tick();
-  const text = "baris pertama\n\nbaris kedua  \r\nbaris ketiga";
+  const text = "first line\n\nsecond line  \r\nthird line";
   let result;
   page.events.message({ type: "pastex-insert", text }, { id: "pastex-extension-id" }, (response) => { result = response; });
   assert.equal(result.ok, true);
   assert.equal(page.inserted, text);
   assert.equal(page.target.value, text);
+});
+
+test("a trailing newline reaches a textarea, and a one-line input is told so", async () => {
+  // The newline buttons append "\n". In a textarea that is a real line; in a
+  // single-line input there is no line to break to, and pretending otherwise is
+  // what made the buttons look broken.
+  const page = setupContent();
+  page.target.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "snippet\n" }, { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  assert.equal(page.target.value, "snippet\n", "the textarea keeps the appended newline");
+
+  // The same message against an <input> answers honestly instead.
+  const input = page.root.appendChild(page.element("input"));
+  input.type = "text";
+  input.focus(); await tick();
+  page.events.message({ type: "pastex-insert", text: "snippet\n" }, { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "single-line");
 });
 
 test("hiding a tab reports visibility but never sends the queue", async () => {
@@ -154,4 +180,73 @@ test("closing the tab sends the queue", async () => {
   assert.equal(page.messages.filter((m) => m.type === "pastex-flush-now").length, 1,
     "the page going away is the one moment the queue is sent");
   assert.ok(page.messages.some((m) => m.type === "pastex-site-visible" && m.visible === false));
+});
+
+test("the launcher takes the panel state from the worker, not from a click it assumed worked", async () => {
+  // The bug: the panel was closed with the extension icon, the page never heard
+  // about it, and the launcher kept offering to close a panel that was gone.
+  // The worker owns the fact and answers with it on every authorization.
+  let panelOpen = false;
+  const page = setupContent({ allowed: () => ({ allowed: true, capability: "token", panelOpen }) });
+  page.target.focus();
+  await tick();
+  const host = page.root.children.find((el) => el.id === "pastex-float-host");
+  const button = host.__pastexButton;
+  assert.equal(button.title, "Open Pastex side panel", "nothing is open at first");
+  // The user opens it: the answer is the state after the gesture.
+  button.listeners.mousedown({ isTrusted: true, preventDefault() {} });
+  await tick();
+  assert.equal(button.title, "Close Pastex side panel");
+  // The panel is closed from the toolbar icon while this field keeps no focus
+  // changes to tell the page. The next authorization carries the truth.
+  panelOpen = false;
+  page.target.focus();
+  await tick();
+  assert.equal(button.title, "Open Pastex side panel",
+    "a close the page never heard about must not leave it offering to close");
+});
+
+test("a newline reaches a contenteditable as a real line break, not a space", async () => {
+  // The failure on WhatsApp Web: the box is a contenteditable <div>, and
+  // execCommand("insertText", "text\n") inserts one run with no line break at
+  // all, because a text node cannot hold one. The newline buttons therefore did
+  // nothing there, and the status still said "Inserted.".
+  const commands = [];
+  const page = setupContent();
+  page.document.execCommand = (command, _ui, text) => {
+    commands.push(text === undefined ? command : command + ":" + text);
+    return true;
+  };
+  const box = page.element("div");
+  box.isContentEditable = true;
+  box.textContent = "";
+  page.root.appendChild(box);
+  box.focus();
+  await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "line one\nline two" },
+    { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, true);
+  // One line, a real break, then the next line: never a bare "line one\nline two".
+  assert.deepEqual(commands, ["insertText:line one", "insertLineBreak", "insertText:line two"],
+    "the newline must become a line break element, which is the only newline a contenteditable has");
+});
+
+test("a trailing newline also reaches a contenteditable", async () => {
+  // The ⏎ button appends one "\n" to the snippet. On a chat box that is the only
+  // content, so it must produce a break even when there is no text after it.
+  const commands = [];
+  const page = setupContent();
+  page.document.execCommand = (command, _ui, text) => {
+    commands.push(text === undefined ? command : command + ":" + text);
+    return true;
+  };
+  const box = page.element("div");
+  box.isContentEditable = true;
+  page.root.appendChild(box);
+  box.focus();
+  await tick();
+  page.events.message({ type: "pastex-insert", text: "snippet text\n" },
+    { id: "pastex-extension-id" }, () => {});
+  assert.deepEqual(commands, ["insertText:snippet text", "insertLineBreak"]);
 });

@@ -14,7 +14,7 @@ function settle(ms) {
 }
 
 
-function harness(home, unavailable, shared, closeUnsupported, options) {
+function harness(home, unavailable, shared, options) {
   const opts = options || {};
   const listeners = {};
   const closed = [];
@@ -55,12 +55,12 @@ function harness(home, unavailable, shared, closeUnsupported, options) {
   // The panel writes this record when it scans the chosen folder.
   if (!unavailable) {
     localData["pastex-config-cache"] = {
-      version: 1, savedAt: "2026-01-01T00:00:00.000Z", folder: "chosen-folder",
-      files: {
-        "pastex-google-drive.json": { folder_id: "root" },
-        "pastex-sites.json": opts.withoutSites ? {} : { allowed_sites: ["https://allowed.example"] },
-        "service-account.json": { type: "service_account", client_email: "x",
-          private_key: "-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n" },
+      version: 5, savedAt: "2026-01-01T00:00:00.000Z", file: "pastex-storage.json",
+      value: {
+        "pastex-folder": "1RootFolderIdAbCdEf",
+        "pastex-index": "1IndexFileIdAbCdEf",
+        "pastex-sites": opts.withoutSites ? "not a link" : ["https://allowed.example"],
+        client_id: "123456789012-abc.apps.googleusercontent.com",
       },
     };
   }
@@ -86,13 +86,24 @@ function harness(home, unavailable, shared, closeUnsupported, options) {
         sendMessage: async () => { throw new Error("no receiver"); } },
       alarms, idle: idleApi,
       action: { onClicked: event("action") },
-      sidePanel: Object.assign(
-        { open: (options) => { opened.push(options); return Promise.resolve(); },
-          setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); } },
-        closeUnsupported ? {} : { close: (options) => { closed.push(options); return Promise.resolve(); } }),
+      sidePanel: {
+        open: (options) => { opened.push(options); return Promise.resolve(); },
+        close: (options) => { closed.push(options); return Promise.resolve(); },
+        setPanelBehavior: (options) => { behaviors.push(options); return Promise.resolve(); },
+        // Chrome 142 reports every open and close of an extension panel; the
+        // worker keeps the panel state for the in-page launcher with them.
+        onOpened: { addListener(fn) { listenersForApis.panelOpened = fn; } },
+        onClosed: { addListener(fn) { listenersForApis.panelClosed = fn; } },
+      },
+      windows: { onRemoved: event("windowRemoved") },
     },
     PastexStore: { loadTree: async () => [], loadRecent: async () => [], findById: () => null },
     crypto: require("node:crypto").webcrypto, TextEncoder, setTimeout, clearTimeout, URL,
+    // The Drive helper decodes a base64 key. A vm context has no atob/btoa, so
+    // a real load inside the harness failed for a reason that has nothing to do
+    // with the code under test.
+    atob: (data) => Buffer.from(String(data), "base64").toString("binary"),
+    btoa: (data) => Buffer.from(String(data), "binary").toString("base64"),
     // The worker talks HTTP through fetch; the stubs replace the calls that
     // would use it, but the symbol must exist.
     fetch: async () => { throw new Error("the network is stubbed in this test"); },
@@ -137,14 +148,14 @@ test("extension startup never creates a configuration directory", async () => {
 test("site registration and on-demand injection are limited to configured sites", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-allow-"));
   try {
-    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
+    const browser = harness(home, false, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "no allowlist means no registration");
     // Configuration lives in storage: replacing the cached allowlist is what a
     // panel rescan does, and no folder or file is involved.
     const config = browser.sharedLocal["pastex-config-cache"];
-    config.files["pastex-sites.json"] = { allowed_sites: ["https://allowed.example"] };
+    config.value["pastex-sites"] = ["https://allowed.example"];
     browser.listeners.startup();
     await new Promise(setImmediate);
     assert.deepEqual(Array.from(browser.registered[0].matches), ["https://allowed.example/*"]);
@@ -169,7 +180,7 @@ test("site registration and on-demand injection are limited to configured sites"
     assert.equal(browser.injected, 0);
     await assert.rejects(browser.context.messageTab(1, { type: "pastex-insert" }), /no receiver/);
     assert.equal(browser.injected, 1);
-    config.files["pastex-sites.json"] = { allowed_sites: ["<all_urls>"] };
+    config.value["pastex-sites"] = ["<all_urls>"];
     browser.listeners.startup();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "an invalid allowlist fails closed");
@@ -189,12 +200,12 @@ test("an unavailable configuration does not prevent extension startup", async ()
 test("only the extension panel can request a site registration reload", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "pastex-reload-"));
   try {
-    const browser = harness(home, false, undefined, undefined, { withoutSites: true });
+    const browser = harness(home, false, undefined, { withoutSites: true });
     browser.listeners.installed();
     await new Promise(setImmediate);
     assert.equal(browser.registered.length, 0, "nothing registered without an allowlist");
     const cached = browser.sharedLocal["pastex-config-cache"];
-    cached.files["pastex-sites.json"] = { allowed_sites: ["https://allowed.example"] };
+    cached.value["pastex-sites"] = ["https://allowed.example"];
     let denied;
     assert.equal(browser.listeners.message({ type: "pastex-reload-sites" }, { id: "abc", url: "https://allowed.example" }, (res) => { denied = res; }), false);
     assert.equal(denied.ok, false);
@@ -215,14 +226,14 @@ test("panel loads are cached and an edit changes the cache without reading Drive
     fs.mkdirSync(path.join(home, "chosen-folder"), { recursive: true });
     fs.writeFileSync(path.join(home, "chosen-folder", "pastex-sites.json"), JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-    browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+    browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } });
     let text = "old", loads = 0;
     browser.context.PastexLibrary.load = async () => ({
       tree: [{ id: "item", kind: "text", name: "Item", driveName: "Item.txt", text: text }],
       session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} }, sequence: ++loads,
     });
     browser.context.PastexLibrary.connect = async () => ({ token: "token", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
-    browser.context.PastexDrive.fetchAccessToken = async () => "token";
+    browser.context.PastexDrive.getAuthToken = async () => "token";
     browser.context.PastexDrive.getFolder = async () => ({ mimeType: browser.context.PastexDrive.FOLDER_MIME, properties: { pastex_index: "" } });
     let driveWrites = 0;
     browser.context.PastexDrive.updateText = async (token, id, value) => { driveWrites++; text = value; };
@@ -271,7 +282,7 @@ function queueScenario(stub) {
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/" };
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-  browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } });
+  browser.context.PastexConfig.readConfig = async () => ({ drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } });
   let stored = { order: { root: [] }, collapsed: { folder: "1" } };
   // connect() reads the folder, so it must hand back the label the previous
   // write stored; returning a snapshot from before the writes would lose it.
@@ -289,10 +300,11 @@ function queueScenario(stub) {
     tree: structuredClone(rows), session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: stored,
   });
   const drive = browser.context.PastexDrive;
-  drive.fetchAccessToken = async () => "token";
-  drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
+  drive.getAuthToken = async () => "token";
+  drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME });
   drive.listChildren = async () => [];
-  drive.setIndex = async (t, root, index) => { stored = index; };
+  drive.readIndexFile = async () => ({ id: "", index: null });
+  drive.writeIndexFile = async (t, root, index) => { stored = index; };
   stub(drive);
   const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
   const leave = () => new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
@@ -345,7 +357,7 @@ test("a reorder and a fold in one flush both survive, on one connection", async 
   const calls = [];
   let connects = 0;
   const { browser, send, leave } = queueScenario((drive) => {
-    drive.setIndex = async (t, root, index) => { calls.push(JSON.parse(JSON.stringify(index))); };
+    drive.writeIndexFile = async (t, root, index) => { calls.push(JSON.parse(JSON.stringify(index))); };
   });
   const realConnect = browser.context.PastexLibrary.connect;
   browser.context.PastexLibrary.connect = async (...args) => { connects++; return realConnect(...args); };
@@ -369,7 +381,7 @@ test("a reorder and a collapse each become one index write, and the stored order
   // The label is read back from the folder before each write, so the stub must
   // both record the write and store it, exactly like Drive does.
   const { browser, send, leave } = queueScenario((drive) => {
-    drive.setIndex = async (t, root, index) => { calls.push([root, index]); drive.__stored = index; };
+    drive.writeIndexFile = async (t, root, index) => { calls.push([root, index]); drive.__stored = index; };
   });
   // The folder already carries an unrelated folded folder, which must survive.
   browser.context.PastexDrive.__stored = { order: { root: [] }, collapsed: { folder: "1" } };
@@ -439,7 +451,7 @@ test("repeated paste requests reuse the cached site allowlist", async () => {
 test("the background sync runs only while the user is away", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -463,7 +475,7 @@ test("the background sync runs only while the user is away", async () => {
 test("the background sync keeps the cache and only notifies the panel when Drive changed", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let tree = [{ id: "item", kind: "text", name: "Item", text: "text" }];
   browser.context.PastexLibrary.load = async () => ({
@@ -493,7 +505,7 @@ test("the background sync keeps the cache and only notifies the panel when Drive
 test("the startup warm-up never syncs while the user is active", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -521,12 +533,12 @@ test("a browser start with nothing queued reads nothing from Drive", async () =>
       JSON.stringify({ allowed_sites: ["https://allowed.example"] }));
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
     browser.context.PastexConfig.readConfig = async () => ({
-      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+      drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
     });
     const drive = browser.context.PastexDrive;
     let remote = 0;
     // Every path to Drive goes through one of these.
-    drive.fetchAccessToken = async () => { remote++; return "token"; };
+    drive.getAuthToken = async () => { remote++; return "token"; };
     drive.getFolder = async () => { remote++; return { mimeType: drive.FOLDER_MIME, properties: {} }; };
     drive.listChildren = async () => { remote++; return []; };
     let loads = 0;
@@ -549,7 +561,7 @@ test("a browser start with nothing queued reads nothing from Drive", async () =>
 
 test("a running panel operation suppresses the background sync", async () => {  const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   let release;
@@ -574,7 +586,7 @@ test("a running panel operation suppresses the background sync", async () => {  
 test("the background check slows down while Drive keeps reporting the same library", async () => {
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let text = "text";
   browser.context.PastexLibrary.load = async () => ({
@@ -612,7 +624,7 @@ test("the growing interval is kept when the worker restarts", async () => {
   try {
     const browser = harness(home, false, shared);
     browser.context.PastexConfig.readConfig = async () => ({
-      drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+      drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
     });
     browser.context.PastexLibrary.load = async () => ({
       tree: [{ id: "item", kind: "text", name: "Item", text: "text" }],
@@ -639,41 +651,32 @@ test("the growing interval is kept when the worker restarts", async () => {
 
 // --- the in-page launcher toggles the panel -------------------------------
 
-function panelScenario(closeUnsupported) {
-  const browser = harness(os.tmpdir(), true, undefined, closeUnsupported);
+function panelScenario() {
+  const browser = harness(os.tmpdir(), true, undefined);
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked pastex-sites.json" });
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   const sender = { id: "abc", tab: { id: 1, windowId: 8, url: "https://allowed.example/path" }, frameId: 0, url: "https://allowed.example/path" };
   const ask = (message) => new Promise((resolve) => browser.listeners.message(message, sender, resolve));
   return { browser, sender, ask };
 }
 
-test("the launcher receives a capability that can close the panel when Chrome supports it", async () => {
-  const { browser, ask } = panelScenario(false);
+test("the launcher's capability opens and closes the panel", async () => {
+  const { browser, ask } = panelScenario();
   await browser.listeners.startup();
   await settle();
   const authorization = await ask({ type: "pastex-site-allowed" });
   assert.equal(authorization.allowed, true);
-  assert.equal(authorization.toggle, true, "Chrome 141+ gets the toggle");
+  assert.equal(authorization.toggle, undefined, "there is no capability flag to check");
   const closed = await ask({ type: "pastex-open-panel", action: "close", capability: authorization.capability });
   assert.equal(closed.ok, true);
   assert.equal(browser.closed.length, 1, "the same button closes the panel again");
   assert.equal(browser.closed[0].windowId, 8);
-
-  const older = panelScenario(true);
-  await older.browser.listeners.startup();
-  await settle();
-  const oldAuthorization = await older.ask({ type: "pastex-site-allowed" });
-  assert.equal(oldAuthorization.toggle, false, "older Chrome is told there is no close()");
-  const refused = await older.ask({ type: "pastex-open-panel", action: "close", capability: oldAuthorization.capability });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, "unsupported");
 });
 
 test("closing needs the same capability as opening", async () => {
-  const { browser, ask } = panelScenario(false);
+  const { browser, ask } = panelScenario();
   await browser.listeners.startup();
   await settle();
   const authorization = await ask({ type: "pastex-site-allowed" });
@@ -688,7 +691,7 @@ test("closing needs the same capability as opening", async () => {
 });
 
 test("the open panel tells the page to switch the launcher to close", async () => {
-  const { browser, sender } = panelScenario(false);
+  const { browser, sender } = panelScenario();
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const sent = [];
   browser.context.chrome.tabs.sendMessage = async (tabId, message) => { sent.push({ tabId, message }); };
@@ -724,7 +727,7 @@ function editScenario() {
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
   // One stable configuration object: the cache keys a snapshot by it, and a
   // fresh object on every read would look like a different library.
-  const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+  const configuration = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   browser.context.PastexConfig.readConfig = async () => configuration;
   // The Drive side: a listing of the library, kept in step with the writes, so
   // the sync after a flush sees what the flush just wrote.
@@ -766,7 +769,7 @@ function editScenario() {
     const at = library.findIndex((node) => node.id === id);
     if (at !== -1) library.splice(at, 1);
   };
-  drive.setIndex = async (t, root, index) => { writes.push(["index", index]); };
+  drive.writeIndexFile = async (t, root, index) => { writes.push(["index", index]); };
   const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
   const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
   return { browser, writes, send };
@@ -839,7 +842,7 @@ test("the background check refuses to run while a site is visible", async () => 
   const browser = harness(os.tmpdir(), true);
   browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
   browser.context.PastexConfig.readConfig = async () => ({
-    drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" },
+    drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" },
   });
   let loads = 0;
   browser.context.PastexLibrary.load = async () => {
@@ -915,19 +918,20 @@ test("a leftover queue is sent when the browser starts again", async () => {
   try {
     const browser = harness(home, true);
     browser.context.PastexConfig.readSites = async () => ({ allowedSites: ["https://allowed.example"], source: "linked" });
-    const configuration = { drive: { folderId: "root" }, serviceAccount: { client_email: "x", private_key: "k" } };
+    const configuration = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
     browser.context.PastexConfig.readConfig = async () => configuration;
     browser.context.PastexLibrary.connect = async () => ({ token: "t", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
     browser.context.PastexLibrary.load = async () => ({
       tree: [], session: { rootId: "root" }, warnings: [], bodies: {}, metadata: {}, signatures: {}, index: { order: {}, collapsed: {} },
     });
     const drive = browser.context.PastexDrive;
-    drive.fetchAccessToken = async () => "token";
+    drive.getAuthToken = async () => "token";
     drive.getFolder = async () => ({ mimeType: drive.FOLDER_MIME, properties: { pastex_index: "" } });
     drive.listChildren = async () => [];
     const writes = [];
     drive.uploadNew = async (t, parent, name, text) => { writes.push([name, text]); return { id: "made" }; };
-    drive.setIndex = async () => {};
+    drive.readIndexFile = async () => ({ id: "", index: null });
+    drive.writeIndexFile = async () => {};
     // A queue that never left before the browser was quit.
     const queue = browser.context.PastexQueue.create(browser.context.chrome.storage.local);
     await queue.push([{ id: "q1", kind: "create", name: "Recovered", text: "still here",
@@ -960,3 +964,356 @@ test("an edit is refused for a sender that is not the panel", async () => {
   assert.equal(refused.ok, false, "a content script cannot edit the library");
 });
 
+
+// --- the round trip a user actually complains about ------------------------
+//
+// "Add text, collapse a folder and reorder a row work in the panel, but after
+// restarting the browser they are gone, while creating a folder survived."
+// These tests follow the writes all the way to what Drive reports afterwards.
+
+function roundTripScenario() {
+  const { browser, writes } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  // The Drive folder as the loader will read it on the next start.
+  const driveState = { index: null, children: [] };
+  const drive = browser.context.PastexDrive;
+  drive.getFolder = async () => ({ id: "root", mimeType: drive.FOLDER_MIME });
+  drive.listChildren = async () => structuredClone(driveState.children);
+  // The index is a file in the library, so it lives with the children.
+  drive.readIndexFile = async () => ({ id: driveState.index ? "index-file" : "",
+    index: structuredClone(driveState.index) });
+  drive.writeIndexFile = async (t, root, index) => {
+    writes.push(["index", structuredClone(index)]);
+    driveState.index = structuredClone(index);
+  };
+  drive.uploadNew = async (t, parent, name, text) => {
+    writes.push(["text", name, text]);
+    const id = "drive-" + name;
+    driveState.children.push({ id: id, name: name + ".txt", mimeType: drive.TEXT_MIME });
+    return { id: id };
+  };
+  drive.createFolder = async (t, name) => {
+    writes.push(["folder", name]);
+    const id = "drive-" + name;
+    driveState.children.push({ id: id, name: name, mimeType: drive.FOLDER_MIME });
+    return id;
+  };
+  // The next read of the library starts from what Drive now holds.
+  drive.downloadText = async () => "";
+  return { browser, writes, driveState, site };
+}
+
+test("add text, collapse and reorder survive a browser restart", async () => {
+  const { browser, driveState, site } = roundTripScenario();
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  await send({ type: "pastex-panel-library" });
+  // A folder already on Drive, so there is something to fold and to order.
+  driveState.children.push({ id: "folder1", name: "Folder", mimeType: browser.context.PastexDrive.FOLDER_MIME });
+  await send({ type: "pastex-panel-library" });
+
+  // 1. add a snippet, 2. fold the folder, 3. move the snippet to the top.
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "New one", text: "body", parentId: "root",
+    item: { kind: "text", name: "New one", parentId: "root", localId: "" },
+  } });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "collapse", ids: ["folder1"], collapsed: true,
+  } });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "reorder", groups: [["drive-New one", "folder1"]], parents: [""],
+  } });
+
+  // Leaving the site is what sends the queue.
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  assert.ok(driveState.children.some((file) => file.name === "New one.txt"),
+    "the added text reached Drive as a real file");
+  const index = driveState.index;
+  assert.deepEqual(index.collapsed, { folder1: "1" }, "the fold reached Drive");
+  assert.deepEqual(index.order.root, ["drive-New one", "folder1"],
+    "the order reached Drive under the root folder's own id");
+});
+
+test("a move is queued locally and reaches Drive as one move per row", async () => {
+  const { browser, writes, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  const drive = browser.context.PastexDrive;
+  const moves = [];
+  drive.moveFile = async (t, id, from, to) => { moves.push([id, to]); };
+  const queued = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "move", ids: ["item1"], parentId: "folder-dest",
+  } });
+  assert.equal(queued.ok, true);
+  assert.equal(moves.length, 0, "nothing reaches Drive while the site is open");
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1);
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.deepEqual(moves, [["item1", "folder-dest"]], "the queued move is applied once");
+  assert.equal(writes.filter((w) => w[0] === "index").length, 0, "a move is not an index write");
+});
+
+test("a write Drive refuses for good is reported instead of vanishing", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  // An open panel listens on a port; this is how a refusal reaches it.
+  const posted = [];
+  // A panel port: the worker accepts it only from an extension page in a tab.
+  browser.listeners.connect({
+    name: "pastex-library-progress",
+    sender: { id: browser.context.chrome.runtime.id, url: browser.context.chrome.runtime.getURL("sidepanel.html") },
+    onDisconnect: { addListener() {} }, onMessage: { addListener() {} },
+    postMessage: (message) => { posted.push(message); },
+  });
+  await send({ type: "pastex-panel-library" });
+  browser.context.PastexDrive.uploadNew = async () => { throw new Error("Drive API POST /files failed (HTTP 400): Invalid name"); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Bad", text: "x", parentId: "root",
+    item: { kind: "text", name: "Bad", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  const dropped = posted.find((m) => m.dropped);
+  assert.ok(dropped, "the panel is told that the write was dropped");
+  assert.match(dropped.reason, /Invalid name/);
+});
+
+test("a snippet kept out by the storage quota is not thrown away", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const posted = [];
+  browser.listeners.connect({
+    name: "pastex-library-progress",
+    sender: { id: browser.context.chrome.runtime.id, url: browser.context.chrome.runtime.getURL("sidepanel.html") },
+    onDisconnect: { addListener() {} }, onMessage: { addListener() {} },
+    postMessage: (message) => { posted.push(message); },
+  });
+  await send({ type: "pastex-panel-library" });
+  // Exactly what Drive answers when the user's own Drive is full: the folder
+  // can hold files, but no new one can be created right now.
+  browser.context.PastexDrive.uploadNew = async () => {
+    throw new Error("Drive API POST /files failed (HTTP 403): Service Accounts do not have storage quota.");
+  };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Keep me", text: "precious", parentId: "root",
+    item: { kind: "text", name: "Keep me", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  // The user wrote this text. A quota problem is fixable, so the entry waits.
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1, "the write is kept for the next attempt");
+  const blocked = posted.find((m) => m.blocked);
+  assert.ok(blocked, "the panel is told why, without pressing Sync");
+  assert.match(blocked.reason, /storage quota/i);
+  // The cached row is still there in the worker: the flush read the library
+  // back, and the quota refusal did not remove the local row the way a real
+  // rejection does.
+  const snapshot = await browser.context.libraryCache.current();
+  assert.ok(snapshot.tree.some((node) => node.name === "Keep me"),
+    "the row stays visible, because the write has not been given up on");
+});
+
+test("a flush that reads the library back keeps the edits still waiting", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  // Offline: the write is retried later, not dropped, so the read that follows
+  // cannot contain it.
+  browser.context.PastexDrive.uploadNew = async () => { throw new Error("network down"); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Pending", text: "not on Drive yet", parentId: "root",
+    item: { kind: "text", name: "Pending", parentId: "root", localId: "" },
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  const status = await send({ type: "pastex-panel-status" });
+  assert.equal(status.result.pending, 1, "the entry is still queued");
+  const snapshot = await browser.context.libraryCache.current();
+  assert.ok(snapshot.tree.some((node) => node.name === "Pending"),
+    "the row the user typed is still in the list");
+});
+
+test("a text created inside a new folder is uploaded into that folder on sync", async () => {
+  // The exact failure users hit: create a folder, create a text inside it, press
+  // Sync. The folder is still only a `local-` id when the text's write is
+  // queued, so sending that parent would ask Drive for a folder id that does
+  // not exist ("File not found: ."). The text must wait for the folder's real id
+  // and then land inside it.
+  const { browser, send, writes } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const fromPanel = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  await fromPanel({ type: "pastex-panel-library" });
+
+  const drive = browser.context.PastexDrive;
+  const uploaded = [];
+  drive.listChildren = async (t, parent) => { uploaded.push(parent); return []; };
+  drive.createFolder = async () => "made-folder";
+  drive.uploadNew = async (t, parent, name, text) => {
+    writes.push(["text", name, text, parent]);
+    return { id: "made-text" };
+  };
+
+  // The folder first, then the text inside it, exactly in that order.
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "New folder", parentId: "root",
+    item: { kind: "folder", name: "New folder", parentId: "root", localId: "" },
+  } });
+  const snapshot = await browser.context.libraryCache.current();
+  const folder = snapshot.tree.find((node) => node.name === "New folder");
+  assert.ok(folder && String(folder.id).indexOf("local-") === 0, "the folder is local until it is sent");
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Inside", text: "body", parentId: folder.id,
+    item: { kind: "text", name: "Inside", parentId: folder.id, localId: "" },
+  } });
+
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  const textWrite = writes.find((write) => write[0] === "text");
+  assert.ok(textWrite, "the text was uploaded");
+  assert.equal(textWrite[3], "made-folder", "and it went into the folder's real Drive id");
+  assert.equal(uploaded.includes(""), false, "no write ever used an empty parent");
+  const after = await send({ type: "pastex-panel-status" });
+  assert.equal(after.result.pending, 0, "nothing is left waiting after the sync");
+});
+
+test("a row that never reached Drive is not moved in Drive", async () => {
+  const { browser, send } = editScenario();
+  const site = { id: "abc", tab: { id: 1 }, frameId: 0, url: "https://allowed.example/path" };
+  await send({ type: "pastex-panel-library" });
+  const drive = browser.context.PastexDrive;
+  const moves = [];
+  drive.moveFile = async (t, id, from, to) => { moves.push([id, to]); };
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "move", ids: ["local-abc"], parentId: "folder-dest",
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle();
+  assert.deepEqual(moves, [], "a create places the row in its folder by itself");
+});
+
+test("the stored index is the one the loader applies, not a shape it ignores", async () => {
+  const { browser, driveState, site } = roundTripScenario();
+  const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
+  const send = (message) => new Promise((resolve) => browser.listeners.message(message, panel, resolve));
+  const FOLDER = browser.context.PastexDrive.FOLDER_MIME;
+  const TEXT = browser.context.PastexDrive.TEXT_MIME;
+  driveState.children.push({ id: "a", name: "A.txt", mimeType: TEXT });
+  driveState.children.push({ id: "b", name: "B.txt", mimeType: TEXT });
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: {
+    kind: "reorder", groups: [["b", "a"]], parents: [""],
+  } });
+  await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
+  await settle(120);
+
+  // Read the library again exactly as a fresh start would. The real loader is
+  // used here on purpose: editScenario replaces Library.load with a fixed list
+  // so the rest of these tests can ignore Drive, and that stub would hide the
+  // very thing this test is about.
+  const RealLibrary = require("../library.js");
+  // The scenarios use a placeholder key; the real loader has to be handed one
+  // it can parse, and a token that needs no signature check.
+  const realConfig = { readConfig: async () => ({
+    drive: { folderId: "root", indexId: "" },
+    oauth: { client_id: "123-abc.apps.googleusercontent.com" },
+  }) };
+  browser.context.PastexDrive.getAuthToken = async () => "token";
+  browser.context.PastexDrive.downloadText = async () => "";
+  const again = await RealLibrary.load(
+    realConfig, browser.context.PastexDrive,
+    undefined, { bodies: {}, texts: {}, index: null });
+  assert.deepEqual(again.tree.map((node) => node.id), ["b", "a"],
+    "the order written to Drive is the order the next read shows");
+  assert.ok(FOLDER && TEXT);
+});
+
+test("a sync sends only what changed instead of reading the whole library back", async () => {
+  // The failure this guards: sending two creates used to be followed by a full
+  // read of the library, so a sync of two edits downloaded every snippet the
+  // user owns. Sending the queue does not change the shape of the library, only
+  // the ids of the rows it creates, so the ids are adopted and nothing is read.
+  const { browser, send, leave } = queueScenario((drive) => {
+    drive.uploadNew = async (t, parent, name) => ({ id: driveId("new" + name) });
+  });
+  let loads = 0;
+  const realLoad = browser.context.PastexLibrary.load;
+  browser.context.PastexLibrary.load = async (...args) => { loads++; return realLoad(...args); };
+  await send({ type: "pastex-panel-library" });
+  loads = 0;
+  for (const name of ["One", "Two"]) {
+    await send({ type: "pastex-panel-local-edit", command: {
+      kind: "create", name, text: "x", parentId: "root",
+      item: { kind: "text", parentId: "root", localId: "" },
+    } });
+  }
+  await leave();
+  await settle(80);
+  assert.equal(loads, 0, "a flush must not re-read the library to learn the new ids");
+  // The rows carry the ids Drive gave them, so the next open offers the real
+  // rows instead of stale `local-` ones.
+  const snapshot = await browser.context.libraryCache.current();
+  const ids = snapshot.tree.map((node) => node.id);
+  assert.ok(ids.some((id) => id === driveId("newOne")), "the created row took Drive's id");
+  assert.ok(ids.some((id) => id === driveId("newTwo")));
+  assert.equal(ids.some((id) => String(id).indexOf("local-") === 0), false, "no local id is left behind");
+  // And a read taken afterwards still shows the rows: the snapshot was put back.
+  const reopened = await send({ type: "pastex-panel-library" });
+  assert.ok(reopened.result.tree.some((node) => node.name === "One"));
+});
+
+test("a panel closed from the toolbar icon reaches the page, so the launcher stops offering to close it", async () => {
+  // The bug: the in-page launcher read × and stayed there after the panel was
+  // closed with the extension icon or Chrome's own panel switch. A closed panel
+  // runs no code, so `pagehide` never fires and nothing could tell the page.
+  // Chrome reports the close instead, and the worker answers with the truth on
+  // the next authorization instead of trusting a message that never came.
+  const { browser, ask } = panelScenario();
+  await browser.listeners.startup();
+  await settle();
+  const opened = await ask({ type: "pastex-site-allowed" });
+  assert.equal(opened.panelOpen, false, "nothing is open yet");
+  // The launcher opens it through a user gesture.
+  const granted = await ask({ type: "pastex-open-panel", capability: opened.capability });
+  assert.equal(granted.ok, true);
+  assert.equal(granted.open, true, "the answer is the state after the gesture");
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+  // Chrome reports the close: the extension icon, or the browser's own switch.
+  // No message comes from the panel at all, because it is gone.
+  browser.listenersForApis.panelClosed({ windowId: 8 });
+  await settle();
+  const afterClose = await ask({ type: "pastex-site-allowed" });
+  assert.equal(afterClose.panelOpen, false, "the page is told, with no message from the panel");
+  // The close event reaches the launcher of the window's active tab as well.
+  const sent = [];
+  browser.context.chrome.tabs.query = async (query) => (query && query.windowId === 8
+    ? [{ id: 1, windowId: 8 }] : [{ id: 1, windowId: 8 }]);
+  browser.context.chrome.tabs.sendMessage = async (tabId, message) => { sent.push({ tabId, message }); };
+  browser.listenersForApis.panelClosed({ windowId: 8 });
+  await settle();
+  assert.ok(sent.some((item) => item.message.type === "pastex-panel-state" && item.message.open === false),
+    "the launcher is told the panel is closed");
+  // Closing twice is a no-op, and a panel opened again says so.
+  browser.listenersForApis.panelOpened({ windowId: 8 });
+  await settle();
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+});
+
+test("a window that is gone no longer counts as showing the panel", async () => {
+  const { browser, ask } = panelScenario();
+  await browser.listeners.startup();
+  await settle();
+  browser.listenersForApis.panelOpened({ windowId: 8 });
+  await settle();
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, true);
+  // The window is closed: Chrome reuses window ids, so the state must not
+  // outlive the window that had it.
+  browser.listeners.windowRemoved(8);
+  assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, false,
+    "a closed window cannot be showing a panel");
+});

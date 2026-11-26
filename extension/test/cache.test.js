@@ -8,7 +8,7 @@ function setup() {
   const data = {};
   const localData = {};
   let calls = 0;
-  const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "account", private_key: "private-secret" } };
+  const config = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const storage = {
     async get(key) { return { [key]: data[key] }; },
     async set(values) { Object.assign(data, structuredClone(values)); },
@@ -43,17 +43,17 @@ test("the cache is read without Drive and survives a worker restart, keyed by ac
   // The Sync above rewrote the snapshot from the second read.
   assert.equal((await b.get(false)).tree[0].id, "2");
   assert.equal(x.calls, 2, "a new worker reads the stored snapshot");
-  assert.ok(!JSON.stringify(x.data).includes("private-secret"));
+  assert.ok(!JSON.stringify(x.data).includes("123-abc"), "the stored snapshot carries no client id");
   x.config.drive.folderId = "other";
   // A different library has no stored snapshot: its first read syncs once,
   // and then it is cached like the others.
   assert.equal((await b.get(false)).tree[0].id, "3");
   assert.equal((await b.get(false)).tree[0].id, "3");
-  x.config.serviceAccount.private_key = "rotated-key";
+  x.config.oauth.client_id = "456-def.apps.googleusercontent.com";
   assert.equal((await b.get(false)).tree[0].id, "4");
   assert.equal((await b.get(false)).tree[0].id, "4");
-  x.config.serviceAccount = null;
-  await assert.rejects(b.get(false), /service-account/);
+  x.config.oauth = null;
+  await assert.rejects(b.get(false), /configuration file/);
   assert.equal(x.data[Cache.KEY], undefined);
 });
 
@@ -270,14 +270,14 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   const x = setup();
   const cache = x.make();
   // The state is mutated step by step, so every check sees the previous one.
+  // Order and collapse live in the root label, so the signature sees them
+  // through the rows the library returns, not through per-item properties.
   const state = {
     tree: [
       { id: "folder", kind: "folder", name: "Folder", collapsed: false,
-        properties: { pastex_order: "0", pastex_collapsed: "0" },
         children: [{ id: "a", kind: "text", name: "A", driveName: "A.txt", text: "a",
-          modifiedTime: "t1", properties: { pastex_order: "0" } }] },
-      { id: "b", kind: "text", name: "B", driveName: "B.txt", text: "b",
-        modifiedTime: "t2", properties: { pastex_order: "1" } },
+          modifiedTime: "t1" }] },
+      { id: "b", kind: "text", name: "B", driveName: "B.txt", text: "b", modifiedTime: "t2" },
     ],
     metadata: { root: "m1" },
   };
@@ -289,14 +289,15 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   await cache.get(false);
   assert.equal((await cache.sync()).changed, false, "an identical library reports no change");
 
-  // A reordered item.
-  state.tree[1].properties = { pastex_order: "0" };
-  state.tree[0].properties = { pastex_order: "1" };
+  // A reordered item: the library returns the rows in the index's order.
+  state.tree = [state.tree[1], state.tree[0]];
   assert.equal((await cache.sync()).changed, true, "a new order must be detected");
+  assert.deepEqual((await cache.get(false)).tree.map((node) => node.id), ["b", "folder"]);
 
-  // A collapsed folder.
-  state.tree[0].collapsed = true;
-  state.tree[0].properties = { pastex_order: "1", pastex_collapsed: "1" };
+  // A collapsed folder: the index folds it. The tree is re-read from the
+  // snapshot, so the folder is the node the cache hands back.
+  const folderAt = (tree) => tree.find((node) => node.id === "folder");
+  folderAt(state.tree).collapsed = true;
   assert.equal((await cache.sync()).changed, true, "a collapsed folder must be detected");
 
   // A renamed item.
@@ -307,6 +308,59 @@ test("an idle sync detects reordered, renamed and collapsed items", async () => 
   // Changed folder metadata only: the visible tree is unchanged.
   state.metadata = { root: "m2" };
   assert.equal((await cache.sync()).changed, false, "a metadata-only move does not change the visible tree");
+});
+
+test("a snippet typed while a sync is reading is not deleted by the listing that lands", async () => {
+  // The failure: a background check (or a flush read-back) starts, the user
+  // types a snippet while it runs, and the listing that arrives was read before
+  // that row existed. Installing it replaces the library with one that has
+  // never heard of the row, so the text disappears from the panel while its
+  // write is still queued.
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  // The next read stalls in the middle, after the snapshot exists.
+  let stalled = true;
+  const realList = w.drive.listChildren;
+  w.drive.listChildren = async (token, parent) => {
+    const page = await realList(token, parent);
+    while (stalled) await new Promise((r) => setTimeout(r, 2));
+    return page;
+  };
+  // A forced read is the writer's path (Sync, a configuration change); the idle
+  // check refuses to run while a mutation is in flight, which is a separate
+  // rule. Both end in the same loadFromDrive, which is what this covers.
+  const reading = cache.get(true);
+  await new Promise((r) => setTimeout(r, 20));
+  const edit = await cache.mutateLocal(async (snapshot) => {
+    snapshot.tree.push({ id: "local-typed", kind: "text", name: "Typed",
+      driveName: "Typed.txt", text: "mine" });
+    return ["local-typed"];
+  });
+  assert.equal(edit.skipped, false, "the edit is applied while the read is in flight");
+  stalled = false;
+  await reading;
+  const after = await cache.get(false);
+  assert.ok(after.tree.some((node) => node.name === "Typed"),
+    "the row typed during the read must not be deleted by the listing");
+});
+
+test("restore() never puts back a copy older than the row typed since it", async () => {
+  // A flush captures the snapshot before its first write and hands it back
+  // afterwards so the new ids can be adopted. A row typed in between is not in
+  // that copy, so putting it back would delete the row.
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const captured = await cache.current();
+  await cache.mutateLocal(async (snapshot) => {
+    snapshot.tree.push({ id: "local-typed", kind: "text", name: "Typed",
+      driveName: "Typed.txt", text: "mine" });
+    return ["local-typed"];
+  });
+  assert.equal(await cache.restore(captured), false, "the stale copy is refused");
+  const after = await cache.get(false);
+  assert.ok(after.tree.some((node) => node.name === "Typed"), "the row is still there");
 });
 
 test("an idle sync never runs while a mutation is in flight", async () => {
@@ -395,7 +449,7 @@ test("a changed node signature refreshes the snapshot without disturbing the pan
 
 function nestedWorld() {
   const data = {}, localData = {};
-  const config = { drive: { folderId: "root" }, serviceAccount: { client_email: "a", private_key: "k" } };
+  const config = { drive: { folderId: "root", indexId: "" }, oauth: { client_id: "123-abc.apps.googleusercontent.com" } };
   const area = (store) => ({
     async get(key) { return { [key]: store[key] }; },
     async set(values) { Object.assign(store, structuredClone(values)); },
@@ -405,8 +459,10 @@ function nestedWorld() {
   let downloads = 0, listings = 0;
   const drive = {
     FOLDER_MIME: "application/vnd.google-apps.folder", TEXT_MIME: "text/plain",
-    parseServiceAccount: JSON.parse, fetchAccessToken: async () => "token",
-    getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root", properties: {} }),
+    getAuthToken: async () => "token",
+    getFolder: async () => ({ mimeType: "application/vnd.google-apps.folder", id: "root" }),
+    // Order and collapse live in the index file, not on the folder.
+    readIndexFile: async (token, indexId) => ({ id: indexId || "", index: null }),
     listChildren: async (token, parent) => {
       listings++;
       return parent === "root"
@@ -417,7 +473,7 @@ function nestedWorld() {
   };
   const native = { readConfig: async () => structuredClone(config) };
   const make = () => Cache.create(native, drive, Library, sessionArea, webcrypto, localArea);
-  return { data, localData, sessionArea, localArea, make,
+  return { data, localData, sessionArea, localArea, make, drive,
     get downloads() { return downloads; }, get listings() { return listings; } };
 }
 
@@ -495,4 +551,60 @@ test("a complete snapshot is not replaced by a degraded one when the quota is ti
     (snapshot.tree || []).flatMap((node) => node.children || [])));
   assert.ok(rows.every((node) => node.kind !== "text" || node.hash || node.text),
     "the degraded snapshot still describes every row");
+});
+
+test("a tight quota drops other libraries before it drops this one's bodies", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const key = Object.keys(w.localData[Cache.LKEY])[0];
+  // Another account's snapshot sits in the same store and makes every write
+  // too large. It is not on screen, so it goes first.
+  w.localData[Cache.LKEY].other = { identity: "other", tree: [], savedAt: 1, padding: "x".repeat(400) };
+  const original = w.localArea.set;
+  w.localArea.set = async (values) => {
+    const all = values[Cache.LKEY] || {};
+    if (Object.keys(all).length > 1) throw new Error("QUOTA_BYTES quota exceeded");
+    return original(values);
+  };
+  await cache.get(true);
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY];
+  assert.deepEqual(Object.keys(stored), [key], "the library on screen keeps its slot");
+  assert.ok(Object.values(stored[key].texts).includes("body of t2"),
+    "the bodies of the library on screen survive");
+});
+
+test("bodies are given up only when nothing else is left, and the rows stay readable", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  await cache.get(false);
+  const key = Object.keys(w.localData[Cache.LKEY])[0];
+  const original = w.localArea.set;
+  w.localArea.set = async (values) => {
+    const all = values[Cache.LKEY] || {};
+    const snap = all[key];
+    // Anything carrying the inline copy of a row's text is too large.
+    const heavy = snap && (snap.tree || []).some((node) =>
+      (node.children || []).some((child) => typeof child.text === "string" && child.text));
+    if (heavy) throw new Error("QUOTA_BYTES quota exceeded");
+    return original(values);
+  };
+  await cache.get(true);
+  const stored = (await w.localArea.get(Cache.LKEY))[Cache.LKEY][key];
+  const row = stored.tree[0].children[0];
+  assert.equal(row.kind, "text", "every row still describes itself");
+  assert.ok(row.hash, "the row points at a body instead of carrying it");
+  assert.ok(stored.texts[row.hash], "the body itself is still stored once");
+});
+
+test("when nothing fits, the library stays in session memory", async () => {
+  const w = nestedWorld();
+  const cache = w.make();
+  w.localArea.set = async () => { throw new Error("QUOTA_BYTES quota exceeded"); };
+  const first = await cache.get(false);
+  assert.equal(first.pending, 0, "the session copy is complete");
+  const afterFirst = w.listings;
+  const second = await cache.get(false);
+  assert.equal(second.tree[0].children[0].id, "t2", "reading still works");
+  assert.equal(w.listings, afterFirst, "a failed write forces no extra Drive read");
 });

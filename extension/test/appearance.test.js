@@ -158,19 +158,16 @@ test("the stylesheet styles every state the side panel sets", () => {
   const selectedAt = css.indexOf(".row.selected,");
   assert.ok(hoverAt !== -1 && selectedAt !== -1 && selectedAt > hoverAt, "the selected rules must follow the hover rule");
 
-  // Drive states and status tones come from sidepanel.js. A state without a
-  // rule is a state the user cannot see.
-  for (const state of ["ready", "busy", "error"]) {
-    assert.ok(css.includes('#drive-bar[data-state="' + state + '"] #drive-dot'), "missing Drive state " + state);
-    assert.ok(script.includes('"' + state + '"'), "sidepanel.js never sets the Drive state " + state);
+  // The panel has one status line. The permanent connection label and the
+  // "checked N min ago" line were removed on request: two more truncated labels
+  // pushed the one message that matters out of view.
+  assert.ok(css.includes("#status-bar"), "the status has a container of its own");
+  for (const gone of ["#drive-dot", "#drive-bar", "#last-checked"]) {
+    assert.equal(css.includes(gone), false, gone + " must stay removed from the stylesheet");
   }
-  // The dot is a flex item of its own. Painted inside the label it sat flush
-  // against the panel edge and its halo was clipped, which is what the fix
-  // this test accompanies was about.
-  assert.ok(!/#drive-status::before/.test(css), "the dot must not be a ::before of the truncated label");
-  const dotRule = css.slice(css.indexOf("#drive-dot {"), css.indexOf("#drive-dot {") + 220);
-  assert.ok(dotRule.includes("flex: 0 0 auto"), "the dot must not shrink, or the halo is clipped");
-  assert.ok(/id="drive-dot"[^>]*aria-hidden="true"/.test(html), "the dot is decorative and must be hidden from a screen reader");
+  // A long Drive error has to stay readable, so the line wraps instead of
+  // ending in an ellipsis that hides the reason.
+  assert.ok(/#status \{[^}]*overflow-wrap: anywhere/.test(css), "the status line must wrap");
   for (const tone of ["ok", "error"]) {
     assert.ok(css.includes('#status[data-state="' + tone + '"]'), "missing status tone " + tone);
     assert.ok(script.includes('", "' + tone + '")'), "sidepanel.js never passes the " + tone + " tone");
@@ -180,9 +177,23 @@ test("the stylesheet styles every state the side panel sets", () => {
   assert.ok(css.includes("#selection-count.has-items"), "missing the selection chip rule");
 
   // The intent of an action is expressed in the markup, not guessed by colour.
-  assert.ok(html.includes('<button id="editor-save" class="primary">'), "Save must be the primary action");
-  assert.ok(html.includes('<button id="btn-delete-selected" class="danger"'), "Delete must be destructive");
-  assert.ok(html.includes('id="btn-text" class="primary"'), "New snippet must be a primary action");
+  assert.ok(/<button id="editor-save" class="[^"]*primary[^"]*"/.test(html), "Save must be the primary action");
+  assert.ok(/<button id="btn-delete-selected" class="[^"]*danger[^"]*"/.test(html), "Delete must be destructive");
+  assert.ok(/<button id="btn-text" class="[^"]*primary[^"]*"/.test(html), "New snippet must be a primary action");
+});
+
+test("no button carries a word, in any state", () => {
+  // Every toolbar button is an icon: the glyph is in the markup and the meaning
+  // is in the tooltip. A button whose label is written by script (the old
+  // "Select" / "Done") is a text button that only looks like an icon one.
+  for (const m of html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)) {
+    const glyph = m[1].trim();
+    assert.ok(glyph.length > 0, "every button needs a glyph");
+    assert.equal(/[A-Za-z]{2,}/.test(glyph), false, "a button glyph must not be a word: " + glyph);
+  }
+  // The one toggle that used to write a word into itself is checked by name.
+  assert.equal(/btn-select"\)\.textContent\s*=/.test(script), false,
+    "the select button must not be relabelled with text");
 });
 
 test("buttons keep a visible boundary and disabled actions step back", () => {

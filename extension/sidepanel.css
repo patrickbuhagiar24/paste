@@ -205,11 +205,22 @@ button.danger:hover:not(:disabled) {
   border-color: var(--danger-hover);
 }
 
+/* A toggle that is on has to be unmistakable, not a pale tint: the fill is the
+ * same indigo as a primary action and the glyph turns white, so "on" cannot be
+ * mistaken for "hovered" or for a disabled button. */
 button[aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--primary-text);
+  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  border-color: var(--focus-strong);
+  box-shadow: inset 0 0 0 1px var(--focus-strong), 0 1px 3px var(--shadow-row);
+  font-weight: 700;
+}
+
+/* And "off" is said out loud too: a dashed outline reads as "not latched" next
+ * to the filled buttons around it. */
+.toolbar button.icon[aria-pressed="false"] {
+  border-style: dashed;
+  color: var(--muted);
 }
 
 /* On a narrow panel the toolbar buttons share the width, so they are told
@@ -217,6 +228,22 @@ button[aria-pressed="true"] {
 .toolbar button[aria-pressed="true"],
 .toolbar button.primary {
   font-weight: 700;
+}
+
+/* The Config button says whether this installation is configured, in the same
+ * place it is clicked: an outlined gear means "no configuration yet, click me",
+ * a filled gear with a check means "configured, click to change it". The state
+ * is written to the title and aria-label too, so it is never colour alone. */
+#btn-config[data-configured="false"] {
+  color: var(--danger-ink);
+  border-color: var(--danger-ink);
+  border-style: dashed;
+}
+
+#btn-config[data-configured="true"] {
+  color: var(--primary-text);
+  background: linear-gradient(180deg, var(--primary-top), var(--primary-bottom));
+  border-color: var(--focus-strong);
 }
 
 @media (prefers-contrast: more) {
@@ -272,80 +299,50 @@ header {
   font-weight: 500;
 }
 
-#drive-bar {
-  display: flex;
-  justify-content: space-between;
+/* Every button in the panel is an icon button: none of them carries a word any
+ * more, so one rule gives them all a fixed square, a centred glyph and a size
+ * that does not depend on the text around it. The meaning lives in the title
+ * and the aria-label; a toggle shows its state through the pressed style. */
+button.icon {
+  flex: 0 0 auto;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  /* One size for every icon button in the panel: the same square everywhere,
+   * so a row of them reads as a set and no glyph is stretched by its label. */
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+/* The create pair keeps the primary fill and the same square, so the toolbar
+ * does not read as two wide blocks next to five small ones. */
+.toolbar button.icon.primary {
+  width: 32px;
+}
+
+
+#status-bar {
+  display: flex;
+  align-items: center;
   margin-top: 7px;
-  /* The bar sits inside the header, whose own padding is 7px. The dot's halo
-   * is 3px wide, so this inset puts its left edge 8px from the panel edge and
-   * keeps it from sitting flush against it, which is how it looked clipped. */
   padding-left: 4px;
   color: var(--muted);
   font-size: 11.5px;
 }
 
-/* The dot is its own flex item rather than a ::before of the label: painting
- * it inside the truncated label put it flush against the edge, with its halo
- * clipped. It never shrinks, so the label ellipsises instead. */
-#drive-dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--muted);
-}
-
-#drive-bar[data-state="ready"] #drive-dot {
-  background: #15803d;
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #15803d;
-}
-
-#drive-bar[data-state="busy"] #drive-dot {
-  background: #1d4ed8;
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #1d4ed8;
-}
-
-#drive-bar[data-state="error"] #drive-dot {
-  background: var(--danger);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--danger);
-}
-
-#drive-status {
+/* The status line is the only thing in the bar, so it gets the whole width and
+ * may wrap: a Drive error is long, and truncating it to an ellipsis hides the
+ * one part the user needs to read. */
+#status {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (prefers-color-scheme: dark) {
-  #drive-bar[data-state="ready"] #drive-dot {
-    background: #4ade80;
-    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #4ade80;
-  }
-
-  #drive-bar[data-state="busy"] #drive-dot {
-    background: #93b4ff;
-    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px #93b4ff;
-  }
-}
-
-#last-checked {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-#status {
-  flex: 0 1 auto;
-  min-width: 0;
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 /* The header status line carries both confirmations and failures, so it is
@@ -438,7 +435,12 @@ main {
 
 .row .mini {
   flex: 0 0 auto;
-  padding: 1px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
   font-size: 12px;
   line-height: 1.2;
   color: var(--ink);
@@ -500,22 +502,10 @@ main {
   font-weight: 650;
 }
 
+/* Empty is empty: no sentence, no second call to action. The box keeps a
+ * minimum height so the panel does not look broken when the list is empty. */
 #empty {
-  padding: 30px 14px;
-  color: var(--muted);
-  text-align: center;
-}
-
-#empty p {
-  margin: 10px 0 14px;
-}
-
-.empty-icon {
-  font-size: 34px;
-}
-
-#empty button {
-  min-width: 140px;
+  min-height: 120px;
 }
 
 @media (prefers-contrast: more) {
@@ -603,11 +593,54 @@ main {
   margin-top: 14px;
 }
 
+/* Save and Cancel are icon buttons too, so the dialog does not end in two wide
+ * labelled blocks after a form of labels. */
 .editor-buttons button {
-  min-width: 84px;
+  width: 32px;
+  height: 28px;
 }
 
 /* --- selection bar ------------------------------------------------------ */
+
+/* The Edit menu: one popup shared by every row, placed just under the tree.
+ * It is built fresh each time it opens, so it only ever holds the actions the
+ * row it belongs to can actually offer. */
+#row-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 6px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px var(--shadow-row);
+}
+
+#row-menu[hidden] {
+  display: none;
+}
+
+#row-menu button {
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#row-menu button:hover:not(:disabled),
+#row-menu button:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+#row-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
 
 #selection-actions {
   display: flex;
@@ -640,8 +673,10 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-#selection-actions button {
-  font-size: 12.5px;
+/* The bottom bar uses the same square as the toolbar, so the two bars match. */
+#selection-actions button.icon {
+  width: 32px;
+  height: 28px;
 }
 
 @media (prefers-reduced-motion: reduce) {

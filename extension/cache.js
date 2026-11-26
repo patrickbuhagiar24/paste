@@ -13,11 +13,11 @@
  * background checks while the user is away.
  *
  * storage.local is bounded, so the write degrades in stages instead of failing
- * silently: the complete snapshot of this library first, then the same
- * snapshot with each body kept once, then only the newest snapshot. The panel
- * counts the rows that still need a body so they can be filled while the
- * machine is idle. A library that does not fit at all falls back to the
- * worker's session memory, as before.
+ * silently, and the order is fixed by one rule — give up the other libraries
+ * before the bodies of this one: every stored library complete, then this
+ * library alone complete, then this library alone compacted (each body stored
+ * once), then nothing (session memory only). The panel counts the rows that
+ * still need a body so they can be filled while the machine is idle.
  *
  * Verified text bodies are addressed by the SHA-256 of their content and
  * survive tree invalidations, so an explicit refresh does not re-download
@@ -43,7 +43,6 @@
   var KEY = "pastex.drive.session.v1";
   var LKEY = "pastex.drive.local.v1";
   var FKEY = "pastex.drive.fresh.v1";
-  var FRESH_MS = 60000;
   var MAX_LOCAL = 5;
 
   function create(native, drive, library, storage, cryptoApi, persistent) {
@@ -60,15 +59,21 @@
     var mutating = 0;
     var silentTimer = 0;
     var fullSyncStale = true;
+    // Bumped by every local edit. A load that started before a bump describes
+    // the library as it was then, so its result must not be treated as fresh.
+    var localEdits = 0;
+
 
     async function identity() {
       var config = await native.readConfig();
-      if (!config.serviceAccount || !config.serviceAccount.client_email || !config.serviceAccount.private_key)
-        throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
       if (!config.drive || !config.drive.folderId)
-        throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
+        throw new Error(config.driveError || "Pick your configuration file in Config.");
+      if (!config.oauth || !config.oauth.client_id)
+        throw new Error(config.oauthError || "The configuration file needs your Google OAuth client_id.");
       if (identityCache.config === config) return identityCache.value;
-      var value = JSON.stringify([config.drive.folderId, config.serviceAccount.client_email, config.serviceAccount.private_key]);
+      // The identity of a library is the folder plus the OAuth client, so the
+      // cache follows a folder change and is not tied to a credential.
+      var value = JSON.stringify([config.drive.folderId, config.oauth.client_id]);
       var digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(value));
       identityCache.value = Array.from(new Uint8Array(digest), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
       identityCache.config = config;
@@ -210,25 +215,40 @@
     }
 
     // The local quota is shared by every snapshot and by whatever else the
-    // extension stores, so a write may not fit. Three candidates are tried in
-    // order: the complete snapshot, then the same snapshot with the bodies'
-    // text kept only once, then only the newest snapshot. A complete snapshot
-    // is never replaced by a degraded one, so a small library cannot be
-    // knocked out of the cache by a large one.
+    // extension stores, so a write may not fit. The rule is one sentence:
+    // **give up the other libraries before you give up the bodies of this one**,
+    // and give up a body only when nothing else is left. Four candidates are
+    // tried in this order, and the first one that fits is kept:
+    //
+    //   1. every stored library, this one complete;
+    //   2. this library alone, complete — the other libraries are dropped
+    //      first because they are not on screen;
+    //   3. this library alone, compacted (each body stored once, no inline
+    //      copy on a row) — every row still describes itself, and the missing
+    //      bodies are refilled by fill() while the machine is idle;
+    //   4. nothing: the worker's session memory holds the library until the
+    //      next read.
+    //
+    // A complete snapshot is therefore never replaced by a compacted one while
+    // the complete one still fits, and a small library cannot be knocked out of
+    // the cache by a large one.
     async function writeLocal(key, snap) {
       var store = localStore();
       if (!store) return;
-      try {
-        var all = await localAll();
-        all[key] = snap;
-        pruneEntries(all);
-        await store.set({ [LKEY]: all });
-      } catch (ignored) {
-        // The candidate with the fewest bytes that still describes the library
-        // the same way.
-        try { await store.set({ [LKEY]: { [key]: compactSnapshot(snap) } }); }
-        catch (ignoredAgain) { try { await store.set({ [LKEY]: { [key]: snap } }); } catch (ignoredThird) { /* session memory only */ } }
+      var candidates = [
+        function (all) { all[key] = snap; return all; },
+        function () { return { [key]: snap }; },
+        function () { return { [key]: compactSnapshot(snap) }; },
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        try {
+          var all = candidates[i](await localAll());
+          pruneEntries(all);
+          await store.set({ [LKEY]: all });
+          return;
+        } catch (ignored) { /* try the next, smaller candidate */ }
       }
+      /* session memory only */
     }
 
     // The inline text of a text node duplicates texts[hash]; the loader reads
@@ -335,11 +355,10 @@
       var props = node.properties || {};
       if (node.kind === "folder") {
         return JSON.stringify([node.id, node.kind, node.name || "", !!node.collapsed,
-          props.pastex_order || "", props.pastex_collapsed || "",
           (node.children || []).map(nodeSignature)]);
       }
       return JSON.stringify([node.id, node.kind, node.name || "", node.driveName || "",
-        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred, props.pastex_order || ""]);
+        node.modifiedTime || "", node.hash || node.text || "", !!node.deferred]);
     }
 
     function treeSignature(tree) {
@@ -459,9 +478,14 @@
         return loadFromDrive(key, onUpdate, options);
       }
       var started = revision;
+      var editsAtStart = localEdits;
+      // Taken inside the flight, not before it: an await here would let a second
+      // open slip past the `inflight` check above and read Drive twice for the
+      // same library.
       var flight = { identity: key };
       flight.promise = (async function () {
         var previous = memory && memory.identity === key ? memory : null;
+        var held = await readStored();
         var result = await library.load(native, drive, function (tree, session) {
           if (started === revision && onUpdate) onUpdate(tree, session.rootId);
         }, { bodies: bodies, texts: texts, deferCollapsed: false, index: index,
@@ -469,6 +493,16 @@
           metadata: memory && memory.metadata || {}, tree: memory && memory.tree || [] });
         mergeResult(result);
         if (started !== revision || await identity() !== key) throw new Error("Drive configuration or library changed while loading; refresh again.");
+        // A row created here while the read was running is not on Drive, so the
+        // listing that just arrived does not contain it. Installing that listing
+        // replaced the user's row with a library that had never heard of it: the
+        // text vanished from the panel while its write was still queued. The
+        // fresh read is what Drive has; the edits that came after it started are
+        // put back on top, exactly as a flush replays a queue it could not send.
+        var landedDuringLoad = localEdits !== editsAtStart;
+        // The rows the user has at the end of the read, which is the only copy
+        // that contains what was typed while it ran.
+        var localRows = landedDuringLoad && held && held.tree ? JSON.parse(JSON.stringify(held.tree)) : [];
         var response = { tree: result.tree, rootId: result.session.rootId, warnings: result.warnings || [],
           cached: false, lastCheckedAt: Date.now(), pending: pendingCount(result.tree, texts) };
         // Never replace a complete snapshot with a partial/error listing.
@@ -490,6 +524,17 @@
           }
           if (started !== revision) { await clearSnapshot(); throw new Error("Drive library changed while loading; refresh again."); }
         }
+        // A row that was created while this read was running is not on Drive,
+        // so the listing cannot contain it. Only rows the read is missing are
+        // put back: a row Drive reports is described better by Drive's answer,
+        // and a row that was edited since is not resurrected from this copy.
+        if (landedDuringLoad && !response.warnings.length) {
+          var restored = restoreLocalRows(response.tree, localRows);
+          if (restored) {
+            response.pending = pendingCount(response.tree, texts);
+            await writeSnapshot(key, response.rootId, response.tree, result.metadata);
+          }
+        }
         // The panel shows when the library was last confirmed with Drive.
         response.lastCheckedAt = response.lastCheckedAt || Date.now();
         return response;
@@ -507,6 +552,41 @@
         // rather than on every open.
         if (options.firstLoad) fullSyncStale = true;
       }
+    }
+
+    // Put back a row that exists only here. A created row has a `local-` id, and
+    // the queue is the record that it has not reached Drive; a real id missing
+    // from a fresh listing means Drive no longer has it, which is Drive's answer
+    // and not something to undo.
+    function restoreLocalRows(tree, localRows) {
+      var present = new Set();
+      (function walk(nodes) {
+        (nodes || []).forEach(function (node) { present.add(node.id); if (node.kind === "folder") walk(node.children); });
+      })(tree);
+      var put = 0;
+      (function walk(rows, parentId) {
+        (rows || []).forEach(function (node) {
+          if (node.kind === "folder" && node.children) walk(node.children, node.id);
+          if (present.has(node.id) || String(node.id).indexOf("local-") !== 0) return;
+          var copy = JSON.parse(JSON.stringify(node));
+          if (!parentId) { tree.push(copy); present.add(copy.id); put++; return; }
+          var holder = findNode(tree, parentId);
+          if (holder && holder.children) { holder.children.push(copy); present.add(copy.id); put++; }
+        });
+      })(localRows, "");
+      return put;
+    }
+
+    function findNode(nodes, id) {
+      var found = null;
+      (function walk(rows) {
+        (rows || []).forEach(function (node) {
+          if (found) return;
+          if (node.id === id) { found = node; return; }
+          if (node.kind === "folder") walk(node.children);
+        });
+      })(nodes);
+      return found;
     }
 
     // Called by the background idle alarm. It never reports progress to the
@@ -601,7 +681,16 @@
       }
       // A copy, not the stored object: a write clears the snapshot in place,
       // so a caller holding the stored tree would see it emptied underneath.
-      return saved && saved.tree ? { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId } : null;
+      // The identity and the index travel with it because a flush hands the
+      // copy back to restore(), which must not store it under another library.
+      if (!saved || !saved.tree) return null;
+      return { tree: JSON.parse(JSON.stringify(saved.tree)), rootId: saved.rootId,
+        identity: saved.identity || "",
+        // The edit generation the copy was taken from. restore() compares it: a
+        // row typed after the copy was made is not in it, and putting the copy
+        // back would delete that row.
+        edits: localEdits,
+        index: JSON.parse(JSON.stringify(saved.index || { order: {}, collapsed: {} })) };
     }
 
     // --- edits made while the user is on a site ----------------------------
@@ -622,6 +711,8 @@
             return { applied: [], pending: 0, skipped: true };
           }
           var applied = await apply(saved);
+          // The load in flight (if any) started before this row existed.
+          localEdits++;
           saved.savedAt = Date.now();
           if (key) await persistTree(key, saved);
           return { applied: applied || [], pending: pendingCount(saved.tree, texts), skipped: false };
@@ -629,6 +720,38 @@
       });
       mutations = operation.catch(function () {});
       return operation;
+    }
+
+    // Put back a snapshot the flush already held. Sending the queue does not
+    // change the shape of the library: the rows, their order and their folded
+    // state are exactly what the user is looking at, and the only thing the
+    // cache cannot know is the id Drive gave a row it just created. The flush
+    // captures the snapshot before its first write, swaps those ids in, and
+    // hands it back here, so a sync of six changes costs six writes instead of
+    // six writes plus a full download of the whole library.
+    async function restore(snapshot) {
+      if (!snapshot || !snapshot.tree) return false;
+      var key;
+      try { key = await identity(); } catch (ignored) { return false; }
+      // A configuration change since the capture makes the snapshot describe
+      // another library; it is dropped rather than stored under this identity.
+      if (snapshot.identity && snapshot.identity !== key) return false;
+      // The lock is taken for the whole write, so a read cannot be served the
+      // half-written snapshot and a later invalidation cannot be overtaken.
+      return mutations.then(async function () {
+        mutating++;
+        try {
+          var current = await identity();
+          if (current !== key) return false;
+          // A copy is only as good as the snapshot it came from. If the user
+          // typed something while the flush was sending, that row is not in the
+          // copy, and putting the copy back would delete it. The ids the copy
+          // carries are then learned on the next read instead.
+          if (localEdits > (snapshot.edits || 0)) return false;
+          await persistTree(key, snapshot);
+          return true;
+        } finally { mutating--; }
+      });
     }
 
     // Rename a just-created row to its Drive id, inside a write that already
@@ -660,10 +783,9 @@
       return removed;
     }
 
-    return { get: get, sync: sync, verify: verify, fill: fill,
-      pending: pendingCount, invalidate: invalidate, mutate: mutate,
+    return { get: get, sync: sync, verify: verify, fill: fill, mutate: mutate,
       configurationChanged: configurationChanged, mutateLocal: mutateLocal,
-      dropLocal: dropLocal, current: current };
+      restore: restore, dropLocal: dropLocal, current: current };
   }
   return { create: create, KEY: KEY, LKEY: LKEY, FKEY: FKEY };
 });

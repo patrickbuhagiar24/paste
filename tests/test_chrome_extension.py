@@ -44,6 +44,8 @@ def test_manifest_permissions_are_minimal_and_documented():
         "clipboardWrite",
         "storage",
         "fileSystemAccess",
+        # chrome.identity: the sign-in window that issues the Drive token.
+        "identity",
     }
     # Broad host permissions enable dynamic registration for user-chosen sites;
     # content scripts themselves are registered only for the allowlist.
@@ -83,7 +85,7 @@ def test_snippet_cache_is_derived_and_mutations_stay_in_drive():
     assert "storage.sync" not in background + cache
     assert "libraryCache.mutate" in background
     assert "PastexDrive.uploadNew" in background and "PastexDrive.updateText" in background
-    assert "PastexDrive.trashFile" in background and "PastexDrive.setIndex" in background
+    assert "PastexDrive.trashFile" in background and "PastexDrive.writeIndexFile" in background
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert 'id="btn-insert"' not in panel
     assert 'id="selection-actions"' in panel
@@ -108,9 +110,11 @@ def test_the_order_and_the_collapse_state_live_in_one_label():
     drive = (EXT / "drive.js").read_text(encoding="utf-8")
     library = (EXT / "library.js").read_text(encoding="utf-8")
     background = (EXT / "background.js").read_text(encoding="utf-8")
-    assert "pastex_index" in drive, "the root folder carries the central index"
-    assert "pastex_index" in library and "parseIndex" in library
-    assert "PastexDrive.setIndex" in background
+    # The index is one file named by the configuration link, so it is found by
+    # its id and never by listing the folder.
+    assert "readIndexFile" in drive and "indexId" in drive
+    assert "indexFileId" in library and "parseIndex" in library
+    assert "PastexDrive.writeIndexFile" in background
     assert "PastexDrive.setOrder" not in background, "the order is not written per item"
 
 
@@ -124,23 +128,37 @@ def test_the_background_interval_grows_while_nothing_changes():
     assert "chrome.alarms.onAlarm.addListener" in background
 
 
-def test_the_panel_shows_the_last_check_and_keeps_the_sync_button():
+def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     panel = (EXT / "sidepanel.html").read_text(encoding="utf-8")
     script = (EXT / "sidepanel.js").read_text(encoding="utf-8")
-    assert 'id="last-checked"' in panel
-    assert "lastCheckedAt" in script
+    # One status line: the permanent connection label and the "checked" line
+    # were removed on request, because two more truncated labels pushed the
+    # message that matters out of view.
+    assert 'id="status-bar"' in panel
+    assert 'id="status" aria-live="polite"' in panel
+    for gone in ('id="drive-bar"', 'id="drive-dot"', 'id="drive-status"', 'id="last-checked"'):
+        assert gone not in panel, gone + " must stay removed"
+    assert "lastCheckedAt" not in script
+    assert "renderDriveBar" not in script
     assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
-    assert "↻ Sync" in panel, "the button is labelled Sync"
+    assert "Sync: send the waiting changes to Google Drive" in panel, "the icon still says it is Sync"
     assert "Refresh" not in panel, "the old label is gone"
-    # The state dot is its own flex item before the label: painted inside the
-    # truncated label it sat flush against the edge. Markup order matters.
-    bar = panel.split('id="drive-bar"')[1].split("</div>")[0]
-    assert bar.index('id="drive-dot"') < bar.index('id="drive-status"'), "the dot precedes the label"
-    assert panel.index('id="drive-dot"') > panel.index('id="drive-bar"')
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
     order = re.findall(r'<button id="(btn-[a-z-]+)"', toolbar)
-    assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder"]
+    assert order == ["btn-collapse-all", "btn-select", "btn-sync", "btn-config", "btn-text", "btn-folder",
+                     "btn-newline"]
+    # Every button in the panel is an icon button: a glyph plus an accessible
+    # name, never a word. No toolbar button may carry a label again.
+    buttons = re.findall(r'<button ([^>]*)>([^<]*)</button>', panel, re.S)
+    assert len(buttons) >= 13, "the panel keeps its buttons"
+    for attributes, glyph in buttons:
+        assert 'class="icon' in attributes, f"a button lost its icon class: {attributes.strip()[:60]}"
+        assert 'aria-label="' in attributes or 'title="' in attributes, f"an icon button has no name: {attributes[:60]}"
+        assert len(glyph.strip()) <= 2, f"a button carries a word, not an icon: {glyph.strip()!r}"
+    assert 'aria-pressed="false"' in re.search(r'<button id="btn-newline"[^>]*>', panel).group(0)
+    glyph = re.search(r'<button id="btn-collapse-all"[^>]*>([^<]*)</button>', panel).group(1)
+    assert "Collapse" not in glyph, "the button carries an icon, not the words"
 
 
 def test_background_sync_only_runs_while_the_user_is_away():
@@ -194,8 +212,8 @@ def test_no_remote_code_or_eval_in_extension_sources():
 
 def test_https_is_only_used_for_google_apis():
     # Configuration now comes from a local folder; the only Google hosts are
-    # the Drive API and its token endpoint.
-    allowed = {"www.googleapis.com", "oauth2.googleapis.com"}
+    # the Drive API, its token/revoke endpoint and the sign-in page Chrome opens.
+    allowed = {"www.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"}
     for path in sorted(EXT.glob("*.js")):
         for host in re.findall(r"https://([^/'\"\s]+)", path.read_text(encoding="utf-8")):
             assert host in allowed, f"{path.name} talks to {host}"
@@ -380,12 +398,12 @@ def test_build_deb_registers_the_crx_for_autodetection():
     assert '"external_version"' in script
 
 
-def test_debian_rules_registers_the_crx_for_autodetection():
-    rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
-    assert "scripts/pack-crx.py" in rules
-    assert "external_crx" in rules
-    assert "/usr/share/google-chrome/extensions" in rules
-    assert "/usr/share/chromium/extensions" in rules
+def test_the_build_registers_the_crx_for_autodetection():
+    build = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    assert "scripts/pack-crx.py" in build
+    assert "external_crx" in build
+    assert "/usr/share/google-chrome/extensions" in build
+    assert "/usr/share/chromium/extensions" in build
 
 
 def test_control_recommends_a_browser():
@@ -398,7 +416,7 @@ def test_control_recommends_a_browser():
 def test_control_describes_the_extension():
     control = (ROOT / "debian" / "control").read_text(encoding="utf-8")
     assert "Chrome extension" in control
-    assert "service account" in control
+    assert "Google OAuth" in control
     assert "offers to enable" in control
 
 
@@ -411,26 +429,33 @@ def test_postinst_points_at_the_browser_enable_step():
 def test_extension_readme_documents_setup_and_signing():
     readme = (EXT / "README.md").read_text(encoding="utf-8")
     for required in (
-        "service account",
+        "Google OAuth client",
         "Drive API",
-        "client_email",
+        "OAuth consent screen",
+        "Authorized redirect URI",
+        "chromiumapp.org",
+        "client ID",
         "PASTEX_CRX_KEY",
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "ExtensionInstallForcelist",
         "pastex-config-cache",
-        "pastex-google-drive.json",
-        "service-account.json",
-        "A folder picker opens directly",
+        "pastex-folder",
+        "pastex-index",
+        "A file picker opens directly",
         "Configuration is then **cached**",
     ):
         assert required in readme, f"README misses {required!r}"
+    # The guide must be complete enough to create the client without guessing.
+    for step in ("Enable the Drive API", "Create the OAuth client", "Web application",
+                 "Publish the consent screen", "client_id"):
+        assert step in readme, f"OAuth guide misses {step!r}"
 
 
 def test_packaging_never_touches_home_directories():
     """A .deb runs as root and must not create per-user files; only comments
     and postinst notes may mention ~/.config (creation happens on login)."""
-    for name in ("scripts/build-deb.sh", "debian/rules", "debian/postinst", "debian/postrm"):
+    for name in ("scripts/build-deb.sh", "debian/postinst", "debian/postrm"):
         text = (ROOT / name).read_text(encoding="utf-8")
         code = "\n".join(
             line
@@ -448,8 +473,8 @@ def test_release_requires_new_crx_secret():
     assert 'elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]' in workflow
 
 
-def test_configuration_comes_only_from_a_user_selected_folder():
-    for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/rules", ROOT / "debian/postinst"]:
+def test_configuration_comes_only_from_a_single_picked_file():
+    for path in list(EXT.glob("*.js")) + [ROOT / "scripts/build-deb.sh", ROOT / "debian/postinst"]:
         text = path.read_text(encoding="utf-8")
         assert "~/.config/pastex" not in text
         assert "pastex-native-host" not in text
@@ -459,27 +484,97 @@ def test_configuration_comes_only_from_a_user_selected_folder():
     assert 'id="choose-folder"' not in html
     script = (EXT / "sidepanel.js").read_text()
     assert '$("btn-config").addEventListener' in script
-    # Configuration is a folder of JSON files discovered by content.
-    assert "showDirectoryPicker({" in script
-    assert "showOpenFilePicker" not in script
+    # Configuration is one file, picked in a single-file picker.
+    assert "showOpenFilePicker({" in script
+    assert "showDirectoryPicker" not in script
+    # Neither the panel nor the source may pin a filename.
+    assert "pastex-storage" not in script
     assert "config-manifest.js" not in html
     # There is no offscreen configuration reader any more: the worker reads the
-    # cache the panel wrote, so it never needs a folder handle.
+    # cache the panel wrote, so it never needs a file handle.
     assert not (EXT / "config-reader.html").exists()
     assert not (EXT / "config-reader.js").exists()
     assert not (EXT / "config-client.js").exists()
     assert "PastexManifest" not in script
-    assert "chooseFolder" in script
+    assert "chooseFolder" not in script
+    assert "chooseFile" in script
     worker = (EXT / "background.js").read_text()
     assert "PastexConfigCacheReader" in worker
     assert "PastexConfigClient" not in worker
     cache_reader = (EXT / "config-cache-reader.js").read_text()
     assert "pastex-config-cache" in cache_reader
-    # The folder is scanned once by the panel and never opened by the worker.
+    source = (EXT / "config-source.js").read_text()
+    assert "showDirectoryPicker" not in source
+    assert ".values()" not in source
+    # No folder is scanned anywhere, and the worker never opens a file.
+    assert "showOpenFilePicker" not in worker
     assert "showDirectoryPicker" not in worker
     assert 'id="preview-pane"' not in html and 'id="btn-insert"' not in html
-    assert "indexedDB" in (EXT / "handle-store.js").read_text()
+    # The picked file is read once, inside the picker gesture, and its parsed
+    # value is cached: no IndexedDB layer exists for a handle any more.
+    assert not (EXT / "handle-store.js").exists()
+    assert not (EXT / "config-import.js").exists()
+    assert "indexedDB" not in script
+    assert "PastexHandleStore" not in script
+    assert "PastexConfigImport" not in script
     assert "nativeMessaging" not in _manifest()["permissions"]
+
+
+def test_drive_access_is_oauth_and_the_service_account_is_gone():
+    """One way of doing one thing: no service account survives anywhere."""
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "launchWebAuthFlow" in drive, "the token comes from Chrome's sign-in window"
+    assert "accounts.google.com/o/oauth2/v2/auth" in drive
+    assert 'var SCOPES = "https://www.googleapis.com/auth/drive";' in drive, \
+        "the full Drive scope is requested, exactly as published"
+    assert "auth/drive.readonly" not in drive and "auth/drive.item" not in drive, \
+        "no other Drive scope is requested"
+    # `drive.file` may only appear in the note explaining why it is not used.
+    assert all("auth/drive.file" not in line or "sees only what Pastex" in line
+               for line in drive.splitlines()), "the narrowed scope is not requested"
+    # A service account no longer exists anywhere. A client secret does, on
+    # purpose: the Personal mode console creates a Web application client, and
+    # that client's code exchange requires its secret. It comes from the user's
+    # own configuration file, never from the bundle, so it is not compiled in.
+    for gone in ("private_key", "client_email", "service_account", "jwt", "JWT",
+                 "grant-type:jwt-bearer"):
+        assert gone not in drive, f"drive.js still mentions {gone!r}"
+    assert "client_secret" in drive, "the code exchange carries the configured secret"
+    assert "GOCSPX" not in drive, "no client secret is compiled into the extension"
+    for path in sorted(EXT.glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        assert "service-account.json" not in text, f"{path.name} still reads a key file"
+        assert "parseServiceAccount" not in text, f"{path.name} still parses a key"
+    # The configuration folder holds a public client id, never a credential, and
+    # it is one file of Drive links.
+    source = (EXT / "config-source.js").read_text(encoding="utf-8")
+    # The file name is the user's choice; the four keys are what make a file a
+    # configuration, so no filename may be required or refused.
+    assert "pastex-storage" not in source, "the configuration file name must be free"
+    assert "client_id" in source
+    assert "client_secret" in source, "the secret is one of the configuration keys"
+    assert "pastex-folder" in source and "pastex-index" in source and "pastex-sites" in source
+    # No script in the repository signs in a service account any more.
+    for script in sorted((ROOT / "scripts").glob("*.sh")):
+        assert "jwt-bearer" not in script.read_text(encoding="utf-8"), script.name
+    assert not (ROOT / "scripts" / "check-drive-write.sh").exists()
+    assert not (ROOT / "scripts" / "get-pastex-label.sh").exists()
+
+
+def test_drive_tokens_are_never_written_to_storage():
+    """The access token lives in memory; only the refresh token is stored.
+
+    The refresh token is the one credential that has to outlive a worker, and it
+    is kept in chrome.storage.local under its own key. The access token, which
+    is short-lived and replayable as the signed-in person, never leaves memory.
+    """
+    for name in ("drive.js", "library.js", "cache.js", "background.js"):
+        text = (EXT / name).read_text(encoding="utf-8")
+        for forbidden in ("access_token:", "set({ token", "storage.local.set({ token"):
+            assert forbidden not in text, f"{name} persists a token"
+    drive = (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "pastex.refresh.v1:" in drive, "the refresh token is stored under its own key"
+    assert "tokenStore.set({ [refreshKey(clientId)]: value })" in drive
 
 
 def test_sidepanel_has_collapse_all_and_verbatim_insert():
@@ -490,11 +585,161 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert "<footer" not in html
     assert 'id="status"' in html and html.index('id="status"') < html.index("</header>")
     assert "btn-collapse-all" in script
-    assert "Google Drive • session cache · " in script
+    assert "(cache)" in script, "a cached read is still marked in the status"
     assert "Session cache: " not in script
     assert "Snippets loaded from session cache." not in script
-    assert "pastex_collapsed" in (EXT / "library.js").read_text(encoding="utf-8")
-    assert "pastex_collapsed" in (EXT / "drive.js").read_text(encoding="utf-8")
+    # The central index is the only writer of order and collapse state; the
+    # per-item labels are read-only history.
+    assert "readIndexFile" in (EXT / "drive.js").read_text(encoding="utf-8")
+    assert "PastexDrive.setOrder" not in script
     # Textarea/input insertion must use setRangeText, which keeps newlines.
     assert "target.setRangeText(text, start, end, \"end\")" in content
     assert 'typeof node.text === "string" ? node.text : ""' in script
+    # The newline behaviour lives in one helper, used by the row click, the row
+    # button and the clipboard fallback, so the three cannot disagree.
+    assert "function textForInsert(node, forceNewline)" in script
+    assert script.count("textForInsert(") >= 2
+    assert "pastex-newline-on-insert" in script
+
+
+# --- the built .deb is a well-formed Debian package ------------------------
+#
+# These tests build the package the same way CI does and inspect the result,
+# because the guarantees are about the *archive*, not the script's text:
+#   - md5sums makes `dpkg -V` able to notice a corrupted file;
+#   - Installed-Size lets apt size the install;
+#   - changelog.Debian.gz is what `apt changelog pastex` reads;
+#   - SOURCE_DATE_EPOCH makes the archive reproducible, so the published
+#     checksums.txt can be verified by rebuilding.
+
+DPKG_DEB = shutil.which("dpkg-deb")
+needs_dpkg = pytest.mark.skipif(DPKG_DEB is None, reason="dpkg-deb is not installed")
+
+
+def _build_deb(tmp_path, key, name="out.deb"):
+    """Build the package twice from a copy-free checkout; return the .deb path."""
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "SOURCE_DATE_EPOCH": "1700000000",
+        "PASTEX_CRX_KEY": str(key),
+    }
+    version = _manifest()["version"]
+    out = ROOT / "dist" / f"pastex_{version}-1_all.deb"
+    subprocess.run(["bash", str(ROOT / "scripts" / "build-deb.sh")], cwd=ROOT, env=env,
+                   check=True, capture_output=True)
+    target = tmp_path / name
+    shutil.copy2(out, target)
+    return target
+
+
+def _control(deb, field):
+    return subprocess.run([DPKG_DEB, "-f", str(deb), field],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _control_member(deb, member):
+    """Read one file out of the control area by name."""
+    ctrl = subprocess.run([DPKG_DEB, "--ctrl-tarfile", str(deb)],
+                          capture_output=True, check=True).stdout
+    tar = subprocess.run(["tar", "-xOf", "-", "./" + member], input=ctrl,
+                         capture_output=True, check=True)
+    return tar.stdout
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_ships_md5sums_that_match_the_payload(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    sums = _control_member(deb, "md5sums").decode()
+    assert sums.strip(), "the package has no md5sums"
+    # Every line is "<32 hex>  <path>", with no leading "./" (dpkg's format).
+    for line in sums.splitlines():
+        digest, path = line.split("  ", 1)
+        assert re.fullmatch(r"[0-9a-f]{32}", digest), line
+        assert not path.startswith("./"), f"md5sums path is not root-relative: {path}"
+        assert not path.startswith("DEBIAN/"), f"md5sums covers the control area: {path}"
+
+    # The digests must actually verify against the unpacked payload.
+    extract = tmp_path / "root"
+    subprocess.run([DPKG_DEB, "-x", str(deb), str(extract)], check=True)
+    check = subprocess.run(["md5sum", "-c", "-"], cwd=extract, input=sums,
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert "FAILED" not in check.stdout
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_declares_installed_size_and_multi_arch(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    size = _control(deb, "Installed-Size")
+    assert size.isdigit() and int(size) > 0, f"Installed-Size is {size!r}"
+    # The payload really is that large (within a KiB per directory).
+    extract = tmp_path / "root"
+    subprocess.run([DPKG_DEB, "-x", str(deb), str(extract)], check=True)
+    actual = int(subprocess.run(["du", "-sk", str(extract)], capture_output=True,
+                                text=True, check=True).stdout.split()[0])
+    assert abs(int(size) - actual) <= 8, f"declared {size} KiB, payload is {actual} KiB"
+    assert _control(deb, "Multi-Arch") == "foreign"
+    # Pastex ships under its own name only and names no other package: no
+    # alias (Provides), no conflict, no file takeover, no Breaks.
+    for field in ("Provides", "Conflicts", "Replaces", "Breaks"):
+        assert _control(deb, field) == "", f"the package still sets {field}"
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_ships_the_changelog_apt_changelog_reads(tmp_path):
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    deb = _build_deb(tmp_path, key)
+    listed = subprocess.run([DPKG_DEB, "-c", str(deb)], capture_output=True,
+                            text=True, check=True).stdout
+    assert "usr/share/doc/pastex/changelog.Debian.gz" in listed
+    # It must be the project changelog, not an empty placeholder.
+    text = subprocess.run(["sh", "-c",
+                           f"dpkg-deb --fsys-tarfile '{deb}' | tar -xOf - "
+                           "./usr/share/doc/pastex/changelog.Debian.gz | gzip -dc"],
+                          check=True, capture_output=True).stdout.decode()
+    assert text.startswith("pastex ("), text[:80]
+    assert "urgency=" in text
+
+
+@needs_dpkg
+@needs_openssl
+def test_deb_build_is_reproducible(tmp_path):
+    """Same checkout + same key + same SOURCE_DATE_EPOCH = same bytes."""
+    key = tmp_path / "key.pem"
+    subprocess.run([OPENSSL, "genrsa", "-out", str(key), "2048"], check=True,
+                   capture_output=True)
+    first = _build_deb(tmp_path, key, "first.deb")
+    second = _build_deb(tmp_path, key, "second.deb")
+    assert first.read_bytes() == second.read_bytes(), (
+        "two builds of the same checkout differ; the published checksums could "
+        "not be verified by rebuilding"
+    )
+
+
+def test_build_deb_pins_timestamps_and_builds_the_control_summary():
+    script = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
+    # Reproducibility: the timestamp comes from the environment, never from now.
+    assert "SOURCE_DATE_EPOCH" in script
+    assert 'git log -1 --format=%ct' in script
+    assert 'touch --no-dereference --date="@$SOURCE_DATE_EPOCH"' in script
+    assert "--uniform-compression" in script
+    # Both generated members are produced, not assumed.
+    assert "DEBIAN/md5sums" in script
+    assert "changelog.Debian.gz" in script
+    assert 'du -sk --exclude=DEBIAN' in script
+    # deb822 has no comment syntax: a "#" line would become a bogus field.
+    heredoc = script.split('cat > "$STAGE/DEBIAN/control"', 1)[1]
+    body = heredoc.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+    for line in body.splitlines():
+        assert not line.startswith("#"), f"comment inside the control file: {line!r}"

@@ -8,7 +8,7 @@
 </head>
 <body>
   <h1>Pastex APT repository</h1>
-  <p>This repository provides the <code>pastex</code> package for Linux Mint (archive suite <code>mint</code>). Its packages are architecture-independent.</p>
+  <p>This repository provides the <code>pastex</code> package for Linux Mint (archive suite <code>stable</code>). Its packages are architecture-independent.</p>
   <!--sgn:start-->
   <p>Install the keyring in <code>/etc/apt/keyrings</code> (local administrator configuration) rather than <code>/usr/share/keyrings</code> (files shipped by packages) or <code>/etc/apt/trusted.gpg.d</code> (trusted by every repository). Compare <a href="archive-keyring.fingerprint.txt">the published fingerprint</a> with an independent maintainer announcement, and never use <code>trusted=yes</code> or disable signature verification for a signed archive. The published <code>pastex.sources</code> file is installed verbatim after verification.</p>
   <pre>(
@@ -36,7 +36,7 @@
   sudo apt update
   sudo apt install pastex
 )</pre>
-  <p>The printed fingerprint must match the published file and the independently announced value. APT reads keyrings as the unprivileged <code>_apt</code> user, so <code>ls -l /etc/apt/keyrings/pastex.gpg</code> must show <code>-rw-r--r--</code>; a file only root can read makes <code>apt update</code> reject the repository. APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste mint InRelease</code>.</p>
+  <p>The printed fingerprint must match the published file and the independently announced value. APT reads keyrings as the unprivileged <code>_apt</code> user, so <code>ls -l /etc/apt/keyrings/pastex.gpg</code> must show <code>-rw-r--r--</code>; a file only root can read makes <code>apt update</code> reject the repository. APT then reports <code>Hit: … https://patrickbuhagiar24.github.io/paste stable InRelease</code>.</p>
   <p>Compare the Chrome extension ID shown at <code>chrome://extensions</code> with <a href="extension-id.txt">extension-id.txt</a>. Release <a href="checksums.txt">checksums.txt</a> contains SHA-256 digests for the published package and signed CRX.</p>
   <!--sgn:end-->
   <!--uns:start-->
@@ -44,7 +44,7 @@
   <!--uns:end-->
   <p><a href="https://github.com/patrickbuhagiar24/paste">Source code, documentation, and license</a></p>
   <!--sgn:start-->
-  <p><a href="dists/mint/InRelease">Signed release metadata</a></p>
+  <p><a href="dists/stable/InRelease">Signed release metadata</a></p>
   <!--sgn:end-->
 </body>
 </html>

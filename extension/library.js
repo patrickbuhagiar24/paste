@@ -24,18 +24,33 @@
 
   // --- the centralized order and collapse index ---
 
+  // The stored shape is versioned. An unknown version is not decoded field by
+  // field: it is discarded, and the library falls back to Drive's own order
+  // with every folder open. See README.md, "Where order and folded folders live".
+  //
+  // The version field is named "v" because that is what queue.js writes when it
+  // builds the label. When the two names disagreed, every write was stored
+  // under "version" and every read looked for "v", so each reorder and each
+  // fold was thrown away on the next load: one bug, two symptoms.
+  //
+  // The index is stored as its own small file in the library folder. It used to
+  // be a custom property on the root folder, which Drive limits to 124 bytes
+  // per property including the key; two rows already exceeded that, so every
+  // reorder and every fold was refused with HTTP 400 and the panel could only
+  // report "refused". A file has no such limit.
+  var INDEX_VERSION = 2;
+
   function emptyIndex() {
-    return { order: {}, collapsed: {} };
+    return { order: {}, collapsed: {}, v: INDEX_VERSION };
   }
 
-  // The index is a label on the root folder. Older libraries keep the
-  // per-item labels; they are still read, but the central index wins.
-  function parseIndex(properties) {
-    var raw = properties && properties.pastex_index;
-    if (typeof raw !== "string" || !raw) return emptyIndex();
-    var data;
-    try { data = JSON.parse(raw); } catch (ignored) { return emptyIndex(); }
-    if (!data || typeof data !== "object") return emptyIndex();
+  // The index is one file in the library folder, and it is the only source of
+  // order and collapse state: there is no per-item fallback any more.
+  function parseIndex(data) {
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch (ignored) { return emptyIndex(); }
+    }
+    if (!data || typeof data !== "object" || data.v !== INDEX_VERSION) return emptyIndex();
     var index = emptyIndex();
     if (data.order && typeof data.order === "object") {
       Object.keys(data.order).forEach(function (parent) {
@@ -53,8 +68,26 @@
     return index;
   }
 
+  // Apply the centralized order for one folder. Rows the index names come
+  // first, in the stored order; rows it does not name (new files, files added
+  // from Drive) keep Drive's own order after them.
+  function orderByIndex(files, index, folderId) {
+    var saved = (index && index.order && index.order[folderId]) || [];
+    if (!saved.length) return files;
+    var position = new Map();
+    saved.forEach(function (id, at) { position.set(id, at); });
+    var ranked = [], unranked = [];
+    files.forEach(function (file) {
+      if (position.has(file.id)) ranked.push({ file: file, at: position.get(file.id) });
+      else unranked.push(file);
+    });
+    ranked.sort(function (a, b) { return a.at - b.at; });
+    return ranked.map(function (item) { return item.file; }).concat(unranked);
+  }
+
   function cloneIndex(index) {
     var copy = emptyIndex();
+    copy.v = INDEX_VERSION;
     Object.keys((index && index.order) || {}).forEach(function (parent) {
       copy.order[parent] = (index.order[parent] || []).slice();
     });
@@ -64,30 +97,73 @@
     return copy;
   }
 
-  // The signature of a node describes everything a listing reports about
-  // it: its name, its type, its timestamps, Drive's content checksum and its
-  // labels. Two listings with the same signature describe the same node.
+  // The signature of a node describes everything a listing reports about it:
+  // its name, its type, its timestamps and Drive's content checksum. Two
+  // listings with the same signature describe the same node.
   function nodeSignature(file) {
-    var props = (file && file.properties) || {};
     return JSON.stringify([(file && file.id) || "", (file && file.name) || "",
       (file && file.mimeType) || "", (file && file.modifiedTime) || "",
-      (file && file.sha256Checksum) || "", props.pastex_order || "", props.pastex_collapsed || ""]);
+      (file && file.sha256Checksum) || ""]);
   }
 
   async function connect(native, drive) {
     var config = await native.readConfig();
-    if (!config.serviceAccount) throw new Error(config.serviceAccountError || "Add a service-account.json to the configuration folder.");
-    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Add a pastex-google-drive.json to the configuration folder.");
-    var account = drive.parseServiceAccount(JSON.stringify(config.serviceAccount));
-    var token = await drive.fetchAccessToken(account);
+    if (!config.drive || !config.drive.folderId) throw new Error(config.driveError || "Pick your configuration file in Config.");
+    if (!config.oauth || !config.oauth.client_id) throw new Error(config.oauthError || "The configuration file needs a client_id.");
+    // A token for the signed-in account, signed in with the client id this
+    // installation put in the configuration file. The first call of a session may
+    // show Google's page, which is why it is interactive.
+    var token = await drive.getAuthToken({
+      clientId: config.oauth.client_id,
+      clientSecret: config.oauth.client_secret,
+      interactive: true,
+    });
     var rootId = config.drive.folderId;
-    var folder = await drive.getFolder(token, rootId);
-    if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive ID is not a folder.");
-    var properties = folder.properties || {};
+    var folder;
+    try {
+      folder = await drive.getFolder(token, rootId);
+    } catch (err) {
+      // The full Drive scope reaches every folder the account can open, so a
+      // 404/403 here is about the folder itself, not about the grant being too
+      // narrow: the id is wrong, the folder was deleted, or it belongs to
+      // another account and was never shared with this one.
+      if (/HTTP (403|404)\b/.test(String((err && err.message) || ""))) {
+        throw new Error("Google Drive cannot open the library folder " + rootId + " (HTTP 404 or 403). " +
+          "The signed-in Google account cannot open it, so check that the pastex-folder link is the " +
+          "folder itself and not a file, that the folder still exists, and that this account owns it or " +
+          "it was shared with this account. If the grant is stale, pick your configuration file again " +
+          "in Config and accept the Google sign-in.");
+      }
+      throw err;
+    }
+    if (!folder || folder.mimeType !== drive.FOLDER_MIME) throw new Error("The configured Drive folder link does not point at a folder.");
+    // The order and collapse file is named by the configuration, so reading it
+    // is one GET and no listing: the tree listing below is the only listing.
+    var stored = await drive.readIndexFile(token, config.drive.indexId || "");
     return {
       token: token, rootId: rootId, modifiedTime: folder.modifiedTime || "",
-      properties: properties, index: parseIndex(properties),
+      // Carried on so the next write edits the same file instead of creating a
+      // second one, and so a link that did not exist yet is filled in once.
+      indexFileId: stored.id || config.drive.indexId || "", index: parseIndex(stored.index),
     };
+  }
+
+  // The site list may be inline in the configuration file or live in a file of
+  // its own: a link is fetched with the same token as everything else.
+  async function readSites(native, drive, token) {
+    var config = await native.readConfig();
+    if (config.sites && config.sites.allowedSites) return config.sites.allowedSites;
+    var fileId = config.sites && config.sites.fileId;
+    if (!fileId) throw new Error("The configuration file needs a pastex-sites link or an inline array.");
+    var text = await drive.downloadText(token, fileId);
+    var data;
+    try { data = JSON.parse(text); } catch (ignored) {
+      throw new Error("The pastex-sites file is not valid JSON. It must contain an object of the " +
+        'form {"allowed_sites": [...]}, with no trailing comma.');
+    }
+    if (!data || !Array.isArray(data.allowed_sites))
+      throw new Error("The pastex-sites file needs an allowed_sites array.");
+    return data.allowed_sites;
   }
 
   // Limit network requests, not recursion: folders can be traversed in
@@ -95,6 +171,8 @@
   // Cached text bodies are keyed by the SHA-256 of their content; files
   // inside a collapsed folder are left deferred until the folder is opened.
   async function loadTree(drive, token, rootId, onUpdate, options, session) {
+    // Declared per listing: the file to skip is the one the configuration named.
+    var indexFileId = (session && session.indexFileId) || "";
     options = options || {};
     session = session || {};
     var savedBodies = options.bodies || {};
@@ -220,23 +298,19 @@
           onCursor: function (cursor) { cursors[folderId] = cursor || ""; },
         });
       });
-      // Unranked/new files retain Drive's natural order after ranked entries.
-      function rank(file) {
-        var raw = file.properties && file.properties.pastex_order;
-        if (typeof raw !== "string" || !/^(0|[1-9][0-9]*)$/.test(raw)) return Number.MAX_SAFE_INTEGER;
-        var value = Number(raw);
-        return Number.isSafeInteger(value) ? value : Number.MAX_SAFE_INTEGER;
-      }
-      files = files.map(function (file, index) { return { file: file, index: index }; });
-      files.sort(function (a, b) { return rank(a.file) - rank(b.file) || a.index - b.index; });
-      files = files.map(function (item) { return item.file; });
+      // Pastex's own index file is metadata, not a snippet: it is never a row,
+      // never ordered and never downloaded as text. It is known by the link the
+      // configuration holds, not by its name, so a copy someone keeps in the
+      // folder under another name still appears as a normal file.
+      if (indexFileId) files = files.filter(function (file) { return file.id !== indexFileId; });
+      files = orderByIndex(files, index, folderId);
       var jobs = [];
       files.forEach(function (file) {
         var signature = nodeSignature(file);
         var unchanged = savedSigs[file.id] !== undefined && savedSigs[file.id] === signature;
         seen.add(file.id);
         if (file.mimeType === drive.FOLDER_MIME) {
-          var collapsed = !!(file.properties && file.properties.pastex_collapsed === "1");
+          var collapsed = index.collapsed[file.id] === "1";
           var folder = {
             id: file.id, kind: "folder", name: file.name, children: [], collapsed: collapsed,
             properties: file.properties || {},
@@ -411,7 +485,6 @@
       signatures: result.signatures, index: result.index, cursors: result.cursors };
   }
 
-  return { connect: connect, loadTree: loadTree, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
-    parseIndex: parseIndex, cloneIndex: cloneIndex, nodeSignature: nodeSignature,
-    emptyIndex: emptyIndex };
+  return { connect: connect, readSites: readSites, load: load, verifyTree: verifyTree, fillMissing: fillMissing,
+    cloneIndex: cloneIndex };
 });

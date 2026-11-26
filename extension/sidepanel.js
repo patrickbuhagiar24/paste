@@ -11,9 +11,7 @@
   var Store = window.PastexStore;
   // The panel scans the chosen folder once and stores the parsed files, so the
   // worker and later panel opens read the cache instead of the folder.
-  var Config = window.PastexConfigSource.create(
-    window.PastexHandleStore, window.PastexConfigImport, window.PastexSites, chrome.storage.local
-  );
+  var Config = window.PastexConfigSource.create(window.PastexSites, chrome.storage.local);
 
   var tree = [];
   var index = Store.createIndex([]);
@@ -34,12 +32,14 @@
   var loadConfigVersion = 0;
   var selecting = false;
   var selectedItems = new Set();
-  var lastCheckedAt = 0;
   // Edits made here are applied to the cache at once; their Drive write waits
   // in the worker's queue until the tab is left, so nothing is fetched while
   // the user works.
   var pendingWrites = 0;
   var savingLocal = false;
+  // The row whose Edit menu is open, so its aria-expanded can be cleared when
+  // the menu closes for any reason.
+  var menuOpener = null;
 
   function $(id) {
     return document.getElementById(id);
@@ -66,34 +66,6 @@
     node.textContent = text;
     if (tone) node.setAttribute("data-state", tone);
     else node.removeAttribute("data-state");
-  }
-
-  // The panel shows when the library was last confirmed with Drive, so the
-  // age of the list is visible even when nothing changed.
-  function relativeTime(timestamp) {
-    if (!timestamp) return "never";
-    var seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-    if (seconds < 45) return "just now";
-    var minutes = Math.round(seconds / 60);
-    if (minutes < 60) return minutes + " min ago";
-    var hours = Math.round(minutes / 60);
-    if (hours < 24) return hours + " h ago";
-    return Math.round(hours / 24) + " d ago";
-  }
-
-  function renderLastChecked() {
-    var node = $("last-checked");
-    if (!node) return;
-    node.textContent = "Checked: " + relativeTime(lastCheckedAt);
-    node.title = lastCheckedAt
-      ? "Google Drive was last checked at " + new Date(lastCheckedAt).toLocaleTimeString()
-      : "The library has not been checked yet.";
-  }
-
-  function noteChecked(timestamp) {
-    if (!timestamp) return;
-    lastCheckedAt = timestamp;
-    renderLastChecked();
   }
 
   function esc(text) {
@@ -147,6 +119,69 @@
     }
   }
 
+  // --- newline on insert -------------------------------------------------
+  //
+  // One setting, two ways to use it, and they do not overlap: the toolbar
+  // toggle decides what a plain row click appends, while each row's own ⏎
+  // button appends a newline once and leaves the setting exactly as it was.
+  var NEWLINE_KEY = "pastex-newline-on-insert";
+  var newlineOnInsert = false;
+
+  function reportNewline() {
+    var toggle = $("btn-newline");
+    if (!toggle) return;
+    toggle.setAttribute("aria-pressed", String(newlineOnInsert));
+    toggle.title = newlineOnInsert ? "Newline when inserting: on" : "Newline when inserting: off";
+  }
+
+  // The text a click inserts: the snippet verbatim, plus one newline when the
+  // setting asks for it and the snippet does not already end with one.
+  function textForInsert(node, forceNewline) {
+    var text = typeof node.text === "string" ? node.text : "";
+    if (!forceNewline && !newlineOnInsert) return text;
+    if (text === "" || /\n$/.test(text)) return text;
+    return text + "\n";
+  }
+
+  async function setNewlineOnInsert(on) {
+    newlineOnInsert = !!on;
+    reportNewline();
+    try { await chrome.storage.local.set({ [NEWLINE_KEY]: newlineOnInsert }); }
+    catch (ignored) { /* the setting simply does not survive a restart */ }
+  }
+
+  // --- configuration state -----------------------------------------------
+  //
+  // The Config button says which case this installation is in: no
+  // configuration yet (click to pick one) or configured (click to change it).
+  // The state is written into data-configured, the title and the aria-label, so
+  // the colour is a reminder and never the message.
+  var configured = false;
+
+  function reportConfiguration() {
+    var button = $("btn-config");
+    if (!button) return;
+    button.setAttribute("data-configured", String(configured));
+    var label = configured ?
+      "Config: configured, click to choose another configuration file" :
+      "Config: no configuration yet, click to choose the configuration file";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  function markConfigured(value) {
+    configured = !!value;
+    reportConfiguration();
+  }
+
+  async function readNewlineOnInsert() {
+    try {
+      var saved = await chrome.storage.local.get(NEWLINE_KEY);
+      if (saved && saved[NEWLINE_KEY] === true) newlineOnInsert = true;
+    } catch (ignored) { /* keep the default */ }
+    reportNewline();
+  }
+
   function miniButton(title, text, onClick) {
     var button = document.createElement("button");
     button.className = "mini";
@@ -160,17 +195,26 @@
     return button;
   }
 
+  // Rename and Move are not separate buttons: both are edits of an existing
+  // row, so they live in one menu behind a single Edit button.
   function appendRowActions(row, node) {
     if (selecting) return;
-    row.appendChild(miniButton(node.kind === "folder" ? "Rename folder" : "Rename", "✎", function () {
-      openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
-    }));
-    if (node.kind === "text") {
-      var edit = miniButton("Edit", "📝", function () { openEditor("edit-text", node); });
-      if (node.loadError) { edit.disabled = true; edit.title = "Cannot edit: " + node.loadError; }
-      row.appendChild(edit);
-    }
+    // Placed to the left of Edit and deliberately not the same thing as the
+    // toolbar toggle: this one appends a newline to this insertion only, so the
+    // setting is untouched and the next click behaves as before.
+    var newline = miniButton("Insert with a newline", "⏎", function () {
+      insertNode(node, true);
+    });
+    newline.setAttribute("data-kind", "newline");
+    newline.setAttribute("aria-label", "Insert with a newline");
+    row.appendChild(newline);
+    var edit = miniButton("Edit", "✎", function () { openEditMenu(node, edit); });
+    edit.setAttribute("aria-label", "Edit: rename, edit text or move");
+    edit.setAttribute("aria-haspopup", "menu");
+    edit.setAttribute("aria-expanded", "false");
+    row.appendChild(edit);
     var remove = miniButton("Delete", "🗑", function () { deleteNodes([node]); });
+    remove.setAttribute("aria-label", "Delete");
     remove.setAttribute("data-kind", "danger");
     row.appendChild(remove);
   }
@@ -273,10 +317,9 @@
       host.appendChild(row);
     });
     $("tree").appendChild(host);
+    // Nothing to show is an empty box, not a sentence with a second button in
+    // it: the status line already says what happened.
     $("empty").hidden = matches.length > 0;
-    if (!matches.length) {
-      $("empty").querySelector("p").innerHTML = "No snippets match.<br />Clear the search to browse everything.";
-    }
   }
 
   function render() {
@@ -289,11 +332,7 @@
         renderRow(node, 0, host);
       });
       $("tree").appendChild(host);
-      var hasNodes = tree.length > 0;
-      $("empty").hidden = hasNodes;
-      if (!hasNodes) {
-        $("empty").querySelector("p").textContent = ready ? "No snippets in the Google Drive folder yet." : "Connect to Google Drive to show your snippets.";
-      }
+      $("empty").hidden = tree.length > 0;
     }
     renderSelectionActions();
   }
@@ -307,11 +346,19 @@
   function renderSelectionActions() {
     $("selection-actions").hidden = !selecting;
     $("btn-select").setAttribute("aria-pressed", String(selecting));
-    $("btn-select").textContent = selecting ? "Done" : "Select";
-    $("selection-count").textContent = selectedItems.size + " selected";
+    // The button is an icon and stays one: writing "Select"/"Done" into it
+    // replaced the ☑ glyph with a word, which is exactly the rule every other
+    // button already follows. The pressed state and the tooltip carry it.
+    var selectLabel = selecting ? "Leave select mode" : "Select items to move or delete";
+    $("btn-select").setAttribute("title", selectLabel);
+    $("btn-select").setAttribute("aria-label", selectLabel);
+    // The number alone: the bar is already the selection bar, so the word said
+    // nothing the toolbar does not.
+    $("selection-count").textContent = String(selectedItems.size);
     $("selection-count").className = selectedItems.size ? "has-items" : "";
     $("btn-up").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, -1).length;
     $("btn-down").disabled = busy || !ready || !!query || !Store.reorderGroups(tree, selectedItems, 1).length;
+    $("btn-move-selected").disabled = busy || !ready || !selectedItems.size;
     $("btn-delete-selected").disabled = busy || !ready || !selectedItems.size;
   }
 
@@ -324,24 +371,26 @@
     return selectedId ? index.byId.get(selectedId) || null : null;
   }
 
-  function renderDriveBar() {
+  // The panel has one status line, and it is for what just happened. There is no
+  // permanent "connected" label and no "checked N min ago" second line: the
+  // buttons already say whether Drive can be used, and a failure has to be the
+  // thing that is readable.
+  function renderButtons() {
     var folders = index.folders.length;
-    var state = busy ? "busy" : (ready ? "ready" : "error");
-    var label = busy ? "Drive: loading…" :
-      (ready ? (pendingWrites ? "Saved here • " + pendingWrites + " change(s) go to Drive when you leave this site" :
-        (fromCache ? "Google Drive • session cache · " + index.texts.length + " snippets" : "Google Drive connected")) : "Google Drive unavailable");
-    $("drive-status").textContent = label;
-    // The dot is a sibling of the label now, so the state lives on the bar.
-    $("drive-bar").setAttribute("data-state", state);
-    $("drive-dot").setAttribute("data-state", state);
     $("btn-sync").disabled = busy;
     $("btn-collapse-all").disabled = busy || !ready || !folders;
     $("btn-folder").disabled = busy || !ready;
     $("btn-text").disabled = busy || !ready;
-    $("btn-empty-text").disabled = busy || !ready;
     // While Drive is unusable, Sync is the action that helps; the create
     // buttons keep their primary look only when a click can succeed.
-    $("btn-sync").className = ready ? "" : "primary";
+    $("btn-sync").className = ready ? "icon" : "icon primary";
+  }
+
+  // Saving is local, so a queued change is not an error; it is reported once,
+  // when a save leaves something waiting, instead of as a permanent label.
+  function reportPending() {
+    if (!pendingWrites) return;
+    setStatus("Saved here. " + pendingWrites + " change(s) go to Drive when you leave this site.", "ok");
   }
 
   function onProgress(partial, id) {
@@ -365,9 +414,20 @@
     progressPort.onMessage.addListener(function (message) {
       if (!message) return;
       // The background worker refreshed the cache while the user was away.
-      if (message.changed) { noteChecked(message.lastCheckedAt); applyBackgroundChange(); return; }
+      if (message.changed) { applyBackgroundChange(); return; }
       if (message.filled) { applyBackgroundChange(); return; }
       if (message.local) { if (typeof message.pending === "number") pendingWrites = message.pending; applyBackgroundChange(); return; }
+      // A queued write is waiting for a change only the user can make.
+      if (message.blocked) {
+        setStatus("Not sent: " + message.reason + " The change is kept and will be sent once this is fixed.", "error");
+        return;
+      }
+      // Drive refused a queued write for good; the row it described is gone.
+      if (message.dropped) {
+        setStatus("Drive refused a saved change" + (message.reason ? ": " + message.reason : "."), "error");
+        applyBackgroundChange(true);
+        return;
+      }
       onProgress(message.tree, message.rootId);
     });
   } catch (ignored) { /* Loading still works without live progress. */ }
@@ -400,9 +460,15 @@
 
   // A background sync already rewrote the cache, so this only reads the
   // snapshot back: no Drive request, no loading state and no status spam.
-  async function applyBackgroundChange() {
-    if (busy || loading || backgroundRefresh) return;
-    if ($("editor-overlay") && !$("editor-overlay").hidden) return;
+  //
+  // A background update never repaints under an open dialog, because it would
+  // replace the list the user is working in. An edit the user just confirmed is
+  // different: it already landed in the cache and the dialog is closing, so the
+  // row must be repainted even though the dialog is still on screen for the
+  // next few lines (a move would otherwise seem to do nothing).
+  async function applyBackgroundChange(whileEditing) {
+    if (busy || loading || backgroundRefresh) { return; }
+    if (!whileEditing && $("editor-overlay") && !$("editor-overlay").hidden) return;
     backgroundRefresh = true;
     try {
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-library" });
@@ -418,8 +484,7 @@
       if (selectedId && !index.byId.has(selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
-      renderDriveBar();
-      noteChecked(result.lastCheckedAt);
+      renderButtons();
       if (result.pending) fillMissingBodies();
     } catch (ignored) {
       // A failed background update keeps the current list; the next manual
@@ -433,7 +498,7 @@
     busy = true;
     loading = true;
     loadConfigVersion = configVersion;
-    renderDriveBar();
+    renderButtons();
     render();
     if (!quiet) setStatus(force ? "Syncing…" : "Loading…");
     try {
@@ -441,6 +506,9 @@
       if (loadConfigVersion !== configVersion) return false;
       if (!response || !response.ok) throw new Error((response && response.error) || "Drive is unavailable");
       var result = response.result;
+      // The library could only be read because a configuration was picked, so
+      // that is also the moment the Config button can say it is configured.
+      markConfigured(true);
       tree = result.tree;
       rootId = result.rootId;
       fromCache = result.cached;
@@ -450,7 +518,6 @@
       if (selectedId && !index.byId.has(selectedId)) selectedId = "";
       selectedItems.forEach(function (id) { if (!index.byId.has(id)) selectedItems.delete(id); });
       render();
-      noteChecked(result.lastCheckedAt);
       // The cached open is instant; the rest of the library (if the snapshot
       // is missing bodies) is filled from the worker without a Drive listing.
       if (result.cached && result.pending) scheduleFill();
@@ -462,19 +529,22 @@
       return true;
     } catch (err) {
       if (loadConfigVersion !== configVersion) return false;
-      if (/HTTP (401|403|404)\b|invalid_grant|service-account\.json|pastex-google-drive\.json/i.test(err.message || "")) {
+      if (/HTTP (401|403|404)\b|invalid_grant|Choose your configuration file/i.test(err.message || "")) {
         tree = []; rootId = ""; ready = false; fromCache = false;
       } else {
         tree = previous.tree; rootId = previous.rootId; ready = previous.ready; fromCache = previous.cached;
       }
       render();
+      // "Choose your configuration file in Config first." is the one failure
+      // that means nothing is configured yet; the Config button reflects it.
+      if (/Choose your configuration file/i.test((err && err.message) || "")) markConfigured(false);
       if (!quiet) setStatus(err.message ? "Could not read the library. " + err.message : "Could not read the library.", "error");
       return false;
     } finally {
       loading = false;
       if (progressTimer) { window.clearTimeout(progressTimer); progressTimer = 0; }
       busy = false;
-      renderDriveBar();
+      renderButtons();
       render();
       if (refreshRequested) { refreshRequested = false; refresh(true); }
     }
@@ -482,15 +552,22 @@
 
   // --- insert into the page (or copy as the fallback) ---
 
-  async function insertNode(node) {
+  async function insertNode(node, forceNewline) {
     if (node.loadError) { setStatus("Cannot read this Drive item: " + node.loadError, "error"); return; }
+    // A row inside a folded folder is listed but not downloaded. Inserting it
+    // would insert an empty string, which looks exactly like a broken button.
+    if (node.deferred && typeof node.text === "string" && node.text === "") {
+      setStatus("Open this snippet's folder first, then insert it.", "error");
+      return;
+    }
     setStatus("Inserting…");
     var response = null;
+    var text = textForInsert(node, forceNewline);
     try {
       response = await chrome.runtime.sendMessage({
         type: "pastex-sidepanel-insert",
         id: node.id,
-        text: typeof node.text === "string" ? node.text : "",
+        text: text,
       });
     } catch (err) {
       response = { ok: false };
@@ -503,13 +580,19 @@
       setStatus("This site is not allowed.", "error");
       return;
     }
+    if (response && response.reason === "single-line") {
+      // The field is a one-line input, so a newline has nowhere to go. Telling
+      // the user is what stops the newline buttons looking broken.
+      setStatus("Inserted, but a one-line field cannot hold a newline.", "error");
+      return;
+    }
     if (!response || response.reason !== "no-editable") {
       // A transport or content-script failure is not a request to copy.
       setStatus("Could not insert.", "error");
       return;
     }
     try {
-      await navigator.clipboard.writeText(node.text || "");
+      await navigator.clipboard.writeText(text);
       setStatus("Copied. Press Ctrl+V.", "ok");
     } catch (err) {
       setStatus("Could not insert or copy.", "error");
@@ -538,6 +621,8 @@
     }
     editorMode = mode;
     editorNodeId = node ? node.id : "";
+    // A move that was abandoned must not leak its targets into this dialog.
+    movingIds = [];
     var titles = {
       "new-folder": "New folder",
       "new-text": "New snippet",
@@ -547,8 +632,7 @@
     };
     $("editor-title").textContent = titles[mode] || "Edit";
     var isNew = mode === "new-folder" || mode === "new-text";
-    $("editor-parent-label").style.display = isNew ? "" : "none";
-    $("editor-parent").style.display = isNew ? "" : "none";
+    showEditorFields(mode);
     if (isNew) {
       var select = $("editor-parent");
       while (select.firstChild) {
@@ -566,8 +650,6 @@
         select.value = selected.id;
       }
     }
-    var showText = mode === "new-text" || mode === "edit-text";
-    $("editor-text-wrap").style.display = showText ? "" : "none";
     $("editor-name").value = node ? esc(node.name) : "";
     $("editor-text").value = node && node.kind === "text" ? node.text || "" : "";
     $("editor-overlay").hidden = false;
@@ -577,6 +659,137 @@
 
   function closeEditor() {
     $("editor-overlay").hidden = true;
+    closeEditMenu();
+  }
+
+  // One switch builds every editor's fields, so a dialog can never keep a field
+  // a previous mode left visible. A new row picks a folder; a rename or an edit
+  // names an existing row; a move only picks a folder.
+  function showEditorFields(mode) {
+    var isMove = mode === "move";
+    var isNew = mode === "new-folder" || mode === "new-text";
+    $("editor-parent-label").style.display = isNew || isMove ? "" : "none";
+    $("editor-parent").style.display = isNew || isMove ? "" : "none";
+    $("editor-name-label").style.display = isMove ? "none" : "";
+    $("editor-name").style.display = isMove ? "none" : "";
+    $("editor-text-wrap").style.display = mode === "new-text" || mode === "edit-text" ? "" : "none";
+  }
+
+  // --- the Edit menu -------------------------------------------------------
+  //
+  // Rename, Edit text and Move all change a row that already exists, so they
+  // share one menu behind one button. The menu is rebuilt on every open because
+  // a folder offers fewer actions than a snippet.
+
+  function closeEditMenu() {
+    var menu = $("row-menu");
+    menu.hidden = true;
+    if (menuOpener && menuOpener.setAttribute) menuOpener.setAttribute("aria-expanded", "false");
+    menuOpener = null;
+  }
+
+  function openEditMenu(node, opener) {
+    var menu = $("row-menu");
+    while (menu.firstChild) menu.removeChild(menu.firstChild);
+    function add(label, run, disabledReason) {
+      var item = document.createElement("button");
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      if (disabledReason) {
+        item.disabled = true;
+        item.title = disabledReason;
+      }
+      item.addEventListener("click", function (event) {
+        event.stopPropagation();
+        closeEditMenu();
+        if (!item.disabled) run();
+      });
+      menu.appendChild(item);
+    }
+    add(node.kind === "folder" ? "Rename folder" : "Rename", function () {
+      openEditor(node.kind === "folder" ? "rename-folder" : "rename-text", node);
+    });
+    if (node.kind === "text") {
+      // A body that could not be read must not be replaced by an empty one.
+      add("Edit text", function () { openEditor("edit-text", node); },
+        node.loadError ? "Cannot edit: " + node.loadError : "");
+    }
+    add("Move to folder…", function () { openMoveEditor([node.id]); },
+      index.folders.length ? "" : "Create a folder first.");
+    menuOpener = opener || null;
+    menu.hidden = false;
+    if (menuOpener && menuOpener.setAttribute) menuOpener.setAttribute("aria-expanded", "true");
+  }
+
+  // --- move ----------------------------------------------------------------
+  //
+  // A move changes the folder a row lives in, never its name or its text. A
+  // folder cannot be moved into itself or into its own content, so those
+  // destinations are left out of the list rather than failing on Drive.
+
+  var movingIds = [];
+
+  function moveOptions(ids) {
+    var blocked = new Set(ids);
+    ids.forEach(function (id) {
+      var node = index.byId.get(id);
+      if (node && node.kind === "folder") {
+        Store.walk(node.children || [], function (child) { blocked.add(child.id); });
+      }
+    });
+    var current = ids.length === 1 ? (parentOf(tree, ids[0], rootId) || "") : "";
+    var options = [{ id: "", name: "(top level)" }];
+    Store.walk(tree, function (node) {
+      if (node.kind !== "folder" || blocked.has(node.id)) return;
+      // Moving a row where it already is would be a pointless Drive write.
+      if (ids.length === 1 && node.id === current) return;
+      options.push({ id: node.id, name: node.name });
+    });
+    return options;
+  }
+
+  function openMoveEditor(ids) {
+    ids = (ids || []).filter(Boolean);
+    if (!ids.length) return;
+    var options = moveOptions(ids);
+    if (options.length < 2) {
+      setStatus("There is no other folder to move into.", "error");
+      return;
+    }
+    movingIds = ids;
+    editorMode = "move";
+    editorNodeId = "";
+    $("editor-title").textContent = ids.length === 1 ? "Move" : "Move " + ids.length + " items";
+    showEditorFields("move");
+    var select = $("editor-parent");
+    while (select.firstChild) select.removeChild(select.firstChild);
+    options.forEach(function (option) {
+      var el = document.createElement("option");
+      el.value = option.id;
+      el.textContent = option.name;
+      select.appendChild(el);
+    });
+    // When a single row is moved, the folder it already sits in is the one
+    // place it cannot go, so the first other folder is preselected.
+    select.value = options[0] ? options[0].id : "";
+    $("editor-overlay").hidden = false;
+    if (select.focus) select.focus();
+  }
+
+  async function saveMove() {
+    var parentId = $("editor-parent").value || rootId;
+    var ids = movingIds.slice();
+    movingIds = [];
+    if (busy) return;
+    // The dialog is closed first: the repaint of the tree must not be skipped
+    // because an editor happens to be on screen.
+    closeEditor();
+    var result = await runMutation({ action: "move", ids: ids, parentId: parentId });
+    if (result) {
+      selectedId = "";
+      selectedItems.clear();
+      render();
+    }
   }
 
   function parentOf(nodes, id, parentId) {
@@ -611,6 +824,11 @@
       command.item = rowIdentity(live);
       return command;
     }
+    if (command.action === "move") {
+      command.kind = "move";
+      command.ids = (command.ids || []).filter(Boolean);
+      return command.ids.length ? command : null;
+    }
     if (command.action === "delete") { command.kind = "delete"; return command; }
     if (command.action === "collapse") { command.kind = "collapse"; return command; }
     if (command.action === "reorder") { command.kind = "reorder"; return command; }
@@ -628,11 +846,11 @@
 
   // An edit never talks to Drive: the worker applies it to the cache and
   // queues the write, and the panel repaints from the cache.
-  async function runMutation(command) {
+  async function runMutation(command, whileEditing) {
     if (busy || !ready) return null;
     busy = true;
     savingLocal = true;
-    renderDriveBar();
+    renderButtons();
     render();
     setStatus("Saving…");
     var result = null, failure = "";
@@ -647,15 +865,19 @@
     } catch (err) {
       failure = err.message ? "Could not save. " + err.message : "Could not save.";
     } finally { busy = false; savingLocal = false; }
-    // Apply the cached list locally: no Drive request, no loading state.
-    await applyBackgroundChange();
-    renderDriveBar();
+    // Apply the cached list locally: no Drive request, no loading state. The
+    // caller says whether its own dialog is still open at this point: a save
+    // closes the editor after the repaint, a move closes it before.
+    await applyBackgroundChange(!!whileEditing);
+    renderButtons();
     if (failure) setStatus(failure, "error");
-    else setStatus(pendingWrites ? "Saved. " + pendingWrites + " waiting to sync." : "Saved.", "ok");
+    else if (pendingWrites) reportPending();
+    else setStatus("Saved.", "ok");
     return result;
   }
 
   async function saveEditor() {
+    if (editorMode === "move") { await saveMove(); return; }
     var name = $("editor-name").value.trim();
     if (!name || name.indexOf("/") !== -1) { setStatus("No / in the name.", "error"); return; }
     if (busy) return;
@@ -666,7 +888,7 @@
       setStatus("That item is gone. Refresh.", "error"); return;
     }
     var result = await runMutation({ action: "save", mode: mode, name: name, node: node,
-      parentId: parentId, text: $("editor-text").value });
+      parentId: parentId, text: $("editor-text").value }, true);
     if (result) { selectedId = result.id || ""; closeEditor(); render(); }
   }
 
@@ -691,9 +913,9 @@
     await runMutation({ action: "reorder", groups: groups, parents: parents });
   }
 
-  // --- configuration: one folder containing the three JSON files ---
+  // --- configuration: one file of Drive links ---
 
-  async function applyConfiguration(load) {
+  async function applyConfiguration(load, note) {
     var button = $("btn-config");
     button.disabled = true;
     try {
@@ -705,35 +927,51 @@
         if (!response || !response.ok) throw new Error((response && response.error) || "Site registration failed.");
       } catch (err) { issues.push("Site registration failed; restart the browser: " + (err.message || err)); }
       configVersion++;
+      markConfigured(true);
       tree = []; rootId = ""; ready = false; fromCache = false;
       selectedId = ""; selectedItems.clear();
-      rebuildIndex(); render(); renderDriveBar();
+      rebuildIndex(); render(); renderButtons();
       // Let an in-flight panel load finish so its status cannot overwrite
       // the configuration result; then force one clean Drive reload.
       refreshRequested = false;
       while (busy) await new Promise(function (resolve) { window.setTimeout(resolve, 10); });
       await refresh(true);
-      setStatus(issues.length ? "Saved, but sites need a browser restart." : applied.label + ".", issues.length ? "error" : "ok");
+      var extra = note ? note(applied) : "";
+      setStatus(issues.length ? "Saved, but sites need a browser restart." : applied.label + ". " + extra,
+        issues.length ? "error" : "ok");
     } catch (err) {
       setStatus(err.name === "AbortError" ?
         "Selection canceled; configuration unchanged." :
-        err.message ? "Folder has problems: " + err.message : "Could not use the folder.", err.name === "AbortError" ? "" : "error");
+        err.message ? "Configuration has problems: " + err.message : "Could not use that file.", err.name === "AbortError" ? "" : "error");
     } finally {
       button.disabled = false;
     }
   }
 
   $("btn-config").addEventListener("click", function () {
-    if (typeof window.showDirectoryPicker !== "function") {
-      setStatus("Folder picking is not supported here.");
+    if (typeof window.showOpenFilePicker !== "function") {
+      setStatus("File picking is not supported here.");
       return;
     }
-    // The picker must be called directly from the user gesture. The folder is
-    // scanned for the three JSON files by content; no manifest is read.
+    // The picker must be called directly from the user gesture. One pick is one
+    // file: nothing is searched for and nothing else in its folder is read.
     return applyConfiguration(async function () {
-      var handle = await window.showDirectoryPicker({ mode: "read", id: "pastex-config" });
-      var found = await Config.chooseFolder(handle);
-      return { found: found, label: "Using folder " + (handle.name || "configuration") };
+      // The redirect URL is derived from the extension id, so the only place it
+      // can be read is a running installation. Saying it here is what makes the
+      // OAuth client possible to set up without a debugger.
+      var redirect = "";
+      try { redirect = chrome.identity.getRedirectURL(); } catch (ignored) { redirect = ""; }
+      var picked = await window.showOpenFilePicker({
+        multiple: false,
+        id: "pastex-config",
+        types: [{ description: "Pastex configuration", accept: { "application/json": [".json"] } }],
+      });
+      var found = await Config.chooseFile(picked[0]);
+      return { found: found, redirect: redirect, label: "Using " + (picked[0].name || "configuration") };
+    }, function (applied) {
+      // One status line, so the value is reported in the line that already
+      // exists rather than in a second label nobody asked for.
+      return applied.redirect ? "OAuth redirect URL: " + applied.redirect : "";
     });
   });
 
@@ -755,10 +993,6 @@
     openEditor("new-text", null);
   });
 
-  $("btn-empty-text").addEventListener("click", function () {
-    openEditor("new-text", null);
-  });
-
   // Sync sends what is waiting and stops there: it never reads the library
   // back from Drive, so the list on screen is not reloaded. The write is the
   // same queued write the leave would send; the worker says when it chose to
@@ -776,9 +1010,24 @@
     }
     var result = response.result;
     pendingWrites = result.pending || 0;
-    renderDriveBar();
+    renderButtons();
     if (result.deferred) {
       setStatus("Saved. " + result.pending + " waiting to sync.", "ok");
+      return;
+    }
+    // A refusal is permanent, so the write left the queue and a count alone
+    // would suggest it was sent. A kept refusal is different: nothing was lost,
+    // and the queue depth already says how much is waiting.
+    var refused = result.refused || [];
+    var kept = refused.filter(function (item) { return item.kept; });
+    var lost = refused.filter(function (item) { return !item.kept; });
+    if (kept.length) {
+      setStatus("Could not send " + kept.length + " change(s): " + kept[0].error +
+        " They are kept and will be sent once this is fixed.", "error");
+      return;
+    }
+    if (lost.length) {
+      setStatus("Drive refused " + lost.length + " change(s): " + lost[0].error, "error");
       return;
     }
     if (result.pending) {
@@ -795,9 +1044,8 @@
       var response = await chrome.runtime.sendMessage({ type: "pastex-panel-status" });
       if (response && response.ok && response.result && typeof response.result.pending === "number") {
         pendingWrites = response.result.pending;
-        renderDriveBar();
       }
-    } catch (ignored) { /* the bar falls back to the cache label */ }
+    } catch (ignored) { /* the next save reports the queue depth again */ }
   }
   $("btn-collapse-all").addEventListener("click", async function () {
     if (busy || !ready) return;
@@ -805,6 +1053,9 @@
     if (!ids.length) return;
     if (query) { query = ""; $("search").value = ""; }
     await persistCollapsed(ids, true);
+  });
+  $("btn-newline").addEventListener("click", function () {
+    setNewlineOnInsert(!newlineOnInsert);
   });
   $("btn-select").addEventListener("click", function () {
     selecting = !selecting;
@@ -814,9 +1065,17 @@
   });
   $("btn-up").addEventListener("click", function () { moveSelected(-1); });
   $("btn-down").addEventListener("click", function () { moveSelected(1); });
+  $("btn-move-selected").addEventListener("click", function () {
+    openMoveEditor(Store.selectedRoots(tree, selectedItems).map(function (node) { return node.id; }));
+  });
   $("btn-delete-selected").addEventListener("click", function () {
     deleteNodes(Store.selectedRoots(tree, selectedItems));
   });
+  // A click anywhere outside the menu closes it; the menu's own buttons stop
+  // the event, so choosing an action does not close it twice. Pastex has no
+  // keyboard shortcut of its own, so a menu is dismissed by the same click that
+  // opened it or by picking one of its actions.
+  document.addEventListener("click", function () { if (!$("row-menu").hidden) closeEditMenu(); });
 
   $("editor-save").addEventListener("click", saveEditor);
   $("editor-cancel").addEventListener("click", closeEditor);
@@ -826,10 +1085,10 @@
     }
   });
   // Use the shared session cache on open; explicit refresh reloads Drive.
-  renderDriveBar();
-  renderLastChecked();
-  // The age of the list is refreshed while the panel stays open.
-  if (typeof window.setInterval === "function") window.setInterval(renderLastChecked, 30000);
+  renderButtons();
+  reportNewline();
+  reportConfiguration();
+  readNewlineOnInsert();
   announcePanelState(true);
   refresh(false);
   readPending();

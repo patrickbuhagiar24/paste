@@ -24,6 +24,26 @@ def test_build_deb_recommends_matches_debian_control():
         assert control == script, f"{field}: control={control} build-deb={script}"
 
 
+def test_both_packaging_paths_agree_on_relationship_fields():
+    """debian/control and build-deb.sh build the same package, so the fields
+    that describe it must not drift (the description is checked separately)."""
+    control = (ROOT / "debian" / "control").read_text()
+    script = (ROOT / "scripts" / "build-deb.sh").read_text()
+    body = script.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+    for field in ("Multi-Arch", "Recommends"):
+        from_control = _control_field(control, field)
+        from_script = _control_field(body, field)
+        assert from_control == from_script, (
+            f"{field}: control={from_control} build-deb={from_script}"
+        )
+    assert _control_field(control, "Multi-Arch") == ["foreign"]
+    # Pastex names no other package at all: no alias, no conflict, no takeover.
+    # The package is self-contained, so there is nothing to relate to.
+    for field in ("Provides", "Conflicts", "Replaces", "Breaks"):
+        assert _control_field(control, field) == [], f"debian/control still sets {field}"
+        assert _control_field(body, field) == [], f"build-deb.sh still sets {field}"
+
+
 def test_browser_is_recommended_and_desktop_tools_are_gone():
     """2.x ships a Chrome extension: `apt install pastex` suggests a browser
     and no longer pulls the desktop clipboard stack."""
@@ -87,20 +107,33 @@ def test_postinst_does_not_touch_accounts_or_services():
 
 
 def test_extension_payload_is_registered_for_autodetection():
-    """debian/rules must ship the unpacked extension, the signed .crx, and
-    the external-install JSON for Chrome and Chromium (2.x payload)."""
-    rules = (ROOT / "debian" / "rules").read_text(encoding="utf-8")
+    """The one build path must ship the unpacked extension, the signed .crx,
+    and the external-install JSON for Chrome and Chromium (2.x payload)."""
+    build = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
     for required in (
-        "cp -r extension debian/pastex/usr/share/pastex/extension",
+        "cp -r extension",
         "scripts/pack-crx.py",
         "external_crx",
         "/usr/share/google-chrome/extensions",
         "/usr/share/chromium/extensions",
         "extension/README.md",
     ):
-        assert required in rules, f"rules misses {required!r}"
+        assert required in build, f"build-deb.sh misses {required!r}"
     for legacy in ("usr/bin/pastex", "pastex.desktop", "pastex-uinput-group"):
-        assert legacy not in rules, f"rules still ships desktop file {legacy}"
+        assert legacy not in build, f"build-deb.sh still ships desktop file {legacy}"
+
+
+def test_there_is_exactly_one_build_path():
+    """README.md, Development policy: one name, one path. A debhelper build would be a second
+    way to produce the same package, so it stays gone."""
+    assert not (ROOT / "debian" / "rules").exists(), (
+        "debian/rules is back; scripts/build-deb.sh is the only package build"
+    )
+    assert not (ROOT / "debian" / "source").exists(), (
+        "debian/source/ describes a source package the project does not build"
+    )
+    control = (ROOT / "debian" / "control").read_text(encoding="utf-8")
+    assert "debhelper" not in control, "the control file names a build tool the project does not use"
 
 
 # --- the generated control file must be shell-proof -----------------------
@@ -135,7 +168,7 @@ def test_rendered_control_keeps_the_description_text():
     assert "Package: pastex" in rendered
     assert "Version: 2.0.0-1" in rendered
     description = rendered.split("Description:", 1)[1]
-    assert "service account" in description
+    assert "Google OAuth" in description
     assert "`" not in description
     assert "$" not in description
 
@@ -194,6 +227,24 @@ def test_install_script_is_marked_development_only():
     assert "development-only local install" in text
 
 
+def test_ci_lints_the_package_and_pins_the_build_timestamp():
+    """lintian catches the packaging mistakes a hand-rolled build misses, and
+    SOURCE_DATE_EPOCH keeps the published checksums reproducible."""
+    workflow = (ROOT / ".github" / "workflows" / "build-deb.yml").read_text()
+    assert "lintian --fail-on error" in workflow
+    lint = workflow.split("- name: Lint the package", 1)
+    assert len(lint) == 2, "the workflow does not lint the .deb"
+    # It must run before publishing, and must not swallow errors.
+    assert lint[1].index("lintian") < workflow.index("Publish verification artifacts")
+    assert "exit 1" in lint[1]
+    # The build timestamp is pinned by the script, never "now", and CI must not
+    # override it with an invented constant.
+    script = (ROOT / "scripts" / "build-deb.sh").read_text()
+    assert "SOURCE_DATE_EPOCH" in script
+    build = workflow.split("- name: Build the Debian package", 1)[1]
+    assert "SOURCE_DATE_EPOCH:" not in build.split("run:", 1)[0]
+
+
 def test_workflow_pins_every_action_to_a_commit():
     """Floating action tags are a supply-chain risk (YouTube pins all of them)."""
     import re
@@ -215,3 +266,89 @@ def test_tag_build_creates_a_release_with_verification_data():
     assert "site/archive-keyring.fingerprint.txt site/checksums.txt site/extension-id.txt" in workflow
     assert "site/extension-id.txt" in workflow
     assert "site/checksums.txt" in workflow
+
+
+# --- deploying a test build to a real computer ----------------------------
+
+
+def test_test_deploy_script_offers_both_real_situations() -> None:
+    """A tester either has the checkout on their machine, or installs from it."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    for flag in ("--local", "--serve", "--uninstall", "--port", "--output", "--key"):
+        assert flag in text, f"test-deploy.sh has no {flag} option"
+    assert "http.server" in text, "serve mode does not actually serve anything"
+    assert "--bind 0.0.0.0" in text, "serve mode would only answer on loopback"
+
+
+def test_test_deploy_uses_a_stable_test_key_and_says_so() -> None:
+    """A fresh key per build changes the extension id, so Chrome treats every
+    test build as a different extension."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "debian/pastex-test-crx-key.pem" in text
+    assert "PASTEX_CRX_KEY=" in text
+    assert "not the release key" in text
+    assert "*-crx-key.pem" in (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_generated_installer_verifies_the_download_and_cleans_up() -> None:
+    """The installer a tester runs must fail closed and leave no apt source."""
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "SHA256SUMS" in text
+    assert "sha256sum -c" in text
+    assert "Checksum mismatch" in text
+    assert "Dir::Etc::sourcelist" in text, "install must not depend on other sources"
+    assert "cleanup() { rm -f" in text, "the temporary apt source must be removed"
+
+
+def test_test_deploy_never_claims_to_be_a_release() -> None:
+    text = (ROOT / "scripts" / "test-deploy.sh").read_text(encoding="utf-8")
+    assert "test path only" in text or "TEST build" in text
+    assert "signed release archive" in text
+
+
+# --- the changelog rules lintian enforces in CI ---------------------------
+
+def _changelog_entries() -> list[tuple[str, str]]:
+    """(version, trailer date) for every entry, newest first."""
+    import re
+
+    text = (ROOT / "debian" / "changelog").read_text(encoding="utf-8")
+    entries = re.findall(
+        r"^pastex \(([^)]+)\).*?\n(?:.*?\n)*?^ -- .+?  (.+)$", text, re.MULTILINE
+    )
+    assert entries, "debian/changelog has no entries"
+    return entries
+
+
+def test_changelog_is_strictly_newest_first() -> None:
+    """lintian's latest-changelog-entry-without-new-date fails the CI build.
+
+    Its rule is `first_timestamp - second_timestamp > 0`, so an entry dated the
+    same as, or later than, the one above it stops the archive from being
+    published. That is exactly what happened when every entry carried
+    00:00:00 on the same day.
+    """
+    import email.utils
+
+    previous = None
+    for version, date in _changelog_entries():
+        stamp = email.utils.parsedate_to_datetime(date.strip()).timestamp()
+        if previous is not None:
+            assert previous - stamp > 0, (
+                f"changelog entry {version} is not older than the entry above it "
+                f"({date.strip()}); lintian --fail-on error would reject the package"
+            )
+        previous = stamp
+
+
+def test_changelog_weekdays_match_their_dates() -> None:
+    """lintian's debian-changelog-has-wrong-weekday, checked in every entry."""
+    import email.utils
+
+    wrong = []
+    for version, date in _changelog_entries():
+        declared = date.split(",", 1)[0].strip()
+        actual = email.utils.parsedate_to_datetime(date.strip()).strftime("%a")
+        if declared != actual:
+            wrong.append(f"{version}: says {declared}, {date.strip()} is a {actual}")
+    assert not wrong, "changelog weekday does not match the date:\n  " + "\n  ".join(wrong)

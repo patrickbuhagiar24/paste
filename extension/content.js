@@ -22,15 +22,14 @@
   var capability = "";
   var authTimer = 0;
   var focusGeneration = 0;
-  // Whether this page may also close the panel again (Chrome 141+) and
-  // whether the launcher currently opens or closes it.
-  var canToggle = false;
+  // Whether the launcher currently opens or closes the panel. Closing is part
+  // of the minimum Chrome version, so the button is always a toggle.
   var panelOpen = false;
 
   function setLauncherLabel(button) {
     if (!button) return;
-    button.textContent = canToggle && panelOpen ? "×" : "⚡";
-    button.title = canToggle && panelOpen ? "Close Pastex side panel" : "Open Pastex side panel";
+    button.textContent = panelOpen ? "×" : "⚡";
+    button.title = panelOpen ? "Close Pastex side panel" : "Open Pastex side panel";
   }
 
   function isEditable(el) {
@@ -69,15 +68,36 @@
         var start = target.selectionStart === null ? target.value.length : target.selectionStart;
         var end = target.selectionEnd === null ? target.value.length : target.selectionEnd;
         target.setRangeText(text, start, end, "end");
+        // A single-line input silently swallows the newline: setRangeText has no
+        // line to break to, so the appended "\n" never appeared and the newline
+        // buttons looked broken. The newline is only real in a textarea, so the
+        // page is told instead of the field pretending it took it.
+        var isSingleLine = tag === "input" && !/^(textarea|search)$/i.test(target.type || "");
+        if (isSingleLine && /[\r\n]/.test(text)) {
+          target.dispatchEvent(new Event("input", { bubbles: true }));
+          return "single-line";
+        }
         target.dispatchEvent(new Event("input", { bubbles: true }));
         return true;
       } catch (ignored) {
         return false;
       }
     }
-    // Contenteditable: execCommand preserves undo and notifies frameworks.
+    // Contenteditable: execCommand preserves undo and notifies frameworks, but
+    // it inserts the text as one run and a "\n" inside it becomes a space or
+    // nothing at all -- HTML has no newline in a text node, only an element.
+    // That is why the newline buttons did nothing on a chat box. The text is
+    // therefore inserted line by line, with a real <br> between the lines.
+    var lines = text.split(/\r?\n/);
     try {
-      if (document.execCommand("insertText", false, text)) {
+      if (lines.length > 1) {
+        var placed = true;
+        for (var i = 0; i < lines.length && placed; i++) {
+          if (i > 0) placed = document.execCommand("insertLineBreak");
+          if (placed && lines[i]) placed = document.execCommand("insertText", false, lines[i]);
+        }
+        if (placed) return true;
+      } else if (document.execCommand("insertText", false, text)) {
         return true;
       }
     } catch (ignored) {
@@ -89,8 +109,21 @@
         if (selection && selection.rangeCount > 0) {
           var range = selection.getRangeAt(0);
           range.deleteContents();
-          range.insertNode(document.createTextNode(text));
-          range.collapse(false);
+          var last = null;
+          text.split(/\r?\n/).forEach(function (line, index) {
+            if (index > 0) { last = document.createElement("br"); range.insertNode(last); }
+            if (line) {
+              last = document.createTextNode(line);
+              range.insertNode(last);
+            }
+          });
+          if (last) {
+            // After the last node, so the caret is where the user expects it.
+            range.setStartAfter(last);
+            range.collapse(true);
+            if (selection.removeAllRanges) selection.removeAllRanges();
+            if (selection.addRange) selection.addRange(range);
+          }
           target.dispatchEvent(new InputEvent("input", { bubbles: true }));
           return true;
         }
@@ -143,20 +176,27 @@
       // and move the button away before the click lands.
       if (!event.isTrusted || !capability) return;
       event.preventDefault();
-      var closing = canToggle && panelOpen;
+      var closing = panelOpen;
       chrome.runtime.sendMessage({
         type: "pastex-open-panel", capability: capability, action: closing ? "close" : "open",
       }).then(function (response) {
         if (!response || !response.ok) {
           // The page lost its authorization (for example the allowlist) or the
-          // browser refused; the button says what the next click will do.
+          // browser refused. The click said what it *wanted*; a refusal means it
+          // did not happen, so the label goes back to the state it had, and the
+          // next authorization brings the worker's own answer.
           setLauncherLabel(button);
           button.title = closing ? "Could not close Pastex; use the panel's own close button." :
             "Could not open Pastex; use its toolbar icon.";
           return;
         }
-        if (response.closed) panelOpen = false;
-        else if (!closing) panelOpen = true;
+        // The answer is the state after the click, not an assumption: closing a
+        // panel that Chrome already closed is a no-op, and saying × anyway is
+        // the bug this reports.
+        if (typeof response.open === "boolean") panelOpen = response.open;
+        else if (typeof response.closed === "boolean") panelOpen = !response.closed;
+        // A worker that answered ok without a state still did what was asked.
+        else panelOpen = !closing;
         setLauncherLabel(button);
       }).catch(function () { button.title = "Could not reach Pastex; use its toolbar icon."; });
     });
@@ -211,7 +251,10 @@
         return;
       }
       capability = response.capability;
-      canToggle = !!response.toggle;
+      // The worker owns the panel state, so the answer is applied rather than
+      // read once at load: a panel closed from the toolbar icon or by Chrome's
+      // own switch left this page showing × with nothing to open.
+      if (typeof response.panelOpen === "boolean") panelOpen = response.panelOpen;
       cancelHideButton();
       if (buttonHost) setLauncherLabel(buttonHost.__pastexButton);
       positionButton(el);
@@ -299,7 +342,11 @@
         return true;
       }
       var done = insertText(target, message.text || "");
-      sendResponse({ ok: done });
+      // "single-line" is the honest answer for a newline that cannot exist in
+      // the focused field; anything else is a plain success.
+      sendResponse(done === "single-line" ?
+        { ok: false, reason: "single-line" } :
+        { ok: done });
       return true;
     }
     return false;

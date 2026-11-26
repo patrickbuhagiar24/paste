@@ -1,3 +1,671 @@
+pastex (2.34.0-1) unstable; urgency=medium
+
+  * One document instead of seven. SECURITY.md, DEVELOPMENT.md, ARCHITECTURE.md,
+    ANALYSIS.md, running-on-linux-mint.md and where-order-and-collapse-live.md
+    were each a second place to look for an answer the README can give, and
+    every one of them had to be kept in step with the code by hand. Their
+    content now lives in README.md as four sections: Security and verification,
+    Development policy (the three classes of state and the seven rules), How
+    Pastex works (including the file map), and Where order and folded folders
+    live. BREAKING: a link to any of those six files now fails; the README
+    sections replace them, and the CI tests read the policy from README.md.
+  * The three READMEs stay, because they answer three different questions: the
+    front page for the project, extension/README.md for setting up the OAuth
+    client and the configuration file, apt-repo/README.md for the archive layout
+    and how it is published.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:00 +0000
+
+pastex (2.33.3-1) unstable; urgency=medium
+
+  * The background worker now hands the client secret to the token exchange.
+    The panel caches the parsed configuration and the worker reads it back from
+    storage, and that reader kept only the client id, so a Web application
+    client, which is what Google's Personal mode creates, refused every sign-in
+    with "client_secret is missing" even though the file held one. The library
+    now loads without a fresh sign-in on each open.
+  * When the configuration really has no client secret and Google asks for one,
+    the status line says where the value belongs: the Google Cloud console, under
+    APIs & Services, Credentials, and then the configuration file picked again in
+    Config. The exchange is not retried, because a missing value cannot fix
+    itself.
+
+ -- Pastex maintainers <pastex@example.org>  Wed, 02 Dec 2026 09:00:00 +0000
+
+pastex (2.33.2-1) unstable; urgency=medium
+
+  * Two loads at once stop colliding in Google's sign-in window. The panel
+    opens the library while the worker checks it, so the first load after a
+    configuration is picked asks for a token twice at the same moment; each
+    request opened its own window and Chrome answered the second one with "Only
+    one web auth flow is allowed at a time.", which reached the panel as "Could
+    not read the library." and left it with nothing to show. Requests for the
+    same OAuth client now share one sign-in, so one window serves every caller
+    and a refresh token is only renewed once per sign-in.
+  * A sign-in window that Chrome is still finishing is waited for instead of
+    being reported. A window left open holds Chrome's single flow slot even
+    after the worker that opened it was stopped, and the refusal used to reach
+    the panel word for word. The request is retried for a few seconds, and if
+    the slot stays busy the message says to close the window and try again.
+
+ -- Pastex maintainers <pastex@example.org>  Tue, 01 Dec 2026 09:00:00 +0000
+
+pastex (2.33.1-1) unstable; urgency=medium
+
+  * A configuration file that carries characters nobody can see now loads. A
+    file copied out of a chat window, or saved by a phone editor, can hold a
+    zero-width space or a non-breaking space where an indent should be; JSON
+    requires neither, so it refused the file while the file looked perfect, and
+    the panel answered only "pastex.json is not valid JSON", which says nothing
+    about where to look. Zero-width characters and non-breaking spaces are
+    stripped before the file is read, so a pasted file loads as it stands.
+  * A file that is genuinely malformed now says where the first problem is:
+    "not valid JSON (line 4, column 1)" instead of a bare refusal. The message
+    names the usual causes, a trailing comma, a missing quote or a curly quote
+    from a word processor. A file whose top level is not an object says that
+    instead, and the pastex-sites message names the shape it needs.
+
+ -- Pastex maintainers <pastex@example.org>  Mon, 30 Nov 2026 09:00:00 +0000
+
+pastex (2.33.0-1) unstable; urgency=medium
+
+  * New configuration key `client_secret`, next to `client_id`. Google's
+    Personal mode onboarding creates a "Web application" OAuth client, and that
+    client needs its secret when a sign-in code is exchanged for tokens. The key
+    is optional: a client created without a secret still works with it left out,
+    and a value that is clearly not a secret is reported instead of being sent to
+    Google to be refused.
+  * The connection now survives instead of expiring. Pastex used Google's
+    implicit flow, which returns an access token that dies after an hour and
+    cannot be renewed, so every restart asked for a sign-in again. It now uses
+    the authorization-code flow with PKCE and `access_type=offline`, keeps the
+    refresh token in `chrome.storage.local`, and renews silently: a worker that
+    Chrome stopped comes back and carries on without showing a page. The access token
+    itself is still never written to storage.
+  * Signing out revokes the refresh token as well, so nothing can renew a
+    connection that was ended on purpose.
+  * Fixed: the newline buttons did nothing on a contenteditable field, which is
+    what WhatsApp Web, chat boxes and mail composers use. The text was inserted
+    as one run, and HTML has no newline inside a text node, so the appended
+    newline became nothing at all while the panel still said "Inserted.". Each
+    line is now inserted separately with a real line break between them. Pastex
+    never presses Enter, so a message on WhatsApp is not sent by inserting one.
+  * The README documents the Personal mode route end to end, including why the
+    secret lives in the user's own configuration file and why it is not compiled
+    into the extension.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 29 Nov 2026 09:00:00 +0000
+
+pastex (2.32.1-1) unstable; urgency=medium
+
+  * Fixed: a snippet typed while a sync was running could disappear. Sending a
+    write invalidates the cached snapshot, and an edit that arrived in exactly
+    that window had no snapshot to be applied to. It was answered as "saved"
+    and queued, but the row vanished from the list and, once the flush had
+    finished reading the queue, its write was not sent either.
+  * An edit that arrives during a write now waits for that write to settle and
+    is applied to the snapshot it leaves behind, so the row stays on screen and
+    its write joins the queue.
+  * Fixed: a read that started before a row was typed (the idle check, or the
+    read a flush does after its writes) installed a library that had never heard
+    of that row, deleting it from the panel. Such a read now puts back the rows
+    Drive does not have; a row Drive does report is still described by Drive's
+    answer.
+  * A copy of the snapshot handed back after a flush is refused when anything
+    was written since it was taken, instead of overwriting that write.
+  * Fixed: two panel opens at the same moment read the library twice instead of
+    sharing one read.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 28 Nov 2026 10:00:00 +0000
+
+pastex (2.32.0-1) unstable; urgency=medium
+
+  * The Select button is an icon button again. Entering select mode wrote
+    "Select" and "Done" into it, overwriting the glyph with a word, which broke
+    the one rule every other button follows; the glyph now stays, and the
+    pressed style and the tooltip (Select items to move or delete / Leave select
+    mode) carry the state.
+  * Fixed: the in-page launcher kept offering to close a panel that was already
+    closed. Closing the panel from the extension icon or from Chrome's own panel
+    switch runs no code in the panel, so nothing told the page and the button
+    stayed on x. The worker now follows sidePanel.onOpened / onClosed, which
+    Chrome fires for every way a panel closes, and every authorization the page
+    asks for carries the current state, so the button recovers even after a
+    missed message. The minimum browser version is therefore Chrome/Chromium 142.
+  * Fixed: Sync was expensive. Sending the queue was followed by a full read of
+    the library, so syncing two snippets downloaded every snippet the user owns.
+    Sending a change does not change the shape of the library, only the ids of
+    the rows it creates, so those ids are adopted in place and the read is
+    skipped. A browser start still touches Drive only when the queue is not
+    empty, and only a real change (a queued write, another configuration, or the
+    idle check finding a difference) asks Drive again.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 27 Nov 2026 13:00:00 +0000
+
+pastex (2.31.0-1) unstable; urgency=medium
+
+  * BREAKING: reordering and folding need a `pastex-index` link, and Pastex no
+    longer creates that file behind your back. A missing link used to make the
+    extension write a new `pastex-index.json` into the library folder, which was
+    a second place holding the same order, so a link-less configuration now
+    reports which key is missing instead.
+  * Fixed: a text created inside a folder that was itself created in the panel
+    could not be synced. Its queued write still carried the folder's `local-`
+    id, so Drive was asked for a folder that did not exist yet and answered
+    `GET /files failed (HTTP 404): File not found: .`. The flush now learns each
+    created folder's real id and sends the child write into it, and a write
+    whose parent is still unknown waits in the queue instead of being sent with
+    a placeholder.
+  * Fixed: the two newline buttons. A one-line `<input>` silently drops the
+    appended newline, so the buttons looked dead; a textarea keeps it, and a
+    single-line field now answers "a one-line field cannot hold a newline"
+    instead of doing nothing quietly. A snippet that has not been downloaded yet
+    (its folder is folded) now says so instead of inserting an empty string.
+  * The empty list is an empty box: `Connect to Google Drive to show your
+    snippets.` and its second new-snippet button are gone, and the status line
+    above the list is the only place a state is written.
+  * Select mode says how many rows are selected with the number alone; the word
+    is gone, like every other label on a button.
+  * Every icon button is now one square (32x28 in the bars, 22x20 on a row), so
+    the glyphs line up instead of being sized by their neighbours.
+  * A toggle that is on is filled with the primary indigo and its glyph turns
+    white; a toggle that is off has a dashed outline. The Config button carries
+    the state of the installation: an outlined red gear means nothing is
+    configured yet, a filled gear means a configuration is in use, and both say
+    so in the tooltip and the `aria-label`.
+  * Tooltips corrected: Sync now says it sends the queue (it never reads the
+    library back), and every row action names what it does.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 13:00:00 +0000
+
+pastex (2.30.0-1) unstable; urgency=medium
+
+  * Every button in the side panel is now an icon button. Select, Sync, Config,
+    Text, Folder, the empty-state call to action, Save, Cancel and the whole
+    select-mode bar (up, down, move, delete) lost their words and kept their
+    glyph. No button carries a label any more, so the toolbar reads as seven
+    even squares instead of a row of stretched words.
+  * The meaning moved to where an icon button keeps it: `title` for the tooltip
+    and `aria-label` for screen readers, on every button, including the row
+    actions. The only text left in a bar is `#selection-count`, which is a
+    count, not an action.
+  * One `.icon` rule gives all of them the same square, centred glyph and
+    minimum size, so the editor buttons and the bottom bar line up with the
+    toolbar instead of stretching with their old labels.
+  * The row Edit menu keeps its words: it is a menu of choices, not a button,
+    and reading Rename / Edit text / Move to folder is the point of it.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 09:00:00 +0000
+
+pastex (2.29.0-1) unstable; urgency=medium
+
+  * Newline on insert, as a setting and as a one-off. The toolbar gains an
+    icon-only **⏎** toggle: off, a click inserts the snippet exactly as stored;
+    on, one newline is appended at the end. A snippet that already ends with a
+    newline never gets a second one, and the setting is kept in
+    `chrome.storage.local`, so it survives a panel reload. Its pressed style
+    and its title (*Newline when inserting: on / off*) say which way it is set.
+  * Every row gains its own **⏎** button, placed to the left of **Edit**. It is
+    not the toggle: it appends a newline to that single insertion and leaves the
+    setting untouched, so the next click behaves as it did before. One helper
+    produces the text for both, so the row click, the row button and the
+    clipboard fallback can never disagree.
+  * **Collapse all** is now an icon only (**⤡**), with the words kept in its
+    title and `aria-label`. The two icon buttons get a fixed square so they are
+    not stretched by the words next to them.
+  * The configuration is unchanged: still one picked JSON file of any name, read
+    through the single `https://www.googleapis.com/auth/drive` scope.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 06:00:00 +0000
+
+pastex (2.28.0-1) unstable; urgency=medium
+
+  * BREAKING: the requested scope is now `https://www.googleapis.com/auth/drive`
+    — the full Drive scope, one scope and nothing else. Pastex asks Google for
+    complete access to the signed-in account's Drive, with no narrowing of its
+    own, and the library folder in the configuration stops being a limit on what
+    the token can reach and becomes only what Pastex chooses to read and write.
+  * This is what makes the existing installations readable again: `drive.file`
+    reaches only the files Pastex created or the user opened through it, so a
+    folder made by hand in Drive, a snippet uploaded from a phone, or a file
+    copied into the library folder answered HTTP 404 as if it did not exist.
+    Those files are all readable now, and files added to the library folder from
+    outside Pastex appear in the panel like any other snippet.
+  * The consequence is stated plainly in the README and in SECURITY.md: the
+    scope is classified as restricted by Google, so while the consent screen
+    stays in Testing with you as a test user it works without review, but
+    publishing it for other people requires a security assessment.
+  * Because the scope changed, the grant Google holds no longer matches: accept
+    the sign-in once after the upgrade, and every later read is silent again.
+  * The "cannot see the library folder" message became "cannot open the library
+    folder": with the full scope a 404/403 is about the folder — a wrong id, a
+    deleted folder, or an account that never had it shared — not about the grant
+    being too narrow.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 25 Nov 2026 02:00:00 +0000
+
+pastex (2.27.1-1) unstable; urgency=medium
+
+  * A folder the grant cannot see is now explained instead of reported as a raw
+    Drive error. `auth/drive.file` reaches only the files Pastex created and the
+    files opened through it, and Drive answers 404 — not 403 — when a folder
+    exists but was never opened that way, so "File not found" was the same
+    sentence for a wrong link, a wrong account and a stale grant. The panel now
+    says *Google Drive cannot see the library folder <id> (HTTP 404 or 403)*,
+    states why, and names the three things to check: the `pastex-folder` link
+    points at the folder itself, the signed-in account can open it, and the
+    grant is current (pick the configuration file again, then sync).
+  * The troubleshooting sections of the extension README and the Linux guide
+    carry the same message, so the fix is found without reading the source.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 18:00:00 +0000
+
+pastex (2.27.0-1) unstable; urgency=medium
+
+  * BREAKING: the requested scope is `https://www.googleapis.com/auth/drive.file`
+    again, and the grant has to be approved once more. `drive.item` is not in
+    Google's scope tables — not among the non-sensitive scopes, the sensitive
+    ones or the restricted ones — so Google refused the request with
+    `invalid_scope` and no token was issued. `drive.file` is the per-file scope
+    Google publishes: it reaches the files Pastex creates and the files the
+    configuration links name, and nothing else in Drive. The account-wide
+    `drive` scope is still not requested.
+  * Because the requested scope changed, the grant Google already holds no
+    longer matches: the next read asks for approval once, and every later read
+    is silent again.
+  * The guide in the extension README now names `auth/drive.file` and says
+    plainly why `auth/drive.item` must not be substituted for it.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 16:00:00 +0000
+
+pastex (2.26.0-1) unstable; urgency=medium
+
+  * BREAKING: the configuration file may now carry any name. The fixed
+    `pastex-storage.json` requirement is gone: **Config** opens the same
+    single-file picker, and whatever JSON file is picked becomes the
+    configuration as long as it holds all four keys — `pastex-folder`,
+    `pastex-index`, `pastex-sites` and `client_id`. The keys are checked, the
+    name is not, so a file called `drive-links.json` or `my drive links.json`
+    works exactly like the old name.
+  * Every message that named a file now names the keys instead: `The
+    configuration file needs a pastex-folder link…`, `needs the client_id of a
+    Google OAuth client`, `Choose your configuration file in Config first.` The
+    panel still reports the name it used (`Using <name>.`), so the file in use
+    is never in doubt.
+  * Errors about the picked file itself quote the name you chose, because that
+    is the only way to tell two JSON files apart: `<name> is not valid JSON.`,
+    `<name> must contain a JSON object.`, `<name> is larger than 256 KiB.`
+  * The cached configuration shape is unchanged (version 5), so an existing
+    installation keeps working without picking anything again.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 13:00:00 +0000
+
+pastex (2.25.0-1) unstable; urgency=medium
+
+  * BREAKING: configuration is now picked as one file, not found in a folder.
+    **Config** opens a single-file picker filtered to JSON and reads
+    `pastex-storage.json` directly. There is no directory picker and no scan for
+    the needed files: a folder is never opened, and a file with another name is
+    refused by name instead of being searched for. The cached configuration
+    shape moved to version 5, which discards version 4, so the file is picked
+    once more after the upgrade.
+  * The chosen file is read once, inside the picker gesture. The parsed object
+    is cached under `pastex-config-cache`; the handle is dropped, so neither the
+    panel nor the worker can open it again — not even after a restart.
+  * One pick now reports everything: a wrong name, an unreadable file, invalid
+    JSON, a non-object document or an oversized file (over 256 KiB) is refused
+    before anything is cached, and a file that fails validation leaves the
+    previous configuration in use.
+  * `pastex-sites` must be an inline array or a link; the site list is never
+    looked up among sibling files any more.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 09:30:00 +0000
+
+pastex (2.24.0-1) unstable; urgency=medium
+
+  * BREAKING: configuration is one file, not three. `pastex-storage.json` holds
+    three Drive links — `pastex-folder` (the library folder), `pastex-index`
+    (the order/collapse file) and `pastex-sites` (the site list) — together with
+    `client_id` for the OAuth client. One file therefore describes the whole
+    installation, and the cached configuration shape moved to version 4, so the
+    folder is picked once more after the upgrade.
+  * The links are the ones Drive's own Share button produces. Every shape is
+    reduced to the id the API needs: a bare id, a `/folders/<id>` link, a
+    `/file/d/<id>/view` link, or an `?id=<id>` link. A link that is none of
+    those is reported by key name instead of being guessed at.
+  * `pastex-sites` may also be an inline array, which is what lets the folder
+    hold nothing but this one file. A link to a shared list is fetched with the
+    same sign-in.
+  * The order and collapse file is now read straight from its link. It used to
+    be found by listing the library folder, so every load paid a second
+    listing for a file whose id the user had already given. A link that no
+    longer opens leaves the library readable, in Drive's order with every folder
+    open, and the next reorder writes the file again.
+  * The requested scope is `https://www.googleapis.com/auth/drive.item`, the
+    per-item scope, so the access reaches the items the links name rather than
+    the whole Drive.
+  * The old file names (`pastex-google-drive.json`, `pastex-sites.json`,
+    `pastex-oauth.json`) are gone with no compatibility layer: a renamed file is
+    reported as missing, and any other `.json` file in the folder is ignored.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 03:00:00 +0000
+
+pastex (2.23.0-1) unstable; urgency=medium
+
+  * BREAKING: Drive access now runs as you, through Google OAuth, and the
+    service account is gone. Pastex asks Chrome to open Google's sign-in page
+    for a client id you create once, and keeps only an access token in memory
+    for about an hour. The files it writes belong to your Google account, count
+    against your own Drive storage, and open normally in Drive. The whole class
+    of "a folder can be created but a snippet cannot" disappears with it: a
+    service account has no storage of its own, so Google refused every file it
+    tried to create in a personal folder.
+  * BREAKING: configuration is three files, and the key file is no longer one
+    of them. `service-account.json` is replaced by `pastex-oauth.json`, which
+    holds only the public client id of your installation (for example
+    `{"client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com"}`).
+    All three files (`pastex-google-drive.json`, `pastex-sites.json`,
+    `pastex-oauth.json`) must now carry their exact names; the old rule that
+    recognised a key by its content is removed with the key. The cached
+    configuration shape moved to version 3, so Pastex asks for the folder once
+    more after the upgrade.
+  * No client secret is needed, and none is accepted: an extension is a public
+    client, and Google hands the token back to Chrome directly. Only the
+    `drive.file` scope is requested, which reaches the files Pastex itself
+    created and nothing else. Signing out revokes the token at Google.
+  * The sign-in window reports the exact redirect URL to register
+    (`https://<extension-id>.chromiumapp.org/`) when Google answers
+    `redirect_uri_mismatch`, and a 401 drops the cached token and retries once
+    instead of leaving the queue stuck until the browser restarts.
+  * The extension README now carries the complete OAuth guide: Cloud project,
+    Drive API, consent screen, client creation, publishing, and the client id
+    file. The manifest gains the `identity` permission.
+  * BREAKING: `scripts/check-drive-write.sh` and
+    `scripts/get-pastex-label.sh` are removed. Both existed only to sign in a
+    service account with `openssl`, and the project does not keep two ways to
+    do one thing. `where-order-and-collapse-live.md` keeps the two API calls
+    that read the index, which now run as the signed-in account.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 02:00:00 +0000
+
+pastex (2.22.0-1) unstable; urgency=medium
+
+  * Fixed: a snippet that Drive would not accept was thrown away. A service
+    account may not create files in a personal folder, so Drive answers 403
+    "Service Accounts do not have storage quota"; that 403 was treated like a
+    permanent rejection, the queued write was dropped and the panel reported
+    "refused" until the queue was empty. It is a configuration problem the user
+    can fix, so the write is now kept, the reason is shown at once, and the
+    text you typed is never lost.
+  * Fixed: a flush that read the library back removed rows whose write had not
+    landed yet, so a snippet could vanish from the list while its text was
+    still queued. A queued edit now travels with its entry and is replayed onto
+    the snapshot the read produced.
+  * BREAKING: the panel has one status line. The permanent connection label
+    ("Google Drive connected" / "Google Drive unavailable") and the
+    "Checked: N min ago" line are removed, along with the coloured status dot.
+    A long Drive error now wraps instead of being cut off, so the reason stays
+    readable.
+  * The Drive error for a full or missing storage quota is spelled out: it says
+    to move the library into a Shared Drive and add the service account as a
+    Content manager.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 01:10:00 +0000
+
+pastex (2.21.0-1) unstable; urgency=medium
+
+  * Fixed: a reorder or a fold could never be saved. The index was stored as a
+    custom property on the root folder, and Drive limits a property to 124 bytes
+    including its key name; the key alone is 12 of those, so two rows already
+    overflowed it and Drive answered HTTP 400. The panel kept the change in its
+    own cache and eventually reported it as "refused". This is why order and
+    collapse looked broken while creating a folder worked.
+  * BREAKING: the index moved to one small file in the library folder,
+    pastex-index.json. The old folder property is not read any more; a library
+    ordered with 2.20 or earlier falls back to Drive's order with every folder
+    open until the next reorder or fold writes the file. Snippet files are
+    untouched and pastex-index.json is never shown as a snippet.
+  * The Sync button now reports a refused write with Drive's own message
+    instead of a smaller count, so a permanent refusal is visible immediately.
+  * New: scripts/check-drive-write.sh writes one folder, one snippet and one
+    index file into the library and prints Drive's exact answer for each. It
+    tells a permission or quota problem apart from a Pastex problem and removes
+    what it created. This answers the case where a folder can be created but a
+    snippet cannot.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 24 Nov 2026 00:25:00 +0000
+
+pastex (2.20.0-1) unstable; urgency=medium
+
+  * BREAKING: a pastex_index label written by 2.19.0 is discarded and rebuilt.
+    It carried the version under the wrong field name, so it was never read
+    back; there is nothing to migrate, and the snippet files are untouched.
+  * Fixed: order and collapse state were written to Drive and then ignored on
+    every read. The panel builds the label under the key "v" and the loader
+    looked for "version", so pastex_index was discarded as an unknown shape and
+    the library fell back to Drive's own order with every folder open. Both
+    sides now use the same field, so a reorder and a fold survive a restart.
+  * Fixed: the order of the top-level rows was stored under the empty key ""
+    while the loader looks the root folder up by its own Drive id, so only the
+    order inside a subfolder ever worked. The root is now keyed the same way a
+    folder is.
+  * New: Move. Every row's Edit button opens a menu with Rename, Edit text and
+    Move to folder..., so Rename no longer has a button of its own. A move is
+    one Drive PATCH that adds the new parent and removes the old one, and a
+    multi-row move is available from the selection bar.
+  * The side panel repaints after an edit that was made from a dialog, so a
+    moved row appears in its new folder at once instead of after a reload.
+  * Fixed: a queued write that Drive refuses for good was dropped in silence,
+    so the panel kept showing an edit that would never land. The status line
+    now says what Drive refused.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 23 Nov 2026 23:43:00 +0000
+
+pastex (2.19.0-1) unstable; urgency=medium
+
+  * DEVELOPMENT.md states the project's rule: it is in development, it moves
+    forward, and it does not keep two ways to do one thing. The three classes
+    of state are written down: content (the snippet files in Drive) is never
+    touched, presentation metadata may be dropped, caches are always
+    disposable.
+  * BREAKING: the per-item Drive labels pastex_order and pastex_collapsed are
+    ignored completely. pastex_index on the root folder is the only source of
+    order and collapse state. A library without a current index is shown in
+    Drive's order with every folder open. Snippet files are untouched.
+  * BREAKING: pastex_index now carries "v": 2. A label with another version is
+    discarded and rebuilt, not decoded field by field. The configuration cache
+    likewise stores version 2 and treats any other version as absent, which
+    asks the user to pick the folder again instead of reading an unknown shape.
+  * BREAKING: minimum_chrome_version is 141, and the capability branches for
+    older browsers are gone: sidePanel.close, setPanelBehavior and the panel
+    toggle are assumed to exist, so the launcher is always a toggle and no
+    "toggle" flag travels with the capability.
+  * BREAKING: pastex-google-drive.json and pastex-sites.json are recognised by
+    their canonical names only. A renamed file is reported as missing. The
+    service-account key keeps content detection, because Google downloads it
+    under a project-specific name.
+  * The project speaks one language: every document, script message and code
+    comment is English. ARSITEKTUR.md became ARCHITECTURE.md, ANALISIS.md
+    became ANALYSIS.md, cara-jalankan-get-linux-mint.md became
+    running-on-linux-mint.md, and lokasi-collapse-urutan.md became
+    where-order-and-collapse-live.md. The old names are gone, not aliased.
+  * One build path: debian/rules and debian/source/format are deleted, because
+    scripts/build-deb.sh packs the .deb with dpkg-deb directly and nothing ever
+    ran debhelper. debian/control no longer Build-Depends on debhelper.
+    tests/test_static.py now fails if that second path comes back.
+  * The local cache now degrades in one stated order when storage.local is
+    full: every stored library complete, then this library alone complete, then
+    this library alone compacted, then session memory only. Before, the compacted
+    copy was tried before dropping another account's snapshot, so a library on
+    screen could lose its bodies while an off-screen library kept its place.
+    Nothing a user notices changes while the snapshot fits.
+  * APT metadata is now dated and expiring: dists/<suite>/Release carries
+    Valid-Until 30 days after Date, so an archive that stops being updated is
+    refused by apt instead of trusted indefinitely (apt reports "Release file
+    ... is expired" and applies no update). scripts/build-apt-repository.sh
+    derives SOURCE_DATE_EPOCH itself, from the last commit, exactly as
+    build-deb.sh does: before that, the Release file was dated "now", so two
+    builds of the same commit differed and checksums.txt could not be checked
+    by rebuilding. Acquire-By-Hash is no longer restated, because this archive
+    has no by-hash tree and the client default already matches.
+  * The pool publishes exactly one version. scripts/build-apt-repository.sh
+    refuses an input directory holding two versions instead of uploading the
+    older one alongside, and the test suite checks that refusal.
+  * New scripts/verify-site.py checks the directory that is about to be
+    published, and CI runs it as its own step before the Pages upload: the
+    index names a package that exists, Packages.gz matches Packages, the pool
+    holds one version, only the current suite is published, Release digests
+    match their files, checksums.txt matches the files it lists, every local
+    link on index.html resolves, and a signed archive verifies with gpgv. Before
+    this, a deploy could succeed while publishing a stale or incomplete site.
+    Each of the seven failure modes has a test.
+  * checksums.txt now lists paths the site actually serves
+    (pool/main/p/pastex/<file>.deb) instead of ./<file>.deb, which resolved to
+    nothing when compared against a download.
+  * debian/changelog passes lintian again. Every entry carried 00:00:00 on the
+    same day, so the newest entry was not newer than the one below it
+    (latest-changelog-entry-without-new-date), and many weekdays did not match
+    their date (debian-changelog-has-wrong-weekday). All 78 entries now carry
+    their real weekday and are strictly newest-first; 2.19.0 is stamped with the
+    moment it was built. tests/test_static.py enforces both rules, because CI
+    lints the package with --fail-on error.
+  * New scripts/test-deploy.sh deploys a build for testing on a real computer:
+    --local builds and installs with apt on the machine holding the checkout,
+    --serve publishes a local APT archive and serves it so another machine on
+    the network can install it, and --uninstall removes it again. Test builds
+    are signed with one stable key in the checkout (debian/pastex-test-crx-key.pem,
+    ignored by Git) so the test extension id does not change between builds, and
+    the script states that it is not a release. The generated installer checks
+    the download against SHA256SUMS, uses its own apt source for one run and
+    deletes it afterwards. Both modes were run end to end, including the
+    install, the verification of the browser registration, the rebuild after a
+    root build, and the removal.
+  * New scripts/reset-pastex-state.sh clears the extension's local storage and
+    says so: Drive is never touched.
+  * DEVELOPMENT.md gains rule 6: one language, English. tests/test_language.py
+    now scans every tracked file, tests and fixtures included, for Indonesian
+    words (the last one was the sample text "baris pertama\n\nbaris kedua" in
+    a content test, now "first line\n\nsecond line"), fails on a letter outside
+    English and the UI glyph set, and fails when a renamed document is left
+    behind as a copy or a document link points at a file that no longer exists.
+  * New tests/test_development_policy.py fails when shipped code keeps a
+    compatibility path, when a persisted shape loses its version, or when the
+    policy document stops describing the three classes.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 23 Nov 2026 18:59:48 +0000
+
+pastex (2.18.0-1) unstable; urgency=medium
+
+  * Rename the APT archive suite from "mint" to "stable". The suite is the
+    directory APT reads (dists/<suite>/), and "mint" read like a Linux Mint
+    release codename, which it never was: this archive is one fixed label for
+    an architecture-independent package.
+  * The old dists/mint/ is no longer written. scripts/build-apt-repository.sh,
+    scripts/sign-apt-repository.sh and scripts/setup-apt-repo.sh default to
+    "stable"; packaging/pastex.sources and pastex-unsigned.sources ship
+    Suites: stable; the Pages index documents dists/stable/; and the CI
+    variable APT_SUITE is "stable".
+  * Machines configured for "mint" will not see updates until the installed
+    source file is updated. apt reports exactly one symptom:
+        E: The repository '…/paste mint Release' does not have a Release file.
+    Fix, with no change to the signing key:
+        sudo sed -i 's/^Suites: mint$/Suites: stable/' \
+          /etc/apt/sources.list.d/pastex.sources
+        sudo apt update
+    README.md and apt-repo/README.md both document this, including the check
+    that tells the user whether migration is needed.
+  * Tests follow the rename, so the suite name cannot silently disagree
+    between the source file, the Release metadata and the archive path.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
+
+pastex (2.17.2-1) unstable; urgency=medium
+
+  * Drop "Conflicts" and "Replaces" for the retired paste-teks package. With
+    "Provides" already gone, the control file now names no other package at
+    all: Pastex is self-contained and relates to nothing else.
+  * Consequence, stated plainly: on a machine that still has paste-teks
+    installed, dpkg may refuse the upgrade because both packages place files
+    under the same paths. Removing the old package first clears it:
+        sudo apt remove paste-teks
+    This is not detected by a field any more, so it can only be reported by
+    dpkg at install time.
+  * A test asserts that Provides, Conflicts, Replaces and Breaks are all
+    absent, in debian/control, in build-deb.sh and in the built .deb.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 22 Nov 2026 23:59:00 +0000
+
+pastex (2.17.1-1) unstable; urgency=medium
+
+  * Drop "Provides: paste-teks". Pastex ships under its own name only: the
+    retired project name is not claimed as an alias, so no dependency can be
+    satisfied through it. Conflicts/Replaces stay, because they describe what
+    this package may overwrite on a machine that still has the old package.
+  * A test asserts the field is absent, so it cannot come back by accident.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 22 Nov 2026 23:58:00 +0000
+
+pastex (2.17.0-1) unstable; urgency=medium
+
+  * The .deb is now a well-formed Debian package, not only a valid archive:
+      - it ships md5sums, so `dpkg -V pastex` can notice a corrupted or
+        locally edited file; the digests are generated from the staged tree
+        and cover every shipped file except the control area
+      - it declares Installed-Size (390 KiB), which apt uses to size the
+        install before downloading
+      - it ships /usr/share/doc/pastex/changelog.Debian.gz, so
+        `apt changelog pastex` shows this file instead of failing
+      - it declares Multi-Arch: foreign, correct for a data-only payload
+  * Builds are reproducible. Two builds of the same commit with the same CRX
+    key now produce a byte-identical .deb: every timestamp comes from
+    SOURCE_DATE_EPOCH (the commit time by default), the staging tree is
+    touched to match, gzip keeps "-n", and dpkg-deb runs with
+    --uniform-compression. Previously the two archives differed only in tar
+    timestamps, which made the published checksums.txt impossible to verify
+    by rebuilding.
+  * debian/control carries the same Multi-Arch field, and a test keeps both
+    packaging paths in step.
+  * CI lints the package with `lintian --fail-on error` before publishing;
+    lintian's error classes are packaging bugs, not style, and now fail the
+    build instead of reaching the archive.
+  * Five new tests build the package and inspect it: md5sums verifies against
+    the unpacked payload, Installed-Size matches du, the changelog is the real
+    project changelog, and two consecutive builds compare byte for byte.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 22 Nov 2026 23:57:00 +0000
+
+pastex (2.16.0-1) unstable; urgency=medium
+
+  * Remove every layer the product no longer runs. A module that no page or
+    worker loads is a second implementation that drifts, so it is gone rather
+    than kept "just in case":
+      - handle-store.js (IndexedDB folder handle) and config-import.js
+        (folder-file discovery) were left over from the folder-handle design;
+        the panel scans the folder directly and stores the parsed JSON.
+      - config-source.js no longer takes unused store/discovery arguments, and
+        its write-only exports describe(), clearCache(), invalidate() and
+        readCached() are removed. create(sites, cacheStore) is the whole API.
+      - drive.js no longer exports the per-item writers setOrder/setCollapsed.
+        Reorder and fold have written the single pastex_index label since
+        2.12; a second writer for the same fact is a second source of truth.
+        The per-item labels are still read for libraries written by older
+        versions.
+      - store.js loses flatten(), findById() and search(); the panel uses
+        createIndex(), which returns the same lookups precomputed.
+      - library.js stops exporting loadTree, parseIndex, nodeSignature and
+        emptyIndex; cache.js stops exporting pending and invalidate; the
+        config cache reader stops exporting hasConfiguration; drive.js stops
+        exporting DRIVE_URL, SCOPES, bytesToBase64Url and pemToPkcs8.
+  * No behaviour changes: this release only deletes code that was unreachable
+    from sidepanel.html, the manifest and the worker.
+  * New extension/test/dead-code.test.js fails the build when a shipped file
+    is not reachable, when sidepanel.html loads a module that does not provide
+    a Pastex* global the panel uses, or when the per-item Drive writers come
+    back.
+  * ARCHITECTURE.md explains the project to a reader who does not program.
+
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 22 Nov 2026 23:56:00 +0000
+
 pastex (2.15.1-1) unstable; urgency=medium
 
   * The folder check now reports every problem at once. It used to throw on the
@@ -15,7 +683,7 @@ pastex (2.15.1-1) unstable; urgency=medium
     The panel prefixes them with "Folder has problems:".
   * A rejected folder still leaves the previous cache untouched.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 22 Nov 2026 00:00:00 +0000
 
 pastex (2.15.0-1) unstable; urgency=medium
 
@@ -41,7 +709,7 @@ pastex (2.15.0-1) unstable; urgency=medium
     to an object keyed by the requested name, but both readers treated that
     wrapper as the record, so `files` was undefined on every later open.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 22 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 21 Nov 2026 23:59:00 +0000
 
 pastex (2.14.0-1) unstable; urgency=medium
 
@@ -62,7 +730,7 @@ pastex (2.14.0-1) unstable; urgency=medium
   * Docs, examples and tests follow the folder flow; cek-izin-tautan.sh and
     related link-based guides are superseded.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 21 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 21 Nov 2026 00:00:00 +0000
 
 pastex (2.13.3-1) unstable; urgency=medium
 
@@ -79,7 +747,7 @@ pastex (2.13.3-1) unstable; urgency=medium
     MAX_LOCAL exports are gone, the duplicated LRU prune is one function, and
     the comments that described removed machinery were corrected.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 14:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 23:59:00 +0000
 
 pastex (2.13.2-1) unstable; urgency=medium
 
@@ -92,7 +760,7 @@ pastex (2.13.2-1) unstable; urgency=medium
     away) sends it. Visibility is still reported, because the background
     check must stay quiet while a site is open.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 13:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 23:58:00 +0000
 
 pastex (2.13.1-1) unstable; urgency=medium
 
@@ -106,7 +774,7 @@ pastex (2.13.1-1) unstable; urgency=medium
     edit, a rename, a delete or a create, and that they share the root
     folder's single index label.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 21 Nov 2026 12:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 23:57:00 +0000
 
 pastex (2.13.0-1) unstable; urgency=medium
 
@@ -126,7 +794,7 @@ pastex (2.13.0-1) unstable; urgency=medium
     as the user's Yousub extension.
   * Remove the panel's own Close button: the toolbar icon is the switch.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sat, 21 Nov 2026 23:59:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Fri, 20 Nov 2026 23:56:00 +0000
 
 pastex (2.12.0-1) unstable; urgency=medium
 
@@ -148,7 +816,7 @@ pastex (2.12.0-1) unstable; urgency=medium
   * Verify a cached library with a metadata-only pass instead of a full
     listing, so an unchanged library costs a fraction of the requests.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Sat, 21 Nov 2026 21:40:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 23:55:00 +0000
 
 pastex (2.11.0-1) unstable; urgency=medium
 
@@ -166,7 +834,7 @@ pastex (2.11.0-1) unstable; urgency=medium
     extension/test/appearance.test.js.
   * Align the in-page launcher with the panel's indigo.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Sat, 21 Nov 2026 20:10:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 23:54:00 +0000
 
 pastex (2.10.2-1) unstable; urgency=medium
 
@@ -197,7 +865,7 @@ pastex (2.10.0-1) unstable; urgency=medium
     manual refresh button as the fallback.
   * Move the new folder and new snippet buttons to the end of the toolbar.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:40:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Fri, 20 Nov 2026 22:04:00 +0000
 
 pastex (2.9.0-1) unstable; urgency=medium
 
@@ -253,21 +921,21 @@ pastex (2.4.0-1) unstable; urgency=medium
   * Place editing actions next to each snippet and remove the preview pane.
   * Import configuration from a selected folder and migrate configuration filenames.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 11:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 12:59:00 +0000
 
 pastex (2.3.0-1) unstable; urgency=medium
 
   * Cache the Drive library for the browser session and refresh after edits.
   * Add multi-select, persistent Drive ordering, and bulk deletion.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 10:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 12:58:00 +0000
 
 pastex (2.2.1-1) unstable; urgency=medium
 
   * Improve Drive loading and configuration import in the side panel.
   * Use the renamed CRX signing secret for release builds.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 05:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 12:57:00 +0000
 
 pastex (2.2.0-1) unstable; urgency=medium
 
@@ -313,7 +981,7 @@ pastex (1.10.11-1) unstable; urgency=medium
     its duration) so a refusing window manager is visible in error.log instead
     of looking like a mystery.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Thu, 19 Nov 2026 02:10:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:59:00 +0700
 
 pastex (1.10.10-1) unstable; urgency=medium
 
@@ -332,7 +1000,7 @@ pastex (1.10.10-1) unstable; urgency=medium
     half a second, and only a real refusal hands the job back to Tk's
     deiconify() retry.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 23:40:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:58:00 +0700
 
 pastex (1.10.9-1) unstable; urgency=medium
 
@@ -348,7 +1016,7 @@ pastex (1.10.9-1) unstable; urgency=medium
   * The window therefore also comes back as soon as the paste is done instead
     of waiting behind a two-second block in the GUI thread.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 22:30:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:57:00 +0700
 
 pastex (1.10.8-1) unstable; urgency=medium
 
@@ -369,7 +1037,7 @@ pastex (1.10.8-1) unstable; urgency=medium
     environment only accepts deployments from main, so a branch build now
     stops after building instead of failing with a protection-rule error.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 20:05:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:56:00 +0700
 
 pastex (1.10.7-1) unstable; urgency=medium
 
@@ -390,7 +1058,7 @@ pastex (1.10.7-1) unstable; urgency=medium
   * Log how long the clipboard check and the typing took, so a slow click can
     be read from the log instead of guessed at.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 18:20:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:55:00 +0700
 
 pastex (1.10.6-1) unstable; urgency=medium
 
@@ -409,7 +1077,7 @@ pastex (1.10.6-1) unstable; urgency=medium
     is accepted only when every reader agrees.
   * pastex --check explains the empty read-back and the typed delivery.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 13:40:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:54:00 +0700
 
 pastex (1.10.5-1) unstable; urgency=medium
 
@@ -428,7 +1096,7 @@ pastex (1.10.5-1) unstable; urgency=medium
     nothing was pasted, instead of the "the text is on the clipboard" hint.
   * pastex --check explains an empty read-back the same way.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Tue, 18 Nov 2026 11:05:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:53:00 +0700
 
 pastex (1.10.4-1) unstable; urgency=medium
 
@@ -450,7 +1118,7 @@ pastex (1.10.4-1) unstable; urgency=medium
     owner that takes the selection over, so pastex --check now re-reads once
     before judging and explains an empty clipboard instead.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Tue, 18 Nov 2026 09:15:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Wed, 18 Nov 2026 06:52:00 +0700
 
 pastex (1.10.3-1) unstable; urgency=medium
 
@@ -477,7 +1145,7 @@ pastex (1.10.3-1) unstable; urgency=medium
     watcher falls back to polling the folders every 2 s instead of switching
     to manual refresh only, and the log names the errno.
 
- -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Mon, 17 Nov 2026 20:40:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@gmail.com>  Tue, 17 Nov 2026 20:40:00 +0700
 
 pastex (1.10.2-1) unstable; urgency=medium
 
@@ -596,7 +1264,7 @@ pastex (1.8.2-1) unstable; urgency=medium
     ydotoold=jalan|tidak-jalan", so a missing ydotoold is visible before the
     first click instead of only after it.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 17 Nov 2026 13:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:59:00 +0000
 
 pastex (1.8.1-1) unstable; urgency=medium
 
@@ -619,7 +1287,7 @@ pastex (1.8.1-1) unstable; urgency=medium
   * verify-regressions runs pytest with PYTHONDONTWRITEBYTECODE so a cached
     .pyc can no longer make a restored bug look like a passing test.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 17 Nov 2026 06:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:58:00 +0000
 
 pastex (1.8.0-1) unstable; urgency=medium
 
@@ -632,7 +1300,7 @@ pastex (1.8.0-1) unstable; urgency=medium
     the session. Copies that use it no longer pay the 5-20 ms fork/connect of
     wl-copy. "--check" reports whether it is available and enabled.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 18:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:57:00 +0000
 
 pastex (1.7.2-1) unstable; urgency=medium
 
@@ -646,7 +1314,7 @@ pastex (1.7.2-1) unstable; urgency=medium
     instead, and "--list" now points at --dir rather than a removed command.
     Samples that older installs already have stay untouched.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 17:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:56:00 +0000
 
 pastex (1.7.1-1) unstable; urgency=medium
 
@@ -658,7 +1326,7 @@ pastex (1.7.1-1) unstable; urgency=medium
   * Make the coalescing window's unit explicit (seconds) and cover it with
     deterministic tests using a fake clock, plus two regression mutations.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 16:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:55:00 +0000
 
 pastex (1.7.0-1) unstable; urgency=medium
 
@@ -676,7 +1344,7 @@ pastex (1.7.0-1) unstable; urgency=medium
     automatic paste can work without /dev/uinput access (recommends
     python3-dbus). "--check" reports the portal and the running instance.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 15:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:54:00 +0000
 
 pastex (1.6.12-1) unstable; urgency=medium
 
@@ -686,7 +1354,7 @@ pastex (1.6.12-1) unstable; urgency=medium
     the window visible, skips the synthetic Ctrl+V (which would have gone to
     Pastex itself) and reports "Text copied - press Ctrl+V".
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 13:30:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:53:00 +0000
 
 pastex (1.6.11-1) unstable; urgency=medium
 
@@ -701,7 +1369,7 @@ pastex (1.6.11-1) unstable; urgency=medium
   * Document the verified keyring location (/etc/apt/keyrings), the expected
     fingerprint, and the world-readable requirement in the install steps.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 16 Nov 2026 12:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:52:00 +0000
 
 pastex (1.6.10-1) unstable; urgency=medium
 
@@ -709,7 +1377,7 @@ pastex (1.6.10-1) unstable; urgency=medium
     contain: the signed archive only documents the keyring and signed sources,
     the unsigned archive only documents its trusted sources file.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 03:40:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:51:00 +0000
 
 pastex (1.6.9-1) unstable; urgency=medium
 
@@ -720,14 +1388,14 @@ pastex (1.6.9-1) unstable; urgency=medium
     Ubuntu 26.10 suite name "stonking", deb822 sources, and an exported
     keyring, so apt reports InRelease instead of a trusted flat index.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 03:20:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:50:00 +0000
 
 pastex (1.6.8-1) unstable; urgency=medium
 
   * Keep the GUI tests independent of a real Tcl interpreter so automated
     builds publish the package on systems where Tkinter is installed.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 03:10:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:49:00 +0000
 
 pastex (1.6.7-1) unstable; urgency=medium
 
@@ -739,14 +1407,14 @@ pastex (1.6.7-1) unstable; urgency=medium
   * Minimize instead of withdrawing during paste so the dock icon no longer
     disappears for unpinned apps, and let focus settle before Ctrl+V.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Sun, 17 Nov 2026 01:30:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:48:00 +0000
 
 pastex (1.6.6-1) unstable; urgency=medium
 
   * Start Select mode with only the right-clicked row, discarding any leftover
     selection from earlier clicks.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 17 Nov 2026 00:20:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:47:00 +0000
 
 pastex (1.6.5-1) unstable; urgency=medium
 
@@ -754,7 +1422,7 @@ pastex (1.6.5-1) unstable; urgency=medium
     right-click row highlighting in normal mode.
   * Remove the Always on top checkbox and deploy GitHub Pages via GitHub Actions.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 23:55:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 16 Nov 2026 11:46:00 +0000
 
 pastex (1.6.4-1) unstable; urgency=medium
 
@@ -779,14 +1447,14 @@ pastex (1.5.3-1) unstable; urgency=medium
   * Honor the --dir option when determining where new files are written.
   * Reduce repeated filesystem access while filtering search results.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 04:59:00 +0000
 
 pastex (1.5.2-1) unstable; urgency=medium
 
   * Match StartupWMClass to the observed Tk window class on Ubuntu.
   * Add an X11 window identity integration test using Xvfb and xprop.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 05:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 04:58:00 +0000
 
 pastex (1.5.1-1) unstable; urgency=medium
 
@@ -806,88 +1474,88 @@ pastex (1.5.0-1) unstable; urgency=medium
   * Fix paste focus handling, search behavior, clipboard diagnostics, and the
     automatic-paste status reporting.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 11 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Wed, 11 Nov 2026 00:00:00 +0700
 
 pastex (1.4.3-1) unstable; urgency=medium
 
   * Refine clipboard verification, paste recovery, and package metadata.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Tue, 10 Nov 2026 00:00:00 +0700
 
 pastex (1.4.2-1) unstable; urgency=medium
 
   * Fix Debian package dependencies and align the package description.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 23:59:00 +0700
 
 pastex (1.4.1-1) unstable; urgency=medium
 
   * Correct package metadata and clipboard tool recommendations.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0700
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 23:58:00 +0700
 
 pastex (1.4.0-1) unstable; urgency=medium
 
   * Simplify the application flow and remove obsolete clipboard fallback logic.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:57:00 +0000
 
 pastex (1.3.0-1) unstable; urgency=medium
 
   * Add global shortcut support and command-line foreground paste handling.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:56:00 +0000
 
 pastex (1.2.2-1) unstable; urgency=medium
 
   * Improve automatic-paste behavior and focus handling across desktop sessions.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:55:00 +0000
 
 pastex (1.2.1-1) unstable; urgency=medium
 
   * Improve diagnostics for clipboard, uinput permissions, and paste tools.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:54:00 +0000
 
 pastex (1.2.0-1) unstable; urgency=medium
 
   * Add a scoped pastex system group and udev integration for /dev/uinput.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:53:00 +0000
 
 pastex (1.1.1-1) unstable; urgency=medium
 
   * Improve permission setup and diagnostics for automatic paste.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:52:00 +0000
 
 pastex (1.1.0-1) unstable; urgency=medium
 
   * Add automatic-paste permissions and ydotoold integration.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:51:00 +0000
 
 pastex (1.0.3-1) unstable; urgency=medium
 
   * Fix startup errors and improve diagnostics.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:50:00 +0000
 
 pastex (1.0.2-1) unstable; urgency=medium
 
   * Improve the package installer and application startup.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:49:00 +0000
 
 pastex (1.0.1-1) unstable; urgency=medium
 
   * Add error logging for application startup failures.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:48:00 +0000
 
 pastex (1.0.0-1) unstable; urgency=medium
 
   * Initial release of the Pastex desktop application.
 
- -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 10 Nov 2026 00:00:00 +0000
+ -- Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>  Mon, 09 Nov 2026 16:47:00 +0000

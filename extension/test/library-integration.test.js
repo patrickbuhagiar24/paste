@@ -1,6 +1,5 @@
 "use strict";
 const assert = require("node:assert/strict");
-const { webcrypto } = require("node:crypto");
 const Drive = require("../drive.js");
 const Library = require("../library.js");
 
@@ -10,19 +9,35 @@ function json(data) {
 function text(data) {
   return { ok: true, status: 200, headers: { get: () => "text/plain" }, text: async () => data };
 }
+// Configuration as the panel caches it: one file of links, reduced to ids. The
+// index link is what makes reading the order one GET instead of a listing.
+const INDEX_ID = "index";
+const oauthConfig = {
+  readConfig: async () => ({
+    drive: { folderId: "root", indexId: INDEX_ID },
+    oauth: { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
+  }),
+};
+const noIndexConfig = {
+  readConfig: async () => ({
+    drive: { folderId: "root", indexId: "" },
+    oauth: { client_id: "123456789012-abcdefghijklmnop.apps.googleusercontent.com" },
+    sites: { fileId: "", allowedSites: ["https://example.org"] },
+  }),
+};
 
 test("Drive library signs in and lists and loads a shared folder through the API", async () => {
-  const pair = await webcrypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-  const encoded = Buffer.from(await webcrypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
-  const account = { client_email: "test@example.com", private_key: "-----BEGIN PRIVATE KEY-----\n" + encoded + "\n-----END PRIVATE KEY-----" };
   const previousFetch = globalThis.fetch;
-  const previousCrypto = globalThis.crypto;
+  const previousToken = Drive.getAuthToken;
+  // The token now comes from Chrome's Google sign-in; the library only needs
+  // to see that it was asked for one before it touched the API.
+  let signIns = 0;
+  Drive.getAuthToken = async () => { signIns++; return "token"; };
   const calls = [];
-  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   globalThis.fetch = async (url, options) => {
     const target = new URL(url);
     calls.push(target);
-    if (target.hostname === "oauth2.googleapis.com") return json({ access_token: "token", expires_in: 3600 });
     assert.equal(options.headers.Authorization, "Bearer token");
     if (target.pathname === "/drive/v3/files/root") return json({ id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME });
     if (target.pathname === "/drive/v3/files") return json({ files: [{ id: "item", name: "Synced.txt", mimeType: "text/plain" }] });
@@ -30,25 +45,24 @@ test("Drive library signs in and lists and loads a shared folder through the API
     throw new Error("Unexpected API request: " + target);
   };
   try {
-    Drive.clearTokenCache();
-    const result = await Library.load({ readConfig: async () => ({ serviceAccount: account, drive: { folderId: "root" } }) }, Drive);
+    const result = await Library.load(noIndexConfig, Drive);
     assert.equal(result.tree[0].name, "Synced");
     assert.equal(result.tree[0].text, "Hello from Drive");
-    assert.equal(calls.length, 4);
-    assert.equal(calls[2].searchParams.get("includeItemsFromAllDrives"), "true");
+    assert.equal(signIns, 1, "one sign-in per session");
+    // folder, the library listing, the body: the index is named by the
+    // configuration and costs no request of its own when there is no link yet.
+    assert.equal(calls.length, 3);
+    assert.equal(calls[1].searchParams.get("includeItemsFromAllDrives"), "true");
   } finally {
-    Drive.clearTokenCache();
     globalThis.fetch = previousFetch;
-    Object.defineProperty(globalThis, "crypto", { value: previousCrypto, configurable: true });
+    Drive.getAuthToken = previousToken;
   }
 });
 
 test("a second load lists and downloads only the branch that changed", async () => {
-  const pair = await webcrypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-  const encoded = Buffer.from(await webcrypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64");
-  const account = { client_email: "test@example.com", private_key: "-----BEGIN PRIVATE KEY-----\n" + encoded + "\n-----END PRIVATE KEY-----" };
   const previousFetch = globalThis.fetch;
-  const previousCrypto = globalThis.crypto;
+  const previousToken = Drive.getAuthToken;
+  Drive.getAuthToken = async () => "token";
   const downloads = [];
   const listings = [];
   const files = {
@@ -58,20 +72,26 @@ test("a second load lists and downloads only the branch that changed", async () 
     ],
     folder: [{ id: "inside", name: "Inside.txt", mimeType: "text/plain", modifiedTime: "i1" }],
   };
-  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
   globalThis.fetch = async (url) => {
     const target = new URL(url);
-    if (target.hostname === "oauth2.googleapis.com") return json({ access_token: "token", expires_in: 3600 });
     if (target.pathname === "/drive/v3/files/root") {
-      return json({
-        id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME, modifiedTime: "r1",
-        properties: { pastex_index: JSON.stringify({ order: { root: ["top", "folder"] }, collapsed: {} }) },
-      });
+      return json({ id: "root", name: "Shared", mimeType: Drive.FOLDER_MIME, modifiedTime: "r1" });
     }
     if (target.pathname === "/drive/v3/files" && target.searchParams.get("q")) {
       const parent = target.searchParams.get("q").match(/'([^']+)' in parents/)[1];
       listings.push(parent);
+      // The index is a plain file in the library folder. It is skipped because
+      // the configuration names it, not because of its name.
+      if (parent === "root") {
+        return json({ files: [
+          { id: INDEX_ID, name: "pastex-index.json", mimeType: "text/plain", modifiedTime: "i1" },
+          ...(files[parent] || []),
+        ] });
+      }
       return json({ files: files[parent] || [] });
+    }
+    if (target.pathname === "/drive/v3/files/index" && target.searchParams.get("alt") === "media") {
+      return text(JSON.stringify({ v: 2, order: { root: ["top", "folder"] }, collapsed: {} }));
     }
     if (target.pathname === "/drive/v3/files/inside" && target.searchParams.get("alt") === "media") {
       downloads.push("inside");
@@ -84,20 +104,21 @@ test("a second load lists and downloads only the branch that changed", async () 
     throw new Error("Unexpected API request: " + target);
   };
   try {
-    Drive.clearTokenCache();
-    const native = { readConfig: async () => ({ serviceAccount: account, drive: { folderId: "root" } }) };
+    const native = oauthConfig;
     const first = await Library.load(native, Drive);
     // The central index of the root folder decides the order.
     assert.deepEqual(first.tree.map((node) => node.id), ["top", "folder"]);
     assert.deepEqual(downloads.sort(), ["inside", "top"]);
-    assert.deepEqual(listings.sort(), ["folder", "root"]);
+    assert.deepEqual(listings.sort(), ["folder", "root"], "one listing per folder");
 
     listings.length = 0; downloads.length = 0;
     const second = await Library.load(native, Drive, undefined, {
       tree: first.tree, bodies: first.bodies, texts: first.texts,
       metadata: first.metadata, signatures: first.signatures,
     });
-    assert.deepEqual(listings, ["root"], "only the root is listed again");
+    // The index is one GET by its link, so the tree only needs the root listed
+    // again and the unchanged folder is reused.
+    assert.deepEqual(listings.sort(), ["root"], "only the root is listed again");
     assert.deepEqual(downloads, [], "no body is downloaded again");
     assert.equal(second.tree[1].children[0].text, "Inside body");
 
@@ -109,13 +130,13 @@ test("a second load lists and downloads only the branch that changed", async () 
       tree: second.tree, bodies: second.bodies, texts: second.texts,
       metadata: second.metadata, signatures: second.signatures,
     });
-    assert.deepEqual(listings.sort(), ["folder", "root"]);
+    assert.deepEqual(listings.sort(), ["folder", "root"],
+      "the changed branch is listed, and the index costs no listing");
     assert.deepEqual(downloads, ["inside"], "only the changed body is downloaded again");
     assert.equal(third.tree[0].text, "Top body");
     assert.equal(third.tree[1].children[0].text, "Inside body");
   } finally {
-    Drive.clearTokenCache();
     globalThis.fetch = previousFetch;
-    Object.defineProperty(globalThis, "crypto", { value: previousCrypto, configurable: true });
+    Drive.getAuthToken = previousToken;
   }
 });

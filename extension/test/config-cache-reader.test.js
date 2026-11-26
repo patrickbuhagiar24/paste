@@ -22,21 +22,22 @@ function storage(initial) {
   };
 }
 
-const account = {
-  type: "service_account",
-  client_email: "service@example.iam.gserviceaccount.com",
-  private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
-};
-function record(files) {
+const CLIENT = "123456789012-abcdefghijklmnop.apps.googleusercontent.com";
+// The record the panel writes: one file, already parsed, never a handle.
+function record(value) {
   return {
-    "pastex-config-cache": { version: 1, savedAt: "2026-01-01T00:00:00.000Z", folder: "config", files: files },
+    "pastex-config-cache": {
+      version: 5, savedAt: "2026-01-01T00:00:00.000Z",
+      file: "pastex-storage.json", value: value,
+    },
   };
 }
 function goodFiles() {
   return {
-    "pastex-google-drive.json": { folder_url: "https://drive.google.com/drive/folders/rootid" },
-    "pastex-sites.json": { allowed_sites: ["https://example.org"] },
-    "service-account.json": account,
+    "pastex-folder": "https://drive.google.com/drive/folders/1RootFolderIdAbCdEfGhIjKlMnOpQr",
+    "pastex-sites": ["https://example.org"],
+    "pastex-index": "https://drive.google.com/file/d/1IndexFileIdAbCdEfGhIjKlMnOpQr/view",
+    client_id: CLIENT,
   };
 }
 
@@ -44,56 +45,73 @@ test("the worker reads configuration from storage without any folder access", as
   const store = storage(record(goodFiles()));
   const config = load(store).create(store);
   const drive = await config.readConfig();
-  assert.equal(drive.drive.folderId, "rootid");
-  assert.equal(drive.serviceAccount.client_email, account.client_email);
+  assert.equal(drive.drive.folderId, "1RootFolderIdAbCdEfGhIjKlMnOpQr");
+  assert.equal(drive.drive.indexId, "1IndexFileIdAbCdEfGhIjKlMnOpQr");
+  assert.equal(drive.oauth.client_id, CLIENT);
+  assert.equal(drive.oauthError, "");
   assert.equal(drive.driveError, "");
   assert.deepEqual((await config.readSites()).allowedSites, ["https://example.org"]);
-  assert.equal(await config.hasConfiguration(), true);
 });
 
-test("folder_id wins over folder_url and a missing id is reported, not thrown at read time", async () => {
+test("a bare id works, and a missing id is reported instead of thrown at read time", async () => {
   const files = goodFiles();
-  files["pastex-google-drive.json"] = { folder_id: "explicit", folder_url: "https://drive.google.com/drive/folders/other" };
+  files["pastex-folder"] = "1explicitIdAbCdEf";
   const explicit = load(storage(record(files))).create(storage(record(files)));
-  assert.equal((await explicit.readConfig()).drive.folderId, "explicit");
+  assert.equal((await explicit.readConfig()).drive.folderId, "1explicitIdAbCdEf");
 
   const broken = goodFiles();
-  broken["pastex-google-drive.json"] = { folder_url: "https://drive.google.com/drive/folders/" };
+  broken["pastex-folder"] = "https://drive.google.com/drive/folders/";
   const store = storage(record(broken));
   const config = load(store).create(store);
   const result = await config.readConfig();
   assert.equal(result.drive, null);
-  assert.match(result.driveError, /pastex-google-drive\.json/);
+  assert.match(result.driveError, /configuration file needs a pastex-folder link/);
 });
 
-test("an unusable key is reported through serviceAccountError", async () => {
+test("an unusable client id is reported through oauthError", async () => {
   const files = goodFiles();
-  delete files["service-account.json"];
+  files.client_id = "123456789012-abcdefghijklmnop";
   const store = storage(record(files));
   const config = load(store).create(store);
   const result = await config.readConfig();
-  assert.equal(result.serviceAccount, null);
-  assert.match(result.serviceAccountError, /service-account\.json/);
+  assert.equal(result.oauth, null);
+  assert.match(result.oauthError, /configuration file needs the client_id/);
 });
 
 test("sites fail closed and a missing configuration explains what to do", async () => {
   const files = goodFiles();
-  files["pastex-sites.json"] = { allowed_sites: "nope" };
+  files["pastex-sites"] = "not a link at all";
   const store = storage(record(files));
   const config = load(store).create(store);
-  await assert.rejects(config.readSites(), /allowed_sites must be an array/);
+  await assert.rejects(config.readSites(), /pastex-sites link or an inline array/);
 
   const empty = storage({});
   const none = load(empty).create(empty);
-  await assert.rejects(none.readConfig(), /Choose a configuration folder/);
-  await assert.rejects(none.readSites(), /Choose a configuration folder/);
-  assert.equal(await none.hasConfiguration(), false);
+  await assert.rejects(none.readConfig(), /Choose your configuration file in Config first/);
+  await assert.rejects(none.readSites(), /Choose your configuration file in Config first/);
 });
 
 test("invalidate clears the stored configuration", async () => {
   const store = storage(record(goodFiles()));
   const config = load(store).create(store);
   await config.invalidate();
-  assert.equal(await config.hasConfiguration(), false);
-  await assert.rejects(config.readConfig(), /Choose a configuration folder/);
+  await assert.rejects(config.readConfig(), /Choose your configuration file in Config first/);
+});
+
+test("the worker passes the client secret on, because the panel is not the one signing in", async () => {
+  // The worker reads this record, not the file. A reader that dropped the
+  // secret sent the code exchange without one, and Google's Personal mode
+  // client refused every sign-in with "client_secret is missing".
+  const files = goodFiles();
+  files.client_secret = "GOCSPX-abcdefghijklmno";
+  const store = storage(record(files));
+  const result = await load(store).create(store).readConfig();
+  assert.equal(result.oauth.client_secret, "GOCSPX-abcdefghijklmno");
+
+  // A client created without a secret stays valid: an empty string, not a
+  // missing key, so the exchange knows the difference between absent and blank.
+  const without = goodFiles();
+  const blank = await load(storage(record(without))).create(storage(record(without))).readConfig();
+  assert.equal(blank.oauth.client_secret, "");
+  assert.equal(blank.oauthError, "");
 });

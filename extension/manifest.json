@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Pastex",
-  "version": "2.15.1",
+  "version": "2.34.0",
   "description": "Text snippets stored in Google Drive, with a Side Panel and an in-page launcher.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "142",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -31,7 +31,8 @@
     "activeTab",
     "clipboardWrite",
     "storage",
-    "fileSystemAccess"
+    "fileSystemAccess",
+    "identity"
   ],
   "host_permissions": [
     "http://*/*",

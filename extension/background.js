@@ -13,6 +13,9 @@ importScripts("sites.js", "config-cache-reader.js", "drive.js", "hash.js", "libr
 // chosen folder. No offscreen document and no folder handle is involved.
 var PastexConfig = PastexConfigCacheReader.create(chrome.storage.local);
 
+// The refresh token lives in storage.local, so a worker that Chrome discarded
+// comes back and renews the access token instead of asking for a sign-in.
+PastexDrive.setTokenStore(chrome.storage.local);
 var libraryCache = PastexCache.create(PastexConfig, PastexDrive, PastexLibrary, chrome.storage.session, crypto, chrome.storage.local);
 var deferredQueue = PastexQueue.create(chrome.storage.local);
 // Every edit that has not reached Drive yet lives in the queue; a flush sends
@@ -135,6 +138,25 @@ function notifyPanelsLocal(pending) {
   });
 }
 
+// A queued write that Drive refused for good leaves the panel with a row it
+// shows and Drive does not have. The panel is told, so it can say so instead of
+// looking as if the edit were saved.
+function notifyPanelsDropped(reason) {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ dropped: true, reason: reason || "" }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
+// A queued write is waiting for something only the user can change (Drive will
+// not let this account create files). The panel says so; nothing is dropped.
+function notifyPanelsBlocked(reason) {
+  progressPorts.forEach(function (port) {
+    try { port.postMessage({ blocked: true, reason: reason || "" }); }
+    catch (ignored) { progressPorts.delete(port); }
+  });
+}
+
 function notifyPanelsChanged(lastCheckedAt) {
   progressPorts.forEach(function (port) {
     try { port.postMessage({ changed: true, lastCheckedAt: lastCheckedAt || Date.now() }); }
@@ -207,6 +229,10 @@ async function runIdleSync(assumeIdle) {
     // a body; only a real difference falls back to the full listing.
     var result = await libraryCache.verify();
     if (result && result.skipped) result = await libraryCache.sync();
+    // A row typed while the check was reading is not on Drive, so the listing
+    // that just landed does not contain it. Patching it back keeps a background
+    // sync from deleting a snippet the user had just written.
+    await replayMissingRows().catch(function () {});
     nextSyncAt = 0;
     // A skipped check never touched Drive, so it does not move the interval.
     if (result && !result.skipped) {
@@ -218,7 +244,8 @@ async function runIdleSync(assumeIdle) {
   } catch (err) {
     var message = err && err.message ? err.message : String(err);
     // A missing or broken configuration is not worth retrying every minute.
-    if (/configure a|choose a configuration folder|add a pastex-google-drive/i.test(message)) nextSyncAt = Date.now() + CONFIG_RETRY_MS;
+    if (/choose your configuration file|configure a|Google sign-in/i.test(message))
+      nextSyncAt = Date.now() + CONFIG_RETRY_MS;
     else console.warn("Pastex background sync skipped:", message);
   } finally { idleSyncRunning = false; }
 }
@@ -247,6 +274,55 @@ function trackPanelOperation(promise) {
 
 function trustedPanel(sender) {
   return sender && sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("sidepanel.html");
+}
+
+// --- who is showing the panel right now ------------------------------------
+//
+// The in-page launcher reads ⚡ (open it) or × (close it). A panel closed from
+// the toolbar icon or from Chrome's own panel switch used to leave the launcher
+// on ×, because the panel itself is the only thing that knew it was closing and
+// a hidden panel runs no code. The worker owns the fact instead: Chrome reports
+// every open and every close of an extension panel through onOpened/onClosed,
+// whichever switch was used, and the launcher asks for the answer every time it
+// is authorised instead of trusting a message it may have missed.
+var panelWindows = new Set();
+
+function markPanelWindow(windowId, open) {
+  if (!Number.isInteger(windowId)) return;
+  if (open) panelWindows.add(windowId);
+  else panelWindows.delete(windowId);
+}
+
+// Tell the launcher of the tab the user is looking at. Best effort: the panel
+// can be open in a window whose tabs have no content script.
+function announcePanelToWindow(windowId) {
+  if (!Number.isInteger(windowId) || !trustedPanelWindow(windowId)) return Promise.resolve();
+  return chrome.tabs.query({ active: true, windowId: windowId }).then(function (tabs) {
+    if (!tabs || !tabs[0]) return;
+    return messageToLauncher(tabs[0], { type: "pastex-panel-state", open: panelWindows.has(windowId) });
+  }).catch(function () { /* no launcher in this window */ });
+}
+
+function trustedPanelWindow(windowId) {
+  return Number.isInteger(windowId) && !!chrome.tabs;
+}
+
+if (chrome.sidePanel && chrome.sidePanel.onOpened && typeof chrome.sidePanel.onOpened.addListener === "function") {
+  chrome.sidePanel.onOpened.addListener(function (info) {
+    markPanelWindow(info && info.windowId, true);
+    return announcePanelToWindow(info && info.windowId);
+  });
+}
+if (chrome.sidePanel && chrome.sidePanel.onClosed && typeof chrome.sidePanel.onClosed.addListener === "function") {
+  chrome.sidePanel.onClosed.addListener(function (info) {
+    markPanelWindow(info && info.windowId, false);
+    return announcePanelToWindow(info && info.windowId);
+  });
+}
+
+// A window that is gone cannot show a panel any more.
+if (chrome.windows && chrome.windows.onRemoved) {
+  chrome.windows.onRemoved.addListener(function (windowId) { panelWindows.delete(windowId); });
 }
 
 // A content script on an approved site may report that its tab was left. It
@@ -302,7 +378,15 @@ function invalidatePatterns() { cachedPatterns = null; cachedPatternsAt = 0; }
 async function allowedSitePatterns(force) {
   if (!force && cachedPatterns && Date.now() - cachedPatternsAt < PATTERN_TTL_MS) return cachedPatterns;
   var data = await PastexConfig.readSites(!!force);
-  var patterns = PastexSites.parse(data.allowedSites);
+  // The list is either inline in the configuration file or in a file the link
+  // names; a link is fetched with the same sign-in, so one configuration file
+  // can point at a shared allowlist.
+  var allowedSites = data.allowedSites;
+  if (!allowedSites) {
+    var session = await PastexLibrary.connect(PastexConfig, PastexDrive);
+    allowedSites = await PastexLibrary.readSites(PastexConfig, PastexDrive, session.token);
+  }
+  var patterns = PastexSites.parse(allowedSites);
   cachedPatterns = patterns;
   cachedPatternsAt = Date.now();
   return patterns;
@@ -398,6 +482,15 @@ async function applyDriveCommand(session, command) {
     if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
     return { id: node.id };
   }
+  if (command.action === "move") {
+    var moved = await mapLimit(command.ids || [], 6, function (id) {
+      return PastexDrive.moveFile(token, id, undefined, command.parentId)
+        .then(function () { return ""; }, function (err) { return err.message || String(err); });
+    });
+    var refused = moved.filter(Boolean);
+    if (refused.length) throw new Error(refused.length + " item(s) could not be moved: " + refused[0]);
+    return {};
+  }
   if (command.action === "delete") {
     var results = await mapLimit(command.ids || [], 6, function (id) {
       return PastexDrive.trashFile(token, id).then(function () { return ""; },
@@ -417,7 +510,7 @@ async function applyDriveCommand(session, command) {
       var parent = parents[j] || session.rootId;
       order.order[parent] = (groups[j] || []).slice();
     }
-    await PastexDrive.setIndex(token, session.rootId, order, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.indexFileId, order);
     session.index = order;  // the next write in this flush builds on this one
     return {};
   }
@@ -426,7 +519,7 @@ async function applyDriveCommand(session, command) {
     var next = command.index || {};
     Object.keys(next.order || {}).forEach(function (parent) { merged.order[parent] = next.order[parent]; });
     Object.keys(next.collapsed || {}).forEach(function (id) { merged.collapsed[id] = next.collapsed[id]; });
-    await PastexDrive.setIndex(token, session.rootId, merged, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.indexFileId, merged);
     // The session follows the label it just wrote, so a later write in the
     // same flush builds on it instead of overwriting it.
     session.index = merged;
@@ -437,7 +530,7 @@ async function applyDriveCommand(session, command) {
     (command.ids || []).filter(Boolean).forEach(function (id) {
       folded.collapsed[id] = command.collapsed ? "1" : "0";
     });
-    await PastexDrive.setIndex(token, session.rootId, folded, undefined, session.properties);
+    await PastexDrive.writeIndexFile(token, session.indexFileId, folded);
     session.index = folded;
     return {};
   }
@@ -479,14 +572,32 @@ function queuedCommand(command, createdId) {
     // Neither carries an item, which is why the id check above comes later.
     // A reorder carries the panel's groups/parents shape verbatim; a collapse
     // carries the ids and the folded flag.
+    //
+    // A row that never reached Drive has a `local-` id, which is not a Drive id:
+    // putting one in the order made the read-back list it as a file and ask
+    // Drive for it. It is dropped here, and the row joins the order on the first
+    // reorder after its upload, when its real id is known.
+    var driveIds = function (ids) {
+      return (ids || []).filter(function (id) { return id && String(id).indexOf("local-") !== 0; });
+    };
     return { id: localId(), kind: "order", queuedAt: Date.now(), item: {},
       // The panel sends groups/parents; an older caller sends ids. Both are
       // one group of one parent here.
       groups: command.kind === "reorder"
-        ? (command.groups && command.groups.length ? command.groups : [command.ids || []]).map(function (g) { return (g || []).slice(); })
+        ? (command.groups && command.groups.length ? command.groups : [command.ids || []]).map(driveIds)
         : undefined,
       parents: command.kind === "reorder" ? (command.parents && command.parents.length ? command.parents.slice() : [""]) : undefined,
-      collapse: command.kind === "collapse" ? { ids: (command.ids || []).slice(), collapsed: !!command.collapsed } : undefined };
+      collapse: command.kind === "collapse" ? { ids: driveIds(command.ids), collapsed: !!command.collapsed } : undefined };
+  }
+  // A move names its targets in ids and the folder they go to. Like a delete it
+  // carries no item, so its id check comes below with the delete's.
+  if (command.kind === "move") {
+    // A `local-` id is a row Drive has not seen yet; its own create entry puts it
+    // in the right folder, so there is nothing to move.
+    var moving = (command.ids || []).filter(function (id) { return id && String(id).indexOf("local-") !== 0; });
+    if (!moving.length) return null;
+    return { id: localId(), kind: "move", queuedAt: Date.now(), item: {},
+      ids: moving, parentId: command.parentId || "" };
   }
   // A delete names its targets in ids and carries no item, so the id check
   // must look there first or the whole delete would be dropped.
@@ -515,7 +626,7 @@ function queuedCommand(command, createdId) {
 // and this only rejects what can be checked locally.
 function validateLocalEdit(command) {
   if (!command || typeof command !== "object") throw new Error("Invalid edit request.");
-  if (["create", "edit", "rename", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
+  if (["create", "edit", "rename", "move", "delete", "collapse", "reorder"].indexOf(command.kind) === -1)
     throw new Error("Unknown Drive operation.");
   if (command.kind === "create" || command.kind === "edit" || command.kind === "rename") {
     if (typeof command.name !== "string" || !command.name.trim() || command.name.indexOf("/") !== -1)
@@ -525,8 +636,23 @@ function validateLocalEdit(command) {
   return command;
 }
 
-async function queueLocalEdit(command) {
-  validateLocalEdit(command);
+// A write invalidates the stored snapshot, so an edit that arrives while one is
+// running has nothing to be applied to and would be dropped silently -- the row
+// the user just typed would vanish from the panel while its write waited in the
+// queue. The queue is only ever written while a site is being used, and a site
+// being used is exactly when a flush is running (it started when the previous
+// site was left), so the edit waits for the write to settle and then applies to
+// the snapshot it left behind.
+var FLUSH_SETTLE_MS = 50;
+var FLUSH_SETTLE_LIMIT = 40;   // two seconds: a flush is a handful of requests
+
+async function settleFlush() {
+  for (var i = 0; i < FLUSH_SETTLE_LIMIT && flushRunning; i++) {
+    await new Promise(function (resolve) { setTimeout(resolve, FLUSH_SETTLE_MS); });
+  }
+}
+
+async function applyLocalEdit(command) {
   var localId = "";
   var result = await libraryCache.mutateLocal(async function (snapshot) {
     var applied = PastexQueue.apply(snapshot, command);
@@ -535,13 +661,34 @@ async function queueLocalEdit(command) {
     if (command.kind === "create" && applied && applied.length) localId = applied[0];
     return applied;
   });
+  return { result: result, localId: localId };
+}
+
+async function queueLocalEdit(command) {
+  validateLocalEdit(command);
+  var attempt = await applyLocalEdit(command);
+  // A skip with a write in flight means the snapshot was simply not there yet;
+  // it is not an edit that cannot be applied.
+  if (attempt.result.skipped && flushRunning) {
+    await settleFlush();
+    attempt = await applyLocalEdit(command);
+  }
+  var result = attempt.result;
+  var localId = attempt.localId;
   var entry = queuedCommand(command, localId);
   if (!result.skipped && !entry) {
     // Accepted by the cache but with nothing to send is a bug, not a no-op:
     // the edit would look saved and never leave the machine.
     throw new Error("The edit could not be queued for Drive.");
   }
-  if (!result.skipped && entry) await deferredQueue.push([entry]);
+  if (!result.skipped && entry) {
+    // The edit itself travels with the entry. A flush that reads the library
+    // back cannot see a write Drive has not accepted yet, so the entry is
+    // replayed onto the fresh snapshot: without this the row would disappear
+    // from the panel while its text is still waiting in the queue.
+    entry.command = command;
+    await deferredQueue.push([entry]);
+  }
   // Nothing is scheduled here on purpose. The write waits until the tab this
   // panel belongs to is closed, which the content script reports as the page
   // goes away; an edit on a site never sends a request to Drive by itself.
@@ -558,27 +705,61 @@ async function queueLocalEdit(command) {
 // Run the queue serially. A transient failure (offline, a rate limit) keeps
 // the entry for the next flush; a permanent one (the row is gone) drops it
 // from the cache and from the queue so it cannot be retried forever.
-// options.readBack: false sends the queue and stops there. A new row keeps
-// its local id until the next read; the panel already shows it and the next
-// open (or the next flush) assigns the Drive id.
+// options.readBack: false sends the queue and stops there.
 async function flushSoon(options) {
   var readBack = !(options && options.readBack === false);
   if (flushRunning) return { sent: 0, failed: 0 };
   var entries = await deferredQueue.all();
   if (!entries.length) return { sent: 0, failed: 0 };
+  lastFlushRefusals = [];
+  // What the user is looking at, taken before the first write: a write
+  // invalidates the snapshot, and this is what puts it back afterwards with the
+  // new ids swapped in. Without it, sending the queue would cost a full read of
+  // the whole library just to learn the ids of the rows it just created.
+  var before = await libraryCache.current().catch(function () { return null; });
   flushRunning = true;
+  var renames = new Map();
   try {
     // One session for the whole flush; the identity cannot change halfway
     // through because a configuration change clears the queue.
     var session = null;
     try { session = await PastexLibrary.connect(PastexConfig, PastexDrive); }
     catch (ignored) { /* each entry retries its own connect and reports why */ }
-    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session);
+    // The map lives for this flush only: a later flush learns it from the rows
+    // it created, which is where the real ids come from.
+    var resolved = new Map();
+    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session, resolved);
+    renames = resolved;
   } finally {
     flushRunning = false;
-    // The writes are on Drive now; one full read turns every local id into the
-    // id Drive gave the row, so the cache matches Drive again.
-    if (readBack) { try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ } }
+    // The ids are the only thing the cache did not know: the rows, their order
+    // and their folded state are exactly what the user already sees, so they
+    // are put back as they were and only the `local-` ids are renamed.
+    var adopted = 0;
+    if (before && before.tree && renames.size) {
+      adopted = swapLocalIds(before.tree, renames);
+      dropLocalIds(before.index);
+    }
+    if (adopted || (before && before.tree)) {
+      try { await libraryCache.restore(before); } catch (ignored) { /* the next open syncs */ }
+    }
+    // A row created while this flush was already sending is not in the copy
+    // taken before it started, and its own entry arrived after the queue was
+    // read, so nothing else will put it back. It goes on top of the snapshot
+    // here; its write waits for the next flush like any other.
+    await replayMissingRows().catch(function () {});
+    if (readBack) {
+      // A row whose id was not learned still points at `local-`, and only a
+      // real read turns it into the id Drive gave it. The read is skipped when
+      // every id was adopted, which is the ordinary case; the panel already
+      // shows the rows either way.
+      if (!adopted) {
+        try { await libraryCache.sync(); } catch (ignored) { /* the next open syncs */ }
+      }
+      // Anything still queued is not on Drive yet, so it is put back on top of
+      // what the snapshot holds.
+      await replayPendingEdits();
+    }
     // A flush that cannot report what it did leaves a silent gap, so the
     // result says how many entries are still waiting.
     reportFlush(await pendingCount());
@@ -586,16 +767,53 @@ async function flushSoon(options) {
   return { sent: entries.length };
 }
 
+// A created row is named by a `local-` id until Drive answers with the real
+// one. Renaming it is a rename of the row itself: the body is keyed by content
+// hash, so the text and its place in the tree are untouched.
+function swapLocalIds(tree, renames) {
+  var swapped = 0;
+  (function walk(nodes) {
+    (nodes || []).forEach(function (node) {
+      if (renames.has(node.id)) { node.id = renames.get(node.id); swapped++; }
+      if (node.kind === "folder") walk(node.children);
+    });
+  })(tree || []);
+  return swapped;
+}
+
+// The order and the folded map name rows by id, so a renamed row leaves a stale
+// entry there. It is dropped rather than rewritten: the row rejoins the order on
+// the next reorder, and neither map decides what exists.
+function dropLocalIds(index) {
+  if (!index) return;
+  Object.keys(index.order || {}).forEach(function (parent) {
+    index.order[parent] = (index.order[parent] || []).filter(function (id) {
+      return String(id).indexOf("local-") !== 0;
+    });
+  });
+  Object.keys(index.collapsed || {}).forEach(function (id) {
+    if (String(id).indexOf("local-") === 0) delete index.collapsed[id];
+  });
+}
+
 function reportFlush(pending) {
   if (pending) console.warn("Pastex: " + pending + " queued write(s) still waiting.");
 }
+
+// What the last flush could not send, and why. A refusal is permanent, so the
+// entry is gone from the queue by the time Sync answers; without this the panel
+// would report a smaller number and leave the user guessing.
+var lastFlushRefusals = [];
 
 // One explicit sync, for the panel's button: send what the queue holds and
 // nothing else. It never reads the library back from Drive.
 async function syncNow() {
   if (siteBusy()) return { flushed: { sent: 0, failed: 0 }, deferred: true, pending: await pendingCount() };
   var flushed = await flushSoon({ readBack: false });
-  return { flushed: flushed, deferred: false, pending: await pendingCount() };
+  // "Sent 3." while three writes were refused is a lie the panel cannot see
+  // through, so the refusals travel back with the count.
+  return { flushed: flushed, deferred: false, pending: await pendingCount(),
+    refused: lastFlushRefusals.slice() };
 }
 
 async function pendingCount() {
@@ -622,8 +840,9 @@ function queuedIndex(entry, session, snapshot) {
   }
   // A reorder names the groups it changed. The tree in the cache is the best
   // description of a folder the entry does not name (a stale group), so it is
-  // used only to fill in what the entry left out.
-  var cached = PastexQueue.indexOf(snapshot && snapshot.tree);
+  // used only to fill in what the entry left out. The root folder's order must
+  // be keyed by its Drive id, which is the only key the loader looks up.
+  var cached = PastexQueue.indexOf(snapshot && snapshot.tree, session.rootId);
   var groups = entry.groups && entry.groups.length ? entry.groups : null;
   var parents = entry.parents && entry.parents.length ? entry.parents : null;
   if (groups) {
@@ -633,14 +852,29 @@ function queuedIndex(entry, session, snapshot) {
     });
   } else {
     Object.keys(cached.order).forEach(function (parent) {
-      index.order[parent === "" ? session.rootId : parent] = cached.order[parent];
+      index.order[parent] = cached.order[parent];
     });
   }
   return { action: "order", index: index };
 }
 
+// A row that never reached Drive is named by a `local-` id. A queued write that
+// points at one can only be sent after the write that creates it, so the flush
+// keeps the local -> Drive id map it learns and asks again next time. Anything
+// still unknown is deferred, never sent with a placeholder: an empty or local
+// parent is what Drive answers with "File not found: ." (one GET /files, one 404).
+function resolveDriveId(id, resolved) {
+  var value = id === undefined || id === null ? "" : String(id);
+  if (value.indexOf("local-") !== 0) return value;
+  return (resolved && resolved.get(value)) || "";
+}
+
+function unresolvedParent(parentId, resolved) {
+  return String(parentId || "").indexOf("local-") === 0 && !resolveDriveId(parentId, resolved);
+}
+
 // A queued edit, in Drive terms, with the ids already resolved.
-function driveCommandFor(entry, session, snapshot) {
+function driveCommandFor(entry, session, snapshot, resolved) {
   var rootId = session.rootId;
   var item = entry.item || {};
   if (entry.kind === "order") {
@@ -652,19 +886,33 @@ function driveCommandFor(entry, session, snapshot) {
     var ids = (entry.ids || []).filter(Boolean);
     return ids.length ? { action: "delete", ids: ids } : null;
   }
+  if (entry.kind === "move") {
+    // A row that never reached Drive has no parent there; it is uploaded in the
+    // right folder by its own create entry, so there is nothing to move.
+    var movable = (entry.ids || []).filter(function (id) { return String(id).indexOf("local-") !== 0; });
+    if (unresolvedParent(entry.parentId, resolved)) return movable.length ? { defer: true } : null;
+    return movable.length ? { action: "move", ids: movable,
+      parentId: resolveDriveId(entry.parentId, resolved) || rootId } : null;
+  }
 
   // A row that never reached Drive is uploaded whatever the last edit called
   // itself: editing a brand-new row must not become a rename of a file that
   // does not exist yet.
   if (entry.kind === "create" || item.isNew) {
+    var createParent = item.parentId || rootId;
+    // Its folder has not reached Drive yet: sending now would ask Drive for a
+    // folder id that does not exist.
+    if (unresolvedParent(createParent, resolved)) return { defer: true };
     return { action: "save", mode: item.kind === "folder" ? "new-folder" : "new-text",
-      name: entry.name, parentId: item.parentId || rootId, text: entry.text || "", rootId: rootId };
+      name: entry.name, parentId: resolveDriveId(createParent, resolved) || rootId,
+      text: entry.text || "", rootId: rootId };
   }
   // An edit of a row that already exists on Drive. A text row always takes the
   // body-writing mode: the body may have changed and the same call also
   // applies a rename, while "rename-text" would silently drop the body.
   return { action: "save", mode: item.kind === "folder" ? "rename-folder" : "edit-text",
-    name: entry.name, parentId: item.parentId || rootId, text: entry.text, rootId: rootId,
+    name: entry.name, parentId: resolveDriveId(item.parentId || rootId, resolved) || rootId,
+    text: entry.text, rootId: rootId,
     node: { id: item.id, kind: item.kind, name: item.driveName || entry.name,
       driveName: item.driveName || entry.name } };
 }
@@ -672,35 +920,125 @@ function driveCommandFor(entry, session, snapshot) {
 // session may be passed in: a flush connects once and reuses it, because a
 // connect is an OAuth token plus a folder read and a queue of ten entries
 // would otherwise pay for twenty requests.
-async function sendQueued(entry, session) {
-  var result;
-  try {
-    var active = session || await PastexLibrary.connect(PastexConfig, PastexDrive);
-    // Read once per entry, before the write lock: mutate() invalidates the
-    // snapshot before it runs, so a read taken inside would always be empty,
-    // and a read taken once per flush would miss the previous entry's write.
-    var snapshot = await libraryCache.current();
-    result = await libraryCache.mutate(async function () {
-      var command = driveCommandFor(entry, active, snapshot);
-      if (!command) return { skipped: true };
-      var written = await applyDriveCommand(active, command);
-      // A created row now has its Drive id, and the cached snapshot follows at
-      // once: this runs while the write still holds the library lock, before
-      // the invalidation that drops the snapshot.
-      return written;
-    });
-  } catch (err) {
-    var failure = err && err.message ? err.message : String(err);
-    if (isPermanentFailure(failure)) {
-      await deferredQueue.remove([entry.id]);
-      await libraryCache.dropLocal(entry);
-      return { ok: false, retry: false, error: failure };
+async function sendQueued(entry, session, resolved) {
+  // A revoked OAuth token answers 401 once. Forgetting the token and signing in
+  // again is enough, so a single retry is allowed here instead of leaving the
+  // whole queue stuck until the browser restarts. The retry is its own small
+  // loop around the body: a `continue` inside the catch would skip the
+  // bookkeeping below only by accident of nesting.
+  for (var attempt = 0; attempt < 2; attempt++) {
+    var result;
+    try {
+      var active = session || (await PastexLibrary.connect(PastexConfig, PastexDrive));
+      // Read once per entry, before the write lock: mutate() invalidates the
+      // snapshot before it runs, so a read taken inside would always be empty,
+      // and a read taken once per flush would miss the previous entry's write.
+      var snapshot = await libraryCache.current();
+      result = await libraryCache.mutate(async function () {
+        var command = driveCommandFor(entry, active, snapshot, resolved);
+        if (!command) return { skipped: true };
+        // Nothing is dropped: the entry waits in the queue until the write it
+        // depends on has produced an id.
+        if (command.defer) return { defer: true };
+        var written = await applyDriveCommand(active, command);
+        // A created row now has its Drive id, and the cached snapshot follows at
+        // once: this runs while the write still holds the library lock, before
+        // the invalidation that drops the snapshot.
+        return written;
+      });
+    } catch (err) {
+      var failure = err && err.message ? err.message : String(err);
+      if (/HTTP 401\b/.test(failure) && attempt === 0) {
+        // The token Google no longer accepts: drop it and ask for a fresh one.
+        if (session && session.token) await PastexDrive.removeCachedToken(session.token);
+        session = null;
+        continue;
+      }
+      if (isStorageQuotaRefusal(failure)) {
+        // Kept, not dropped: see isStorageQuotaRefusal. The panel is told at
+        // once so the reason is visible without pressing Sync, and the row
+        // stays in the cache because the write is still going to happen.
+        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure, kept: true });
+        notifyPanelsBlocked(failure);
+        return { ok: false, retry: true, error: failure };
+      }
+      if (isPermanentFailure(failure)) {
+        // Refused for good. The entry cannot be retried, but dropping it in
+        // silence is how a write disappears without a word: the panel is told,
+        // so the user sees why the row did not land, and an open panel repaints
+        // without the row that Drive does not have.
+        console.warn("Pastex: a queued write was refused and dropped:", failure);
+        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure });
+        await deferredQueue.remove([entry.id]);
+        await libraryCache.dropLocal(entry);
+        notifyPanelsDropped(failure);
+        return { ok: false, retry: false, error: failure };
+      }
+      // Offline, a rate limit or a missing configuration: keep it for later.
+      return { ok: false, retry: true, error: failure };
     }
-    // Offline, a rate limit or a missing configuration: keep it for later.
-    return { ok: false, retry: true, error: failure };
+    if (result && result.defer) return { ok: false, retry: true, error: "its folder has not reached Drive yet" };
+    // A create's Drive id is remembered for the rest of the flush, so the row
+    // created inside a new folder is uploaded into that folder.
+    if (resolved && result && result.id && entry.item && entry.item.localId)
+      resolved.set(entry.item.localId, result.id);
+    await deferredQueue.remove([entry.id]);
+    return { ok: true, id: result && result.id };
   }
-  await deferredQueue.remove([entry.id]);
-  return { ok: true, id: result && result.id };
+}
+
+// Put back a row the fresh snapshot does not have. A load that started before a
+// row was typed returns a library that has never heard of it, and the queue is
+// the only record of that row. Replaying the whole command list works but is
+// wrong for a command that edits a row Drive now describes differently; this
+// only adds what is missing, so a fresh listing is never reverted.
+async function replayMissingRows() {
+  var entries;
+  try { entries = await deferredQueue.all(); } catch (ignored) { return 0; }
+  var creates = entries.filter(function (entry) {
+    return entry && entry.command && entry.command.kind === "create" && entry.item && entry.item.localId;
+  });
+  if (!creates.length) return 0;
+  var added = await libraryCache.mutateLocal(async function (snapshot) {
+    var present = new Set();
+    (function walk(nodes) {
+      (nodes || []).forEach(function (node) { present.add(node.id); if (node.kind === "folder") walk(node.children); });
+    })(snapshot.tree || []);
+    var put = 0;
+    creates.forEach(function (entry) {
+      if (present.has(entry.item.localId)) return;
+      try { if (PastexQueue.apply(snapshot, entry.command).length) put++; } catch (ignored) { /* keep the rest */ }
+    });
+    return put ? [put] : [];
+  });
+  if (added && added.applied && added.applied.length) notifyPanelsLocal(await pendingCount());
+  return added && added.applied ? added.applied.length : 0;
+}
+
+// Replay the edits that are still waiting onto a freshly read snapshot, so the
+// panel never shows a library that forgot a local change. Only entries that
+// carry their command can be replayed; an older entry is left alone.
+async function replayPendingEdits() {
+  var entries;
+  try { entries = await deferredQueue.all(); } catch (ignored) { return 0; }
+  var replay = entries.filter(function (entry) { return entry && entry.command; });
+  if (!replay.length) return 0;
+  await libraryCache.mutateLocal(async function (snapshot) {
+    replay.forEach(function (entry) {
+      try { PastexQueue.apply(snapshot, entry.command); } catch (ignored) { /* keep the rest */ }
+    });
+    return [];
+  });
+  notifyPanelsLocal(await pendingCount());
+  return replay.length;
+}
+
+// A full Drive answers with a 403 that no retry can fix. That is a problem the
+// user can change (free space, or move the library into a Shared Drive), not a
+// write that is wrong, so the entry is kept: the text in it is user content and
+// dropping it would lose work.
+function isStorageQuotaRefusal(message) {
+  return /storage quota|storageQuotaExceeded/i.test(String(message || ""));
 }
 
 // A write that Drive refuses for good is not worth retrying; a network or
@@ -763,23 +1101,10 @@ ensureIdleAlarm();
 
 // The toolbar icon toggles the panel instead of only opening it. Chrome owns
 // that behavior: with openPanelOnActionClick it opens the panel on click and
-// closes it again on the next click (Chrome 141+), with no action.onClicked
-// listener competing for the click.
-function enableToolbarToggle() {
-  if (!chrome.sidePanel || typeof chrome.sidePanel.setPanelBehavior !== "function") return;
-  try {
-    var result = chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-    if (result && typeof result.catch === "function") result.catch(function () {});
-  } catch (ignored) { /* older Chrome keeps the toolbar click as it is */ }
-}
-enableToolbarToggle();
-
-// Content scripts must authenticate on an allowed site before opening or
-// closing a panel. Closing exists only from Chrome 141, so the sender is told
-// whether a toggle is possible instead of guessing.
-function panelToggleSupported() {
-  return !!(chrome.sidePanel && typeof chrome.sidePanel.close === "function");
-}
+// closes it again on the next click, with no action.onClicked listener
+// competing for the click. The manifest's minimum_chrome_version guarantees
+// the API exists, so there is no feature test here.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(function () {});
 
 // Content scripts must authenticate on an allowed site before opening a panel.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
@@ -808,9 +1133,12 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
           closing.expires < Date.now() || closing.revision !== siteRevision) {
         sendResponse({ ok: false }); return false;
       }
-      if (!panelToggleSupported()) { sendResponse({ ok: false, reason: "unsupported" }); return false; }
-      chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true, closed: true }); })
-        .catch(function () { sendResponse({ ok: false }); });
+      chrome.sidePanel.close({ windowId: sender.tab.windowId }).then(function () {
+        // The event does the same thing; setting it here too means a browser
+        // that has not fired it yet still answers the next request correctly.
+        markPanelWindow(sender.tab.windowId, false);
+        sendResponse({ ok: true, closed: true, open: false });
+      }).catch(function () { sendResponse({ ok: false }); });
       return true;
     }
     var grant = panelGrants.get(grantKey(sender));
@@ -821,7 +1149,11 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     // Do not await anything before this call: Chrome requires the user's
     // gesture, which arrives with the content script's mousedown message.
     try {
-      chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(function () { sendResponse({ ok: true }); })
+      chrome.sidePanel.open({ windowId: sender.tab.windowId }).then(function () {
+        markPanelWindow(sender.tab.windowId, true);
+        // The state after the gesture, so the launcher never has to assume it.
+        sendResponse({ ok: true, open: true });
+      })
         .catch(function () { sendResponse({ ok: false }); });
     } catch (err) { sendResponse({ ok: false }); return false; }
     return true;
@@ -837,7 +1169,10 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!allowed) { panelGrants.delete(key); sendResponse({ allowed: false }); return; }
       var token = crypto.randomUUID();
       panelGrants.set(key, { token: token, url: sender.url, tabUrl: sender.tab.url, expires: Date.now() + 30000, revision: revision });
-      sendResponse({ allowed: true, capability: token, toggle: panelToggleSupported() });
+      // The launcher asks this on every focus, so the answer carries the panel
+      // state: a close the page never heard about is corrected here.
+      sendResponse({ allowed: true, capability: token,
+        panelOpen: Number.isInteger(sender.tab.windowId) && panelWindows.has(sender.tab.windowId) });
     }).catch(function () { panelGrants.delete(key); sendResponse({ allowed: false }); });
     return true;
   }
@@ -848,6 +1183,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     activeTab().then(function (tab) {
       if (!tab) { sendResponse({ ok: true }); return; }
+      markPanelWindow(tab.windowId, !!message.open);
       return messageToLauncher(tab, { type: "pastex-panel-state", open: !!message.open });
     }).then(function () { sendResponse({ ok: true }); })
       .catch(function () { sendResponse({ ok: true }); });

@@ -11,22 +11,89 @@ archive-keyring.asc
 archive-keyring.gpg
 archive-keyring.fingerprint.txt
 pool/main/p/pastex/pastex_<version>_all.deb
-dists/mint/Release
-dists/mint/InRelease
-dists/mint/Release.gpg
-dists/mint/main/binary-all/Packages
-dists/mint/main/binary-all/Packages.gz
+dists/stable/Release
+dists/stable/InRelease
+dists/stable/Release.gpg
+dists/stable/main/binary-all/Packages
+dists/stable/main/binary-all/Packages.gz
 ```
 
-The suite is **`mint`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
+The pool holds **one** version at a time: only the build that the index names.
+`scripts/build-apt-repository.sh` refuses a directory with two versions in it,
+because APT installs a single version of an architecture-independent package
+and an older file would stay public forever without being reachable.
+
+`dists/stable/Release` carries `Date` and `Valid-Until` (30 days apart). APT
+refuses expired metadata instead of trusting a stale mirror, so a repository
+that stops being updated becomes a visible error rather than a silent risk.
+Both fields come from `SOURCE_DATE_EPOCH`, which is what keeps a rebuild of the
+same commit byte-identical. `scripts/build-apt-repository.sh` derives that value
+itself (the last commit time, exactly as `scripts/build-deb.sh` does) and works
+from any directory, so a rebuild does not depend on remembering to export it.
+The test suite checks that two builds of one checkout produce the same `Release`
+file.
+
+Before anything is uploaded, `scripts/verify-site.py` checks the directory that
+will be published: the index names a package that exists, `Packages.gz` matches
+`Packages`, the pool holds exactly one version, only the current suite is
+published, `Release` digests match the files they describe, `checksums.txt`
+matches the files it lists, every local link on `index.html` resolves, and a
+signed archive really verifies with `gpgv` against the published keyring. CI runs
+it as its own step, so a deploy that would publish a broken archive fails
+instead of going live.
+
+The suite is **`stable`** — a fixed archive label for this project, not a Mint release codename — because the package is architecture-independent and is not built per release. The archive URL is `https://patrickbuhagiar24.github.io/paste/`, so `apt update` reports:
 
 ```text
-Hit:6 https://patrickbuhagiar24.github.io/paste mint InRelease
+Hit:6 https://patrickbuhagiar24.github.io/paste stable InRelease
+```
+
+## Migrating from the retired `mint` suite
+
+The archive used to publish `dists/mint/`. It now publishes `dists/stable/`,
+and nothing writes `dists/mint/` any more. A machine that was configured for
+`mint` cannot see the new suite on its own, so it must replace the source file
+once. The signing key does not change.
+
+```bash
+# 1. Replace the suite in the installed source file.
+sudo sed -i 's/^Suites: mint$/Suites: stable/' /etc/apt/sources.list.d/pastex.sources
+# 2. Re-read the signed metadata.
+sudo apt update
+# 3. Confirm the new suite is the one being read.
+apt-cache policy pastex
+```
+
+A one-line check before you change anything shows whether migration is needed:
+
+```bash
+grep -q '^Suites: mint$' /etc/apt/sources.list.d/pastex.sources 2>/dev/null &&
+  echo "still on the retired mint suite" || echo "already on stable"
+```
+
+What the user sees without this step: `apt update` reports
+
+```text
+E: The repository 'https://patrickbuhagiar24.github.io/paste mint Release' does not have a Release file.
+N: Updating from such a repository can't be done securely, and is therefore disabled by default.
+```
+
+That message is the only symptom. Installed packages keep working; only
+updates stop.
+
+Alternatively, reinstall the published source file verbatim, which also
+restores the correct `Signed-By` line:
+
+```bash
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  -o /tmp/pastex.sources https://patrickbuhagiar24.github.io/paste/pastex.sources
+sudo install -m 0644 /tmp/pastex.sources /etc/apt/sources.list.d/pastex.sources
+sudo apt update
 ```
 
 ## Use the published archive
 
-The published `pastex.sources` file is installed verbatim, after the key fingerprint has been confirmed through an independent channel. This keeps the deb822 entry in sync with the signed `dists/mint/InRelease` metadata.
+The published `pastex.sources` file is installed verbatim, after the key fingerprint has been confirmed through an independent channel. This keeps the deb822 entry in sync with the signed `dists/stable/InRelease` metadata.
 
 ```bash
 (
@@ -115,7 +182,7 @@ A fingerprint served only by the repository website is not independent verificat
 - the GitHub Release notes for the version you are installing (created by the tag workflow);
 - a signed maintainer announcement or another maintainer-controlled channel you already trust.
 
-See [SECURITY.md](../SECURITY.md) for the verification checklist. If the values differ or the key has changed unexpectedly, stop and contact the maintainer.
+See [Security and verification](../README.md#security-and-verification) for the checklist. If the values differ or the key has changed unexpectedly, stop and contact the maintainer.
 
 ## Build locally
 
@@ -128,8 +195,8 @@ The individual steps are:
 
 ```bash
 ./scripts/build-deb.sh
-./scripts/build-apt-repository.sh dist apt-repo/dist mint
-APT_SIGNING_KEY_ID=<fingerprint> ./scripts/sign-apt-repository.sh apt-repo/dist mint
+./scripts/build-apt-repository.sh dist apt-repo/dist stable
+APT_SIGNING_KEY_ID=<fingerprint> ./scripts/sign-apt-repository.sh apt-repo/dist stable
 ```
 
 The signer prints the key algorithm, bit length, capabilities, and fingerprint (public metadata only) before signing, and aborts with a hint when `GPG_PASSPHRASE` is missing for a protected key.
