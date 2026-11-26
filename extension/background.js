@@ -472,13 +472,35 @@ async function applyDriveCommand(session, command) {
     if (node && node.kind === "text") driveName = name.replace(/\.txt$/i, "") + (/\.txt$/i.test(node.driveName || "") ? ".txt" : "");
     if (!node || (driveName !== node.driveName && driveName !== node.name)) {
       var children = await PastexDrive.listChildren(token, command.parentId);
+      if (!node && command.operationId) {
+        var recovered = children.find(function (child) {
+          return child.properties && child.properties.pastex_operation === command.operationId;
+        });
+        if (recovered) {
+          if (recovered.name !== driveName ||
+              (mode === "new-text" && await PastexDrive.downloadText(token, recovered.id) !== command.text))
+            throw new Error("Conflict: a previously created item changed in Drive. The local edit is kept; review both versions before syncing.");
+          return { id: recovered.id };
+        }
+      }
       if (children.some(function (child) { return child.name === driveName && child.id !== (node && node.id); }))
         throw new Error("An item with that name already exists in this folder.");
     }
-    if (mode === "new-folder") return { id: await PastexDrive.createFolder(token, name, command.parentId) };
-    if (mode === "new-text") return { id: (await PastexDrive.uploadNew(token, command.parentId, name.replace(/\.txt$/i, ""), command.text)).id };
+    if (mode === "new-folder") return { id: await PastexDrive.createFolder(token, name, command.parentId, undefined, command.operationId) };
+    if (mode === "new-text") return { id: (await PastexDrive.uploadNew(token, command.parentId, name.replace(/\.txt$/i, ""), command.text, undefined, false, command.operationId)).id };
     if (!node || !node.id || ["edit-text", "rename-text", "rename-folder"].indexOf(mode) === -1) throw new Error("Invalid edit request.");
-    if (mode === "edit-text" && command.text !== node.text) await PastexDrive.updateText(token, node.id, command.text);
+    if (mode === "edit-text" && command.text !== node.text) {
+      if (typeof command.baseText === "string") {
+        var currentText = await PastexDrive.downloadText(token, node.id);
+        if (currentText !== command.baseText && currentText !== command.text)
+          throw new Error("Conflict: this snippet changed in Drive. The local edit is kept; review both versions before syncing.");
+        if (currentText !== command.text) await PastexDrive.updateText(token, node.id, command.text);
+      } else {
+        // Older queued edits have no baseline. Do not overwrite a file whose
+        // previous contents cannot be verified.
+        throw new Error("Conflict: this queued edit has no original text. The local edit is kept; review it before syncing.");
+      }
+    }
     if (driveName !== (node.driveName || node.name)) await PastexDrive.renameFile(token, node.id, driveName);
     return { id: node.id };
   }
@@ -653,47 +675,43 @@ async function settleFlush() {
 }
 
 async function applyLocalEdit(command) {
-  var localId = "";
+  var entry = null;
   var result = await libraryCache.mutateLocal(async function (snapshot) {
-    var applied = PastexQueue.apply(snapshot, command);
-    // A create's new row is named here, so the upload can rename it in the
-    // cache to the Drive id it receives.
-    if (command.kind === "create" && applied && applied.length) localId = applied[0];
+    // Prepare on a copy. Persist the command before publishing the cached
+    // change: storage failure cannot leave an edit that looks saved but has no
+    // durable queue entry. The queue is the recovery record if the worker stops
+    // between these two steps.
+    var draft = JSON.parse(JSON.stringify(snapshot));
+    var previous = command.kind === "edit" && command.item && command.item.id ?
+      PastexQueue.find(draft.tree, command.item.id) : null;
+    var baseText = previous && previous.kind === "text" && typeof previous.text === "string" &&
+      String(previous.id).indexOf("local-") !== 0 ? previous.text : undefined;
+    var applied = PastexQueue.apply(draft, command);
+    var createdId = command.kind === "create" && applied.length ? applied[0] : "";
+    entry = queuedCommand(command, createdId);
+    if (!entry) throw new Error("The edit could not be queued for Drive.");
+    if (baseText !== undefined) entry.baseText = baseText;
+    if (createdId && command.item) command.item.localId = createdId;
+    entry.command = command;
+    await deferredQueue.push([entry]);
+    Object.keys(snapshot).forEach(function (key) { delete snapshot[key]; });
+    Object.assign(snapshot, draft);
     return applied;
   });
-  return { result: result, localId: localId };
+  return { result: result, entry: entry };
 }
 
 async function queueLocalEdit(command) {
   validateLocalEdit(command);
   var attempt = await applyLocalEdit(command);
-  // A skip with a write in flight means the snapshot was simply not there yet;
-  // it is not an edit that cannot be applied.
   if (attempt.result.skipped && flushRunning) {
     await settleFlush();
     attempt = await applyLocalEdit(command);
   }
   var result = attempt.result;
-  var localId = attempt.localId;
-  var entry = queuedCommand(command, localId);
-  if (!result.skipped && !entry) {
-    // Accepted by the cache but with nothing to send is a bug, not a no-op:
-    // the edit would look saved and never leave the machine.
-    throw new Error("The edit could not be queued for Drive.");
-  }
-  if (!result.skipped && entry) {
-    // The edit itself travels with the entry. A flush that reads the library
-    // back cannot see a write Drive has not accepted yet, so the entry is
-    // replayed onto the fresh snapshot: without this the row would disappear
-    // from the panel while its text is still waiting in the queue.
-    entry.command = command;
-    await deferredQueue.push([entry]);
-  }
-  // Nothing is scheduled here on purpose. The write waits until the tab this
-  // panel belongs to is closed, which the content script reports as the page
-  // goes away; an edit on a site never sends a request to Drive by itself.
-  if (!result.skipped) notifyPanelsLocal(result.pending);
-  return { applied: result.applied, pending: result.pending, queued: !!entry, local: true };
+  if (result.skipped) throw new Error("Cannot save changes while the library is unavailable. Try again.");
+  notifyPanelsLocal(result.pending);
+  return { applied: result.applied, pending: result.pending, queued: !!attempt.entry, local: true };
 }
 
 // --- flush: send the queue once the tab is closed -------------------------
@@ -719,6 +737,7 @@ async function flushSoon(options) {
   var before = await libraryCache.current().catch(function () { return null; });
   flushRunning = true;
   var renames = new Map();
+  var sentCount = 0;
   try {
     // One session for the whole flush; the identity cannot change halfway
     // through because a configuration change clears the queue.
@@ -728,7 +747,11 @@ async function flushSoon(options) {
     // The map lives for this flush only: a later flush learns it from the rows
     // it created, which is where the real ids come from.
     var resolved = new Map();
-    for (var i = 0; i < entries.length; i++) await sendQueued(entries[i], session, resolved);
+    for (var i = 0; i < entries.length; i++) {
+      var outcome = await sendQueued(entries[i], session, resolved);
+      if (!outcome.ok) break;
+      sentCount++;
+    }
     renames = resolved;
   } finally {
     flushRunning = false;
@@ -764,7 +787,7 @@ async function flushSoon(options) {
     // result says how many entries are still waiting.
     reportFlush(await pendingCount());
   }
-  return { sent: entries.length };
+  return { sent: sentCount };
 }
 
 // A created row is named by a `local-` id until Drive answers with the real
@@ -905,14 +928,15 @@ function driveCommandFor(entry, session, snapshot, resolved) {
     if (unresolvedParent(createParent, resolved)) return { defer: true };
     return { action: "save", mode: item.kind === "folder" ? "new-folder" : "new-text",
       name: entry.name, parentId: resolveDriveId(createParent, resolved) || rootId,
-      text: entry.text || "", rootId: rootId };
+      text: entry.text || "", rootId: rootId, operationId: item.localId || entry.id };
   }
   // An edit of a row that already exists on Drive. A text row always takes the
   // body-writing mode: the body may have changed and the same call also
   // applies a rename, while "rename-text" would silently drop the body.
-  return { action: "save", mode: item.kind === "folder" ? "rename-folder" : "edit-text",
+  return { action: "save", mode: item.kind === "folder" ? "rename-folder" :
+      (entry.kind === "rename" ? "rename-text" : "edit-text"),
     name: entry.name, parentId: resolveDriveId(item.parentId || rootId, resolved) || rootId,
-    text: entry.text, rootId: rootId,
+    text: entry.text, baseText: entry.baseText, rootId: rootId,
     node: { id: item.id, kind: item.kind, name: item.driveName || entry.name,
       driveName: item.driveName || entry.name } };
 }
@@ -954,7 +978,7 @@ async function sendQueued(entry, session, resolved) {
         session = null;
         continue;
       }
-      if (isStorageQuotaRefusal(failure)) {
+      if (/^Conflict:/.test(failure) || isStorageQuotaRefusal(failure)) {
         // Kept, not dropped: see isStorageQuotaRefusal. The panel is told at
         // once so the reason is visible without pressing Sync, and the row
         // stays in the cache because the write is still going to happen.
@@ -963,16 +987,11 @@ async function sendQueued(entry, session, resolved) {
         return { ok: false, retry: true, error: failure };
       }
       if (isPermanentFailure(failure)) {
-        // Refused for good. The entry cannot be retried, but dropping it in
-        // silence is how a write disappears without a word: the panel is told,
-        // so the user sees why the row did not land, and an open panel repaints
-        // without the row that Drive does not have.
-        console.warn("Pastex: a queued write was refused and dropped:", failure);
-        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure });
-        await deferredQueue.remove([entry.id]);
-        await libraryCache.dropLocal(entry);
-        notifyPanelsDropped(failure);
-        return { ok: false, retry: false, error: failure };
+        // Keep refused operations until the user can resolve the cause. A
+        // permission error or a temporary missing file must not erase work.
+        lastFlushRefusals.push({ kind: entry.kind, name: entry.name || "", error: failure, kept: true });
+        notifyPanelsBlocked(failure);
+        return { ok: false, retry: true, error: failure };
       }
       // Offline, a rate limit or a missing configuration: keep it for later.
       return { ok: false, retry: true, error: failure };
@@ -1107,6 +1126,17 @@ ensureIdleAlarm();
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(function () {});
 
 // Content scripts must authenticate on an allowed site before opening a panel.
+var recoveryFlight = null;
+async function recoverQueuedCache(result) {
+  if (!recoveryFlight) {
+    recoveryFlight = (async function () {
+      if (await pendingCount()) { await replayPendingEdits(); return true; }
+      return false;
+    })().catch(function (err) { recoveryFlight = null; throw err; });
+  }
+  return await recoveryFlight ? libraryCache.get(false) : result;
+}
+
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-reload-sites") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
@@ -1115,9 +1145,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     // one. The cached configuration itself is KEPT: the panel has just written
     // it, and it is the only source the worker has.
     libraryCache.configurationChanged();
-    deferredQueue.clear().catch(function () {});
-    var refreshed = Promise.resolve();
-    Promise.resolve(refreshed).catch(function () {}).then(function () { return configureSites(); }).then(function () { sendResponse({ ok: true }); })
+    configureSites().then(function () { sendResponse({ ok: true }); })
       .catch(function (err) { sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;
   }
@@ -1242,7 +1270,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (message && message.type === "pastex-panel-library") {
     if (!trustedPanel(sender)) { sendResponse({ ok: false, error: "Unauthorized request." }); return false; }
     clearProgress();
-    trackPanelOperation(libraryCache.get(!!message.force, broadcastProgress))
+    trackPanelOperation(libraryCache.get(!!message.force, broadcastProgress).then(recoverQueuedCache))
       .then(function (result) { clearProgress(); sendResponse({ ok: true, result: result }); })
       .catch(function (err) { clearProgress(); sendResponse({ ok: false, error: err.message || String(err) }); });
     return true;

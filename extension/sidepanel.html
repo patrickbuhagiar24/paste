@@ -11,18 +11,18 @@
       <div class="toolbar" role="toolbar" aria-label="Snippet actions">
         <button id="btn-collapse-all" class="icon" title="Collapse all folders" aria-label="Collapse all folders" disabled>⤡</button>
         <button id="btn-select" class="icon" aria-pressed="false"
-                title="Select items to move or delete" aria-label="Select items to move or delete">☑</button>
-        <button id="btn-sync" class="icon" title="Sync: send the changes waiting in the queue to Google Drive"
-                aria-label="Sync: send the waiting changes to Google Drive">↻</button>
-        <button id="btn-config" class="icon" title="Config: read the configuration file"
-                aria-label="Config: read the configuration file">⚙</button>
+                title="Select items" aria-label="Select items">☑</button>
+        <button id="btn-sync" class="icon" title="Sync changes to Drive"
+                aria-label="Sync changes to Drive">↻</button>
+        <button id="btn-config" class="icon" title="Choose config file"
+                aria-label="Choose config file">⚙</button>
         <button id="btn-text" class="icon primary" title="New snippet" aria-label="New snippet">📝</button>
         <button id="btn-folder" class="icon primary" title="New folder" aria-label="New folder">📁</button>
         <!-- Newline on insert: the toggle decides what a click on a row appends;
              the row button keeps its own, one-time meaning. Icon only, so the
              state is read from the pressed style and the title. -->
-        <button id="btn-newline" class="icon" aria-pressed="false"
-                title="Newline when inserting: off" aria-label="Append a newline when inserting a snippet">⏎</button>
+        <button id="btn-newline" class="icon no-newline" aria-pressed="false"
+                title="Final newline on — click to remove it" aria-label="No final newline">⏎</button>
       </div>
       <!-- One status line. The connection state and the age of the last check
            are not shown separately: a failure has to be readable, and two more
@@ -61,9 +61,9 @@
       <button id="btn-up" class="icon" disabled title="Move up" aria-label="Move up">↑</button>
       <button id="btn-down" class="icon" disabled title="Move down" aria-label="Move down">↓</button>
       <button id="btn-move-selected" class="icon" disabled title="Move to folder…"
-              aria-label="Move the selected items to a folder">↪</button>
+              aria-label="Move selected items">↪</button>
       <button id="btn-delete-selected" class="icon danger" disabled title="Delete selected"
-              aria-label="Delete the selected items">🗑</button>
+              aria-label="Delete selected items">🗑</button>
     </div>
     <script src="store.js"></script>
     <script src="sites.js"></script>

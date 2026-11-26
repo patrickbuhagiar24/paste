@@ -290,3 +290,18 @@ test("WhatsApp falls back to editing commands when paste is not handled", async 
     { id: "pastex-extension-id" }, () => {});
   assert.deepEqual(commands, ["insertText:snippet", "insertLineBreak"]);
 });
+
+test("a partially successful contenteditable insertion is not repeated", async () => {
+  const page = setupContent();
+  const box = page.root.appendChild(page.element("div"));
+  box.isContentEditable = true;
+  const calls = [];
+  page.document.execCommand = (name, _ui, text) => { calls.push([name, text]); return name !== "insertLineBreak"; };
+  box.focus(); await tick();
+  let result;
+  page.events.message({ type: "pastex-insert", text: "first\nsecond" },
+    { id: "pastex-extension-id" }, (response) => { result = response; });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "partial");
+  assert.deepEqual(calls.map((c) => c[0]), ["insertText", "insertLineBreak"]);
+});

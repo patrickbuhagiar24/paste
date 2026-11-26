@@ -226,27 +226,35 @@
 
   function create(storage) {
     var cached = null;
+    var writes = Promise.resolve();
+
+    function serialize(fn) {
+      var operation = writes.then(fn);
+      writes = operation.catch(function () {});
+      return operation;
+    }
 
     async function read() {
       if (cached) return cached;
       if (!storage) { cached = []; return cached; }
-      try {
-        var stored = (await storage.get(KEY))[KEY];
-        cached = Array.isArray(stored) ? stored : [];
-      } catch (ignored) { cached = []; }
+      var stored = (await storage.get(KEY))[KEY];
+      cached = Array.isArray(stored) ? stored : [];
       return cached;
     }
 
     async function write(list) {
-      cached = list;
-      if (!storage) return;
+      if (!storage) throw new Error("Cannot save pending changes: storage unavailable.");
       try {
         if (list.length) await storage.set({ [KEY]: list });
         else await storage.remove(KEY);
-      } catch (ignored) { /* the queue survives in memory for this session */ }
+      } catch (err) {
+        throw new Error("Cannot save pending changes. Check browser storage and try again.");
+      }
+      cached = list;
     }
 
     async function push(commands) {
+      return serialize(async function () {
       var list = (await read()).slice();
       var at = Date.now();
       (commands || []).forEach(function (command, order) {
@@ -264,23 +272,25 @@
         if (at2 !== -1 && command.kind === "delete") { list.splice(at2, 1); return; }
         list.push(command);
       });
-      // A very long queue is a sign that the flush never ran; keep the newest
-      // edits and say so instead of growing without bound.
-      if (list.length > MAX) list = list.slice(list.length - MAX);
+      // Never discard unsynced edits. Refuse new work until the queue is sent.
+      if (list.length > MAX) throw new Error("Pending changes are full. Sync before editing again.");
       await write(list);
       return list;
+      });
     }
 
-    async function all() { return (await read()).slice().sort(byOrder); }
+    async function all() { await writes; return (await read()).slice().sort(byOrder); }
 
     async function remove(ids) {
+      return serialize(async function () {
       var drop = new Set(ids || []);
       var list = (await read()).filter(function (command) { return !drop.has(command.id); });
       await write(list);
       return list;
+      });
     }
 
-    async function clear() { await write([]); }
+    async function clear() { return serialize(function () { return write([]); }); }
 
     function byOrder(a, b) {
       return (a.queuedAt || 0) - (b.queuedAt || 0) || (a.order || 0) - (b.order || 0);

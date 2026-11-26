@@ -658,3 +658,11 @@ test("a missing client secret is explained as a configuration gap, not repeated 
       return true;
     });
 });
+
+test("created files and folders carry the retry operation marker", async () => {
+  const fetchImpl = stubFetch(async () => jsonResponse({ id: "created" }));
+  await Drive.uploadNew("tok", "parent", "Note", "hello", fetchImpl, false, "local-test");
+  assert.match(fetchImpl.calls[0].options.body, /"pastex_operation":"local-test"/);
+  await Drive.createFolder("tok", "Folder", "parent", fetchImpl, "local-folder");
+  assert.equal(JSON.parse(fetchImpl.calls[1].options.body).properties.pastex_operation, "local-folder");
+});

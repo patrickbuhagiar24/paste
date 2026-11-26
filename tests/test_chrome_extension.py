@@ -1,7 +1,7 @@
 """Pastex for Chrome (2.x): manifest, sources, CRX packaging, apt registration.
 
 The shipped product is extension/, packed into a signed .crx and registered
-for auto-detection by Chrome/Chromium through external-install JSON files.
+for auto-detection by Chrome through external-install JSON files.
 """
 
 import json
@@ -141,7 +141,7 @@ def test_the_panel_has_one_status_line_and_keeps_the_sync_button():
     assert "lastCheckedAt" not in script
     assert "renderDriveBar" not in script
     assert 'id="btn-sync"' in panel, "the manual sync stays the fallback"
-    assert "Sync: send the waiting changes to Google Drive" in panel, "the icon still says it is Sync"
+    assert "Sync changes to Drive" in panel, "the icon still says it is Sync"
     assert "Refresh" not in panel, "the old label is gone"
     # The create buttons moved to the end of the toolbar.
     toolbar = panel.split('<div class="toolbar"')[1].split("</div>")[0]
@@ -378,7 +378,7 @@ def test_pack_crx_excludes_tests_and_docs(tmp_path):
     assert "README.md" not in names
 
 
-# --- apt registration (auto-detection by Chrome/Chromium) ------------------
+# --- apt registration (auto-detection by Chrome) ------------------
 
 
 def test_build_deb_takes_the_version_from_the_manifest():
@@ -394,7 +394,7 @@ def test_build_deb_registers_the_crx_for_autodetection():
     assert "PASTEX_CRX_KEY" in script
     assert '"external_crx": "/usr/share/pastex/pastex.crx"' in script
     assert "/usr/share/google-chrome/extensions" in script
-    assert "/usr/share/chromium/extensions" in script
+    assert "/usr/share/chromium/extensions" not in script
     assert '"external_version"' in script
 
 
@@ -403,13 +403,13 @@ def test_the_build_registers_the_crx_for_autodetection():
     assert "scripts/pack-crx.py" in build
     assert "external_crx" in build
     assert "/usr/share/google-chrome/extensions" in build
-    assert "/usr/share/chromium/extensions" in build
+    assert "/usr/share/chromium/extensions" not in build
 
 
 def test_control_recommends_a_browser():
     control = (ROOT / "debian" / "control").read_text(encoding="utf-8")
     assert "google-chrome-stable" in control
-    assert "chromium" in control
+    assert "Recommends: google-chrome-stable" in control
     assert "python3-tk" not in control
 
 
@@ -597,7 +597,7 @@ def test_sidepanel_has_collapse_all_and_verbatim_insert():
     assert 'typeof node.text === "string" ? node.text : ""' in script
     # The newline behaviour lives in one helper, used by the row click, the row
     # button and the clipboard fallback, so the three cannot disagree.
-    assert "function textForInsert(node, forceNewline)" in script
+    assert "function textForInsert(node, withoutNewline)" in script
     assert script.count("textForInsert(") >= 2
     assert "pastex-newline-on-insert" in script
 

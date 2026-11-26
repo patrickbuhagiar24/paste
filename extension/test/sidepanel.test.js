@@ -267,7 +267,7 @@ test("select mode prevents paste, moves multiple selected items and deletes them
   // state, the pressed style and the label carry the meaning.
   assert.doesNotMatch(String(elements["btn-select"].textContent), /Select|Done/,
     "select mode must not put a word in the button");
-  assert.match(elements["btn-select"].title, /select mode/i);
+  assert.match(elements["btn-select"].title, /selection/i);
   rowFor("B").listeners.click();
   rowFor("C").listeners.click();
   assert.equal(elements["selection-count"].textContent, "2", "the count is the number alone");
@@ -298,8 +298,8 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   const { elements, messages } = panelHarness(false);
   await settled();
   let row = elements.tree.children.find((r) => allText(r).includes("Synced"));
-  const buttons = row.children.filter((child) => child.className === "mini");
-  assert.deepEqual(buttons.map((child) => child.title), ["Insert with a newline", "Edit", "Delete"],
+  const buttons = row.children.filter((child) => child.className.split(" ").includes("mini"));
+  assert.deepEqual(buttons.map((child) => child.title), ["Insert without final newline", "Edit", "Delete"],
     "one Edit button, not a Rename button next to it, with the newline button leftmost");
   // A snippet offers rename, an edit of its text and a move.
   buttons[1].listeners.click({ stopPropagation() {} });
@@ -313,7 +313,7 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   elements["editor-cancel"].listeners.click();
   // A folder can be renamed and moved, but has no text to edit.
   const folderRow = elements.tree.children.find((r) => allText(r).includes("Empty Folder"));
-  folderRow.children.filter((child) => child.className === "mini")[1].listeners.click({ stopPropagation() {} });
+  folderRow.children.filter((child) => child.className.split(" ").includes("mini"))[1].listeners.click({ stopPropagation() {} });
   assert.deepEqual(elements["row-menu"].children.map((item) => item.textContent),
     ["Rename folder", "Move to folder…"]);
   elements["row-menu"].children[0].listeners.click({ stopPropagation() {} });
@@ -323,8 +323,8 @@ test("rename and move live in the Edit menu, not in their own row buttons", asyn
   elements.search.listeners.input({ target: elements.search });
   await new Promise((resolve) => setTimeout(resolve, 170));
   row = elements.tree.children[0];
-  assert.deepEqual(row.children.filter((child) => child.className === "mini").map((child) => child.title),
-    ["Insert with a newline", "Edit", "Delete"]);
+  assert.deepEqual(row.children.filter((child) => child.className.split(" ").includes("mini")).map((child) => child.title),
+    ["Insert without final newline", "Edit", "Delete"]);
   row.listeners.click();
   await settled();
   assert.equal(messages.filter((m) => m.type === "pastex-sidepanel-insert").length, 1);
@@ -374,7 +374,7 @@ test("a folder cannot be moved into itself or into its own content", async () =>
   const { elements } = panelHarness(false, { records });
   await settled();
   const outer = elements.tree.children.find((r) => allText(r).includes("Outer"));
-  outer.children.filter((child) => child.className === "mini")[1].listeners.click({ stopPropagation() {} });
+  outer.children.filter((child) => child.className.split(" ").includes("mini"))[1].listeners.click({ stopPropagation() {} });
   elements["row-menu"].children.find((item) => item.textContent === "Move to folder…").listeners.click({ stopPropagation() {} });
   const offered = elements["editor-parent"].children.map((option) => option.textContent);
   // The folder itself and everything inside it are not destinations.
@@ -391,33 +391,33 @@ test("a failed insertion does not silently copy the snippet", async () => {
   assert.match(elements.status.textContent, /Could not insert/);
 });
 
-test("the toolbar newline toggle appends one newline to every insert, and survives a repaint", async () => {
+test("the toolbar toggle suppresses the default trailing newline", async () => {
   const { elements, messages } = panelHarness(false);
   await settled();
   const row = () => elements.tree.children.find((r) => allText(r).includes("Synced"));
-  // Off by default: the snippet goes in verbatim.
+  // Off by default: a trailing newline is appended.
   assert.equal(elements["btn-newline"]["aria-pressed"], "false");
   row().listeners.click();
   await settled();
   const inserted = () => messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
-  assert.deepEqual(inserted(), ["from Google Drive"]);
-  // On: one newline is appended.
+  assert.deepEqual(inserted(), ["from Google Drive\n"]);
+  // On: no trailing newline.
   elements["btn-newline"].listeners.click();
   assert.equal(elements["btn-newline"]["aria-pressed"], "true");
-  assert.match(elements["btn-newline"].title, /on$/);
+  assert.equal(elements["btn-newline"].title, "No final newline — click to add one");
   row().listeners.click();
   await settled();
-  assert.deepEqual(inserted()[1], "from Google Drive\n");
+  assert.deepEqual(inserted()[1], "from Google Drive");
   elements["btn-newline"].listeners.click();
   assert.equal(elements["btn-newline"]["aria-pressed"], "false", "a second click turns it off");
-  assert.match(elements["btn-newline"].title, /off$/);
+  assert.equal(elements["btn-newline"].title, "Final newline on — click to remove it");
 });
 
 test("the Config button says whether a configuration exists", async () => {
   const { elements } = panelHarness(false);
   await settled();
   assert.equal(elements["btn-config"]["data-configured"], "true", "a readable configuration means configured");
-  assert.match(elements["btn-config"].title, /configured, click to choose another/);
+  assert.match(elements["btn-config"].title, /ready — change file/);
 
   // Nothing picked yet: the panel's read fails with the message that says so.
   const missing = panelHarness(false, {
@@ -425,11 +425,11 @@ test("the Config button says whether a configuration exists", async () => {
   });
   await settled();
   assert.equal(missing.elements["btn-config"]["data-configured"], "false");
-  assert.match(missing.elements["btn-config"].title, /no configuration yet/);
-  assert.match(missing.elements["btn-config"]["aria-label"], /no configuration yet/);
+  assert.match(missing.elements["btn-config"].title, /choose a file/);
+  assert.match(missing.elements["btn-config"]["aria-label"], /choose a file/);
 });
 
-test("the setting is remembered and never adds a second trailing newline", async () => {
+test("the setting is remembered and removes existing trailing newlines", async () => {
   const records = [{ id: "item1", name: "Padded.txt", mimeType: "text/plain", text: "already padded\n", parent: "root" }];
   const { elements, messages } = panelHarness(false, { records, storage: { "pastex-newline-on-insert": true } });
   await settled();
@@ -437,29 +437,30 @@ test("the setting is remembered and never adds a second trailing newline", async
   elements.tree.children[0].listeners.click();
   await settled();
   const inserted = messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
-  assert.deepEqual(inserted, ["already padded\n"], "one trailing newline, never two");
+  assert.deepEqual(inserted, ["already padded"], "trailing newline is removed");
 });
 
-test("the row newline button appends once and leaves the toolbar setting alone", async () => {
+test("the row button removes trailing newlines once and leaves the toolbar setting alone", async () => {
   const { elements, messages } = panelHarness(false);
   await settled();
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
-  const newlineButton = row.children.find((child) => child.title === "Insert with a newline");
+  const newlineButton = row.children.find((child) => child.title === "Insert without final newline");
   assert.ok(newlineButton, "the newline button sits on the row");
-  const titles = row.children.filter((child) => child.className === "mini").map((child) => child.title);
-  assert.equal(titles[0], "Insert with a newline", "it is the leftmost row button, before Edit");
+  assert.match(newlineButton.className, /no-newline/, "the row shows the crossed-out newline icon");
+  const titles = row.children.filter((child) => child.className.split(" ").includes("mini")).map((child) => child.title);
+  assert.equal(titles[0], "Insert without final newline", "it is the leftmost row button, before Edit");
   assert.equal(titles[1], "Edit");
   newlineButton.listeners.click({ stopPropagation() {} });
   await settled();
   const inserted = () => messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
-  assert.deepEqual(inserted(), ["from Google Drive\n"]);
+  assert.deepEqual(inserted(), ["from Google Drive"]);
   // Unlike the toolbar toggle, the row button is an action, not a mode.
   assert.equal(elements["btn-newline"]["aria-pressed"], "false");
-  // The next plain click is back to verbatim: the row button did not switch
+  // The next plain click adds a newline: the row button did not switch
   // anything on.
   elements.tree.children.find((r) => allText(r).includes("Synced")).listeners.click();
   await settled();
-  assert.deepEqual(inserted()[1], "from Google Drive");
+  assert.deepEqual(inserted()[1], "from Google Drive\n");
 });
 
 test("clipboard fallback runs only when no editable field is focused", async () => {
@@ -468,7 +469,7 @@ test("clipboard fallback runs only when no editable field is focused", async () 
   const row = elements.tree.children.find((r) => allText(r).includes("Synced"));
   row.listeners.click();
   await settled();
-  assert.deepEqual(clipboardTexts, ["from Google Drive"]);
+  assert.deepEqual(clipboardTexts, ["from Google Drive\n"]);
   assert.match(elements.status.textContent, /Copied/);
 });
 
@@ -625,3 +626,18 @@ test("the toolbar icon toggles the panel and the panel no longer offers a Close 
   assert.doesNotMatch(script, /sidePanel\.close/, "the panel does not close the side panel itself");
 });
 
+
+
+test("trailing newline mode preserves internal lines and handles existing CRLF", async () => {
+  const records = [{ id: "item1", name: "Lines.txt", mimeType: "text/plain", text: "first\nsecond\r\n\n", parent: "root" }];
+  const { elements, messages } = panelHarness(false, { records });
+  await settled();
+  const inserted = () => messages.filter((m) => m.type === "pastex-sidepanel-insert").map((m) => m.text);
+  elements.tree.children[0].listeners.click(); await settled();
+  assert.equal(inserted()[0], "first\nsecond\r\n\n");
+  elements.tree.children[0].children.find((c) => c.title === "Insert without final newline").listeners.click({ stopPropagation() {} }); await settled();
+  assert.equal(inserted()[1], "first\nsecond");
+  elements["btn-newline"].listeners.click();
+  elements.tree.children[0].listeners.click(); await settled();
+  assert.equal(inserted()[2], "first\nsecond");
+});
