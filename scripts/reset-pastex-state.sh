@@ -2,7 +2,7 @@
 # Reset Pastex's local extension storage. Drive is never touched.
 #
 # During development the stored shape changes often, and an old shape is
-# discarded rather than migrated (see DEVELOPMENT.md). This script clears the
+# discarded rather than migrated (see README.md, Development policy). This script clears the
 # local, disposable state so the next panel open rebuilds it from Drive.
 #
 # What is cleared (Chrome's extension storage for the Pastex extension only):
@@ -12,7 +12,7 @@
 #
 # What is NOT touched:
 #   - anything in Google Drive: the snippets are content, and content is out of
-#     bounds for a reset (DEVELOPMENT.md)
+#     bounds for a reset (README.md, Development policy)
 #   - the extension itself, its settings, or any other extension's storage
 #
 # Usage:

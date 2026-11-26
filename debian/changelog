@@ -1,3 +1,21 @@
+pastex (2.34.0-1) unstable; urgency=medium
+
+  * One document instead of seven. SECURITY.md, DEVELOPMENT.md, ARCHITECTURE.md,
+    ANALYSIS.md, running-on-linux-mint.md and where-order-and-collapse-live.md
+    were each a second place to look for an answer the README can give, and
+    every one of them had to be kept in step with the code by hand. Their
+    content now lives in README.md as four sections: Security and verification,
+    Development policy (the three classes of state and the seven rules), How
+    Pastex works (including the file map), and Where order and folded folders
+    live. BREAKING: a link to any of those six files now fails; the README
+    sections replace them, and the CI tests read the policy from README.md.
+  * The three READMEs stay, because they answer three different questions: the
+    front page for the project, extension/README.md for setting up the OAuth
+    client and the configuration file, apt-repo/README.md for the archive layout
+    and how it is published.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:00 +0000
+
 pastex (2.33.3-1) unstable; urgency=medium
 
   * The background worker now hands the client secret to the token exchange.

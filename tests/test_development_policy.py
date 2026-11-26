@@ -45,7 +45,7 @@ def test_no_compatibility_layer_in_shipped_code():
             snippet = text.splitlines()[line - 1].strip()
             raise AssertionError(
                 f"{path.name}:{line} keeps a compatibility path: {snippet!r}\n"
-                "DEVELOPMENT.md: replace the old mechanism, do not support both."
+                "README.md, Development policy: replace the old mechanism, do not support both."
             )
 
 
@@ -107,7 +107,7 @@ REMOVAL_WORDS = (
 
 def test_breaking_changes_are_announced_in_the_changelog():
     """Anything that takes something away is a BREAKING entry, not a footnote."""
-    assert "BREAKING" in (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8")
+    assert "BREAKING" in (ROOT / "README.md").read_text(encoding="utf-8")
 
     changelog = (ROOT / "debian" / "changelog").read_text(encoding="utf-8")
     latest = changelog.split("\n -- ", 1)[0]
@@ -116,7 +116,7 @@ def test_breaking_changes_are_announced_in_the_changelog():
     assert not removals or "BREAKING:" in latest, (
         "the newest changelog entry removes something "
         f"({', '.join(removals)}) without a BREAKING: line explaining what a "
-        "user may notice. See DEVELOPMENT.md rule 5."
+        "user may notice. See README.md, Development policy rule 5."
     )
 
 
@@ -136,9 +136,9 @@ def test_every_breaking_line_names_what_the_user_loses():
 
 
 def test_policy_document_states_the_three_classes():
-    policy = (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8")
+    policy = (ROOT / "README.md").read_text(encoding="utf-8")
     for phrase in ("Content", "Presentation metadata", "Cache"):
-        assert phrase in policy, f"DEVELOPMENT.md does not classify {phrase}"
+        assert phrase in policy, f"README.md does not classify {phrase}"
     assert "out of bounds" in policy, "the policy must say content is untouched"
 
 

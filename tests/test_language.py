@@ -21,12 +21,6 @@ ROOT = Path(__file__).resolve().parent.parent
 # Documents a user reads, plus the code and scripts they run.
 LIVING_FILES = (
     "README.md",
-    "ARCHITECTURE.md",
-    "ANALYSIS.md",
-    "DEVELOPMENT.md",
-    "SECURITY.md",
-    "running-on-linux-mint.md",
-    "where-order-and-collapse-live.md",
     "apt-repo/README.md",
     "extension/README.md",
 )
@@ -83,7 +77,7 @@ def test_living_files_and_code_are_english():
     assert not findings, (
         "Indonesian text is back in a living file:\n  "
         + "\n  ".join(findings[:10])
-        + "\nSee DEVELOPMENT.md: one language, English."
+        + "\nSee README.md, Development policy: one language, English."
     )
 
 
@@ -116,7 +110,7 @@ def test_every_tracked_file_is_english():
     assert not findings, (
         "Indonesian text is back in the project:\n  "
         + "\n  ".join(findings[:10])
-        + "\nSee DEVELOPMENT.md rule 6: one language, English."
+        + "\nSee README.md, Development policy rule 6: one language, English."
     )
 
 
@@ -136,12 +130,22 @@ def test_no_letters_from_another_script():
 
 
 def test_documents_are_named_in_english():
-    """The project's four long-form documents carry English file names."""
-    for name in ("ARCHITECTURE.md", "ANALYSIS.md", "DEVELOPMENT.md", "SECURITY.md"):
+    """Three documents exist, all in English, and no split-off document is back."""
+    for name in LIVING_FILES:
         assert (ROOT / name).is_file(), f"{name} is missing"
-    for old in ("ARSITEKTUR.md", "ANALISIS.md", "cara-jalankan-get-linux-mint.md",
-                "lokasi-collapse-urutan.md"):
-        assert not (ROOT / old).exists(), f"{old} still exists; the rename is not a copy"
+    # The project keeps one README, one extension guide and one archive guide.
+    # Security, the development policy, the architecture tour and the index file
+    # are sections of the README; a separate document for them is a second copy
+    # of the same answer, which is the thing this project does not do.
+    for retired in ("ARCHITECTURE.md", "ANALYSIS.md", "DEVELOPMENT.md", "SECURITY.md",
+                    "running-on-linux-mint.md", "where-order-and-collapse-live.md",
+                    "ARSITEKTUR.md", "ANALISIS.md", "cara-jalankan-get-linux-mint.md",
+                    "lokasi-collapse-urutan.md"):
+        assert not (ROOT / retired).exists(), f"{retired} is back; its content belongs to README.md"
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for heading in ("## Security and verification", "## Development policy",
+                    "## How Pastex works", "## Where order and folded folders live"):
+        assert heading in readme, f"README.md no longer carries {heading!r}"
 
 
 def test_document_links_point_at_names_that_exist():

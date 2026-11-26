@@ -26,7 +26,7 @@
 
   // The stored shape is versioned. An unknown version is not decoded field by
   // field: it is discarded, and the library falls back to Drive's own order
-  // with every folder open. See DEVELOPMENT.md ("state carries a version").
+  // with every folder open. See README.md, "Where order and folded folders live".
   //
   // The version field is named "v" because that is what queue.js writes when it
   // builds the label. When the two names disagreed, every write was stored

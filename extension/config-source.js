@@ -31,7 +31,7 @@
   var FILE = "file ", CACHE = "pastex-config-cache";
   // The cached configuration shape is versioned. A record with another version
   // is treated as absent, which asks the user to pick the file again instead of
-  // decoding an unknown shape. See DEVELOPMENT.md.
+  // decoding an unknown shape. See README.md, Development policy.
   var CACHE_VERSION = 5;
   var MAX_BYTES = 256 * 1024;
 

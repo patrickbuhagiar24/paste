@@ -124,7 +124,7 @@ def test_extension_payload_is_registered_for_autodetection():
 
 
 def test_there_is_exactly_one_build_path():
-    """DEVELOPMENT.md: one name, one path. A debhelper build would be a second
+    """README.md, Development policy: one name, one path. A debhelper build would be a second
     way to produce the same package, so it stays gone."""
     assert not (ROOT / "debian" / "rules").exists(), (
         "debian/rules is back; scripts/build-deb.sh is the only package build"

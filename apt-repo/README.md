@@ -182,7 +182,7 @@ A fingerprint served only by the repository website is not independent verificat
 - the GitHub Release notes for the version you are installing (created by the tag workflow);
 - a signed maintainer announcement or another maintainer-controlled channel you already trust.
 
-See [SECURITY.md](../SECURITY.md) for the verification checklist. If the values differ or the key has changed unexpectedly, stop and contact the maintainer.
+See [Security and verification](../README.md#security-and-verification) for the checklist. If the values differ or the key has changed unexpectedly, stop and contact the maintainer.
 
 ## Build locally
 

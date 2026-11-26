@@ -73,7 +73,7 @@ mkdir -p "$pool" "$dist/main/binary-all"
 # One version in the pool, on purpose. APT only ever installs one version of an
 # architecture-independent package, so publishing older builds would keep dead
 # files online forever and let a user pin a version the changelog has already
-# moved past. The rule is stated in DEVELOPMENT.md: one name, one path.
+# moved past. The rule is stated in README.md: one name, one path.
 versions=()
 for package in "${packages[@]}"; do
   versions+=("$(dpkg-deb --field "$package" Version)")

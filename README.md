@@ -130,34 +130,145 @@ Pushes to `main` publish the signed APT archive. Pushing a `vX.Y.Z` tag after
 that merge also creates a GitHub Release with the `.deb`, the signed CRX,
 `checksums.txt`, `extension-id.txt`, and the public keyring. The tag must match
 the version in `extension/manifest.json` and `debian/changelog`. The release
-notes repeat the signing fingerprint so it can be cross-checked independently
-of the repository website; see [SECURITY.md](SECURITY.md).
+notes repeat the signing fingerprint so it can be cross-checked independently of
+the repository website; see [Security and verification](#security-and-verification).
+
+## Security and verification
+
+Pastex is distributed as a signed APT archive on GitHub Pages and as a signed
+Chrome/Chromium extension inside the Debian package. Treat the fingerprint as
+trusted only after checking it on **two independent channels**.
+
+**APT signing key.** The full 40-character fingerprint is published in
+`https://patrickbuhagiar24.github.io/paste/archive-keyring.fingerprint.txt`.
+Compare it with the fingerprint in the GitHub Release notes for the exact
+version you install, and with a maintainer announcement you already trust out of
+band; a fingerprint found only on the same website as the `.deb` files proves
+nothing about that website. Only then install `pastex.sources` and
+`/etc/apt/keyrings/pastex.gpg` as shown above. Never use `[trusted=yes]`,
+`--allow-unauthenticated` or `apt-key` for this archive, and confirm that
+`apt update` reports `InRelease` for `stable` and that
+`/etc/apt/keyrings/pastex.gpg` is readable by `_apt` (`0644`). If the
+fingerprint changes, stop the upgrade and ask the maintainer to confirm the
+rotation. Key material is never committed; only the public keyring and its
+fingerprint are published.
+
+**Extension identity.** The Debian package derives the Chrome extension ID from
+the CRX signing key, so the ID must stay the same across releases. Compare the
+ID at `chrome://extensions` with `extension-id.txt` on the repository website or
+in the GitHub Release. A change means the package was built with a different
+key, and the ID is part of the OAuth redirect URL: after a genuine rotation,
+register the new `https://<extension-id>.chromiumapp.org/` in your OAuth client.
+
+**OAuth trade-off.** Pastex reaches Drive as you, so the token is yours. The
+client secret in the configuration file is a value the same person supplies and
+the extension sends only to `oauth2.googleapis.com/token`; it is never written to
+the snippet library or to the cache. The configuration file otherwise holds
+public Drive links, a public client id and that secret, and nothing else. The
+extension requests the full `https://www.googleapis.com/auth/drive` scope, so
+the access token reaches every file the signed-in account can open, not only the
+ones Pastex created; the library folder in the configuration decides what Pastex
+itself reads and writes. That scope is classified as restricted by Google, which
+is why publishing the application beyond its own test users would require a
+security assessment. The access token lives in the worker's memory for about an
+hour and is never written to disk; the refresh token stays in
+`chrome.storage.local` so the connection survives an hour and a restart. Signing
+out revokes both at Google. Report credential-handling issues privately to the
+maintainer rather than in a public issue.
+
+**Release checksums.** `checksums.txt` on the site and in each GitHub Release
+holds the SHA-256 digests of the `.deb` and the signed CRX. Verify a downloaded
+file with:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
 
 ## Development policy
 
 Pastex is in development: it moves forward, it does not carry two
 implementations of the same thing and it does not adapt new code to old state.
-[DEVELOPMENT.md](DEVELOPMENT.md) states the rule and the one thing it never
-touches — the snippet files in Drive. In short: content is out of bounds,
-presentation metadata may be dropped, caches are always disposable, and
-anything a user will notice is a `BREAKING:` entry in the changelog.
 
-## Architecture in plain language
+**The three classes of state.** These decide what may be dropped:
 
-[ARCHITECTURE.md](ARCHITECTURE.md) explains how Pastex works without code: the four
-parts a user can imagine (panel, in-page button, background worker, Google
-Drive), what happens to an edit, when Drive is contacted, and a "to change X,
-open Y" file map.
+| Class | Examples | Rule |
+| --- | --- | --- |
+| Content | the snippet `.txt` files in Drive | **out of bounds**: never rewritten, migrated or dropped |
+| Presentation metadata | manual order, folded folders in `pastex-index` | may be dropped, and the panel then shows Drive's order |
+| Cache | snapshots, bodies, the session copy | always disposable: it is rebuilt from Drive |
 
-The other documents:
+**The rules.**
 
-| Document | What it answers |
+1. One implementation. Replace the old mechanism; do not ship both.
+2. No compatibility layer for older state. A stored shape has one writer and
+   one reader, and they are tested together.
+3. Content is never touched. Only the folder the configuration names is read and
+   written, and the index file's content is read, not its listing.
+4. Metadata and cache are deleted rather than migrated when their shape changes.
+5. Anything a user will notice is a `BREAKING:` line in the changelog saying
+   what was dropped and what the panel now shows instead.
+6. One language: English in every living file — code, comments, docs, changelog.
+7. When deleting a path, delete its test at the same time and add a test that the
+   path stays gone (`extension/test/dead-code.test.js`).
+
+**Why not keep compatibility while it is cheap?** Because "cheap now" is how a
+codebase ends up with two ways to store the same fact. That is not hypothetical
+here: `pastex_order`/`pastex_collapsed` per item were still read as a second
+source of truth next to `pastex_index`, and `handle-store.js`/`config-import.js`
+were still shipped for a design that had already been replaced. They were
+removed in 2.16–2.18. When a user is on an older state the honest answer is that
+presentation and cache state resets, while content is untouched and always will
+be. If a real installed base ever exists, this policy changes deliberately, with
+a written migration path and a test that exercises the old format.
+
+Scratching a broken local state during development:
+`./scripts/reset-pastex-state.sh` clears the cache only; Drive is never touched.
+
+## How Pastex works
+
+Three parts a user can imagine: the **side panel** (the list, the buttons, the
+search), the **in-page launcher** (⚡ on an allowed site, which opens the same
+panel) and the **background worker** (the only part that talks to Google Drive,
+and the part that keeps the cache warm while you are away).
+
+An edit is applied to the panel at once, written into a queue in
+`chrome.storage.local`, and sent to Drive when the machine is idle or when you
+press **↻ Sync** — so a closed browser or a lost connection does not lose typing.
+Reads come from the snapshot in cache; a stale snapshot is corrected by the
+background check. Drive is contacted for a listing when nothing is stored yet,
+when you ask for a sync, and while idle to see whether the library changed.
+
+**The file map — "to change X, open Y":**
+
+| To change | Open |
 | --- | --- |
-| [running-on-linux-mint.md](running-on-linux-mint.md) | installing and running Pastex on Linux Mint, step by step |
-| [where-order-and-collapse-live.md](where-order-and-collapse-live.md) | where manual order and folded folders are stored, and when they reset |
-| [ANALYSIS.md](ANALYSIS.md) | the colour and accessibility work, plus the improvements that are not done yet |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | the in-development policy: what may be dropped and what is never touched |
-| [SECURITY.md](SECURITY.md) | the signing keys, the release checks and the OAuth trade-off |
+| the panel's markup, styles, behaviour | `extension/sidepanel.html`, `.css`, `.js` |
+| what happens inside a page, including newlines | `extension/content.js`, `content.css` |
+| the queue that survives a restart | `extension/queue.js` |
+| the cache: snapshots, bodies, freshness | `extension/cache.js` |
+| reading Drive: listing, upload, OAuth | `extension/drive.js` |
+| the library rules: order, folders, index | `extension/library.js` |
+| the configuration file and its keys | `extension/config-source.js`, `config-cache-reader.js` |
+| messages, alarms, registration of sites | `extension/background.js` |
+| the allowlist matching | `extension/sites.js` |
+| the package, the CRX, the APT archive | `scripts/`, `.github/workflows/build-deb.yml` |
+
+The user-facing setup guide, the configuration keys and the troubleshooting list
+live in [the extension README](extension/README.md); the APT archive layout and
+its publishing rules live in [the APT repository README](apt-repo/README.md).
+
+## Where order and folded folders live
+
+The manual order and the folded state of every folder are stored in **one
+label on the root folder in Drive**, named by the `pastex-index` link in the
+configuration file. The file holds a small JSON object with a version, the order
+of each folder's children and the collapsed ids. It is written only after a
+reorder or a fold, is excluded from the snippet list, and is read by id, never by
+name. A folder property would have to be repeated on every child and would
+break as soon as a file is moved by hand; one label on one folder is a single
+write and survives a rename. If the file is missing or unreadable, the library
+loads in Drive's order with every folder open, and the next reorder writes the
+file again — Pastex will not create a second index file behind your back.
 
 ## Testing a build on a real computer
 
@@ -211,4 +322,6 @@ python3 -m pytest tests/ -q
 `scripts/install.sh` is a development shortcut for a locally built `.deb`; end
 users should install from the signed repository. Release builds must use a
 stable `PASTEX_CRX_PRIVATE_KEY` CI secret; see the extension README. The legacy
-desktop application has been removed; it remains in Git history.
+desktop application has been removed; it remains in Git history. The reading
+material that used to sit in separate documents — security, the development
+policy, the architecture tour and the index file — is part of this README.

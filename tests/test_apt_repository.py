@@ -578,7 +578,8 @@ def test_extension_identity_and_checksums_are_published() -> None:
 
 
 def test_security_docs_require_two_channels() -> None:
-    security = _text(ROOT / "SECURITY.md")
+    # Security lives in the README now, so the two-channel rule is read there.
+    security = _text(ROOT / "README.md")
     apt_readme = _text(ROOT / "apt-repo" / "README.md")
 
     for text in (security, apt_readme):
