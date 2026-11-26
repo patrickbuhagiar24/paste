@@ -208,29 +208,56 @@
     return url.toString();
   }
 
+  // Chrome allows one web auth flow per extension at a time, and the flow holds
+  // that slot while its window exists, even after the worker that started it
+  // was stopped. A second request is refused with a sentence about Chrome's
+  // internals ("Only one web auth flow is allowed at a time."), which is not
+  // something a person using Pastex can act on and not what went wrong.
+  var FLOW_BUSY = /only one web auth flow/i;
+  // Waits between attempts. A flow whose window is still open clears itself as
+  // soon as the window closes, so a few short waits cover the ordinary case.
+  var FLOW_RETRY_MS = [300, 600, 1200, 2400];
+
   // One trip through Chrome's sign-in window. `interactive` decides whether a
   // page may appear: false means Google must answer silently from a grant it
   // already holds, which is the normal case on every sync after the first.
-  function authorize(api, clientId, redirectUri, interactive, challenge) {
+  function authorize(api, clientId, redirectUri, interactive, challenge, retryMs) {
     var state = randomState();
-    return new Promise(function (resolve, reject) {
-      try {
-        api.launchWebAuthFlow({ url: authUrl(clientId, redirectUri, interactive, state, challenge), interactive: interactive },
-          function (redirectedTo) {
-            var failure = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
-            if (failure) { reject(new Error(failure.message || "Google sign-in failed.")); return; }
-            if (!redirectedTo) {
-              reject(new Error(interactive ? "Google sign-in returned no answer."
-                : "Pastex is not signed in yet. Sync once and accept Google's request."));
+    var waits = retryMs || FLOW_RETRY_MS;
+    function attempt(at) {
+      return new Promise(function (resolve, reject) {
+        function failed(err) {
+          var reason = err && err.message ? err.message : String(err);
+          if (FLOW_BUSY.test(reason)) {
+            if (at < waits.length) {
+              setTimeout(function () { attempt(at + 1).then(resolve, reject); }, waits[at]);
               return;
             }
-            try { resolve(readRedirect(redirectedTo, state)); }
-            catch (err) { reject(err); }
-          });
-      } catch (err) {
-        reject(new Error("Google sign-in failed: " + (err && err.message ? err.message : err)));
-      }
-    });
+            reject(new Error("Chrome is still finishing an earlier Google sign-in window. " +
+              "Close that window if it is open, then try again."));
+            return;
+          }
+          reject(err);
+        }
+        try {
+          api.launchWebAuthFlow({ url: authUrl(clientId, redirectUri, interactive, state, challenge), interactive: interactive },
+            function (redirectedTo) {
+              var failure = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
+              if (failure) { failed(new Error(failure.message || "Google sign-in failed.")); return; }
+              if (!redirectedTo) {
+                reject(new Error(interactive ? "Google sign-in returned no answer."
+                  : "Pastex is not signed in yet. Sync once and accept Google's request."));
+                return;
+              }
+              try { resolve(readRedirect(redirectedTo, state)); }
+              catch (err) { reject(err); }
+            });
+        } catch (err) {
+          failed(new Error("Google sign-in failed: " + (err && err.message ? err.message : err)));
+        }
+      });
+    }
+    return attempt(0);
   }
 
   /* The code -> tokens exchange. This is the one request that carries the
@@ -304,6 +331,32 @@
     if (!clientId) throw new Error("The configuration file needs the client_id of a Google OAuth client.");
     var cached = cachedToken(clientId);
     if (cached) return cached;
+    // One sign-in per client at a time. The panel opens the library while the
+    // worker checks it, so two requests for a token at once is the ordinary
+    // case on the very first load, not an accident: without this, both opened a
+    // window and Chrome refused the second ("Only one web auth flow is allowed
+    // at a time."). A renewal racing another renewal abuses a refresh token
+    // Google may rotate, which is the second reason to share one flight.
+    return sharedSignIn(clientId, function () { return acquireToken(clientId, clientSecret, options); });
+  }
+
+  var signIns = new Map();
+
+  function sharedSignIn(clientId, run) {
+    var existing = signIns.get(clientId);
+    if (existing) return existing;
+    var flight = (async function () { return await run(); })();
+    signIns.set(clientId, flight);
+    function done() { if (signIns.get(clientId) === flight) signIns.delete(clientId); }
+    flight.then(done, done);
+    return flight;
+  }
+
+  async function acquireToken(clientId, clientSecret, options) {
+    // The flight that just finished may have stored a token while this one was
+    // waiting for it.
+    var cached = cachedToken(clientId);
+    if (cached) return cached;
 
     // 1. The stored refresh token: no page, no code, just the token endpoint.
     var refreshToken = await readRefresh(clientId);
@@ -327,13 +380,13 @@
     var pair = await pkcePair();
     var parsed;
     try {
-      parsed = await authorize(api, clientId, redirectUri, false, pair.challenge);
+      parsed = await authorize(api, clientId, redirectUri, false, pair.challenge, options.flowRetryMs);
     } catch (err) {
       if (!options.interactive) throw explainSignIn(err, redirectUri, true);
       // A new PKCE verifier, because the previous challenge is spent.
       pair = await pkcePair();
       try {
-        parsed = await authorize(api, clientId, redirectUri, true, pair.challenge);
+        parsed = await authorize(api, clientId, redirectUri, true, pair.challenge, options.flowRetryMs);
       } catch (prompted) {
         throw explainSignIn(prompted, redirectUri);
       }

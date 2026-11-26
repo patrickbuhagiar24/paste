@@ -480,6 +480,12 @@ not listed under `pastex-sites` are not injected or targeted.
 - If the sign-in window never appears, or Pastex reports that the sign-in window
   is unavailable, sign in to Chrome with a Google account and avoid a managed
   profile that blocks extensions. Reload Pastex from `chrome://extensions`.
+- If the status line says *Chrome is still finishing an earlier Google sign-in
+  window*, a sign-in window that was opened earlier is still open somewhere, and
+  Chrome allows one at a time. Close it, then press **↻ Sync**. Pastex waits for
+  a busy slot by itself for a few seconds, so this message only appears when the
+  window really is still waiting for an answer. One sign-in serves every load
+  that follows, including the worker reopening the library in the background.
 - If APT has installed a newer version but Chrome still displays the older
   extension, fully exit and restart Chrome. Verify the installed package version
   with `dpkg-query -W pastex` and compare it with `chrome://extensions`. As a

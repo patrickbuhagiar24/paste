@@ -1,3 +1,21 @@
+pastex (2.33.2-1) unstable; urgency=medium
+
+  * Two loads at once stop colliding in Google's sign-in window. The panel
+    opens the library while the worker checks it, so the first load after a
+    configuration is picked asks for a token twice at the same moment; each
+    request opened its own window and Chrome answered the second one with "Only
+    one web auth flow is allowed at a time.", which reached the panel as "Could
+    not read the library." and left it with nothing to show. Requests for the
+    same OAuth client now share one sign-in, so one window serves every caller
+    and a refresh token is only renewed once per sign-in.
+  * A sign-in window that Chrome is still finishing is waited for instead of
+    being reported. A window left open holds Chrome's single flow slot even
+    after the worker that opened it was stopped, and the refusal used to reach
+    the panel word for word. The request is retried for a few seconds, and if
+    the slot stays busy the message says to close the window and try again.
+
+ -- Pastex maintainers <pastex@example.org>  Tue, 01 Dec 2026 09:00:00 +0000
+
 pastex (2.33.1-1) unstable; urgency=medium
 
   * A configuration file that carries characters nobody can see now loads. A

@@ -558,3 +558,70 @@ test("a linked index file costs one write, not a listing first", async () => {
   assert.equal(fetchImpl.calls.length, 1, "the id from the link is reused");
   assert.equal(fetchImpl.calls[0].options.method, "PATCH");
 });
+
+test("two loads at once share one sign-in window, because Chrome allows one", async () => {
+  // The panel opens the library while the worker checks it, so the first load
+  // of a fresh install asks for a token twice at the same moment. Each request
+  // used to open its own window, and Chrome answered the second one with "Only
+  // one web auth flow is allowed at a time.", which reached the panel as
+  // "Could not read the library. ...".
+  Drive.setTokenStore(memoryStore());
+  const mine = client(21);
+  const identity = fakeIdentity(granted);
+  const fetchImpl = stubFetch(async () => jsonResponse({
+    access_token: "ya29.shared", expires_in: 3600, refresh_token: "1//shared",
+  }));
+  const tokens = await Promise.all([
+    Drive.getAuthToken({ identity, clientId: mine, clientSecret: "GOCSPX-secret", interactive: true, fetchImpl }),
+    Drive.getAuthToken({ identity, clientId: mine, clientSecret: "GOCSPX-secret", interactive: true, fetchImpl }),
+  ]);
+  assert.deepEqual(tokens, ["ya29.shared", "ya29.shared"], "both callers get the token");
+  assert.equal(identity.asked.length, 1, "one window, not two");
+  assert.equal(fetchImpl.calls.length, 1, "and one code exchange");
+});
+
+test("a flow Chrome is still finishing is waited for, not reported as a failure", async () => {
+  // A window that is still open holds Chrome's single flow slot even after the
+  // worker that opened it was stopped, so the first attempt is refused. The
+  // refusal is a wait, not an error, and the sentence about Chrome's internals
+  // is never shown to the person using Pastex.
+  Drive.setTokenStore(memoryStore());
+  const mine = client(22);
+  const identity = fakeIdentity(granted);
+  let refused = 0;
+  const realLaunch = identity.launchWebAuthFlow;
+  identity.launchWebAuthFlow = (options, callback) => {
+    if (!options.interactive && refused < 2) {
+      refused++;
+      // Delivered the way Chrome delivers it: no redirect URL, and lastError set
+      // while the callback runs.
+      globalThis.chrome = { runtime: { lastError: { message: "Only one web auth flow is allowed at a time." } } };
+      try { callback(undefined); } finally { globalThis.chrome = undefined; }
+      return;
+    }
+    realLaunch(options, callback);
+  };
+  const token = await Drive.getAuthToken({
+    identity, clientId: mine, clientSecret: "GOCSPX-secret", interactive: true,
+    fetchImpl: tokenEndpoint(), flowRetryMs: [1, 1, 1],
+  });
+  assert.equal(token, "ya29.token");
+  assert.equal(refused, 2, "two refusals, then the same silent request was made again");
+  // `asked` counts only the launches that reached Chrome; the two refusals were
+  // attempts of their own, so the silent request was made three times in all.
+  assert.equal(identity.asked.length, 1, "the silent request succeeded on its third attempt");
+
+  // When the slot never frees, the message says what to do, in the user's terms.
+  const stuck = fakeIdentity(() => "");
+  stuck.launchWebAuthFlow = (options, callback) => {
+    globalThis.chrome = { runtime: { lastError: { message: "Only one web auth flow is allowed at a time." } } };
+    try { callback(undefined); } finally { globalThis.chrome = undefined; }
+  };
+  await assert.rejects(Drive.getAuthToken({
+    identity: stuck, clientId: client(23), interactive: true, fetchImpl: tokenEndpoint(), flowRetryMs: [1],
+  }), (err) => {
+    assert.match(err.message, /close that window/i);
+    assert.doesNotMatch(err.message, /only one web auth flow/i, "Chrome's wording is not the user's message");
+    return true;
+  });
+});
