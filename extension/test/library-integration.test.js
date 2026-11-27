@@ -59,7 +59,7 @@ test("Drive library signs in and lists and loads a shared folder through the API
   }
 });
 
-test("a second load lists and downloads only the branch that changed", async () => {
+test("a second load checks folders and downloads only changed bodies", async () => {
   const previousFetch = globalThis.fetch;
   const previousToken = Drive.getAuthToken;
   Drive.getAuthToken = async () => "token";
@@ -117,12 +117,12 @@ test("a second load lists and downloads only the branch that changed", async () 
       metadata: first.metadata, signatures: first.signatures,
     });
     // The index is one GET by its link, so the tree only needs the root listed
-    // again and the unchanged folder is reused.
-    assert.deepEqual(listings.sort(), ["root"], "only the root is listed again");
+    // again and unchanged bodies are reused.
+    assert.deepEqual(listings.sort(), ["folder", "root"], "nested folders are checked again");
     assert.deepEqual(downloads, [], "no body is downloaded again");
     assert.equal(second.tree[1].children[0].text, "Inside body");
 
-    // One file inside the folder changes: only that branch is listed again.
+    // One file inside the folder changes: both folders are checked again.
     listings.length = 0; downloads.length = 0;
     files.folder[0].modifiedTime = "i2";
     files.root[0].modifiedTime = "f2";

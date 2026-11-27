@@ -108,17 +108,17 @@ def test_postinst_does_not_touch_accounts_or_services():
 
 def test_extension_payload_is_registered_for_autodetection():
     """The one build path must ship the unpacked extension, the signed .crx,
-    and the external-install JSON for Chrome and Chromium (2.x payload)."""
+    and the external-install JSON for Google Chrome only."""
     build = (ROOT / "scripts" / "build-deb.sh").read_text(encoding="utf-8")
     for required in (
         "cp -r extension",
         "scripts/pack-crx.py",
         "external_crx",
         "/usr/share/google-chrome/extensions",
-        "/usr/share/chromium/extensions",
         "extension/README.md",
     ):
         assert required in build, f"build-deb.sh misses {required!r}"
+    assert "/usr/share/chromium/extensions" not in build
     for legacy in ("usr/bin/pastex", "pastex.desktop", "pastex-uinput-group"):
         assert legacy not in build, f"build-deb.sh still ships desktop file {legacy}"
 

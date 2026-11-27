@@ -83,18 +83,40 @@
         return false;
       }
     }
+    // WhatsApp's managed chat editor can reconcile individual editing commands
+    // and discard a trailing line break. Give its paste handler the complete
+    // plain-text snippet instead, so it can update its own editor state. Only
+    // treat the paste as handled if the page cancels the event; otherwise use
+    // the normal contenteditable path below.
+    if (target.isContentEditable && location.hostname === "web.whatsapp.com" && /[\r\n]/.test(text)) {
+      try {
+        var clipboard = new DataTransfer();
+        clipboard.setData("text/plain", text);
+        var paste = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard });
+        if (!target.dispatchEvent(paste)) return true;
+      } catch (ignored) {
+        /* The browser or page does not support synthetic paste; use editing commands. */
+      }
+    }
     // Contenteditable: execCommand preserves undo and notifies frameworks, but
     // it inserts the text as one run and a "\n" inside it becomes a space or
     // nothing at all -- HTML has no newline in a text node, only an element.
     // That is why the newline buttons did nothing on a chat box. The text is
     // therefore inserted line by line, with a real <br> between the lines.
     var lines = text.split(/\r?\n/);
+    var changed = false;
     try {
       if (lines.length > 1) {
         var placed = true;
         for (var i = 0; i < lines.length && placed; i++) {
-          if (i > 0) placed = document.execCommand("insertLineBreak");
-          if (placed && lines[i]) placed = document.execCommand("insertText", false, lines[i]);
+          if (i > 0) {
+            placed = document.execCommand("insertLineBreak");
+            if (placed) changed = true;
+          }
+          if (placed && lines[i]) {
+            placed = document.execCommand("insertText", false, lines[i]);
+            if (placed) changed = true;
+          }
         }
         if (placed) return true;
       } else if (document.execCommand("insertText", false, text)) {
@@ -103,6 +125,9 @@
     } catch (ignored) {
       /* fall through to the manual path */
     }
+    // The fallback would duplicate anything already inserted. Report failure
+    // instead so the user can inspect the field before trying again.
+    if (changed) return "partial";
     if (target.isContentEditable) {
       try {
         var selection = window.getSelection();
@@ -344,8 +369,8 @@
       var done = insertText(target, message.text || "");
       // "single-line" is the honest answer for a newline that cannot exist in
       // the focused field; anything else is a plain success.
-      sendResponse(done === "single-line" ?
-        { ok: false, reason: "single-line" } :
+      sendResponse(done === "single-line" || done === "partial" ?
+        { ok: false, reason: done } :
         { ok: done });
       return true;
     }

@@ -237,6 +237,7 @@ test("panel loads are cached and an edit changes the cache without reading Drive
     browser.context.PastexDrive.getFolder = async () => ({ mimeType: browser.context.PastexDrive.FOLDER_MIME, properties: { pastex_index: "" } });
     let driveWrites = 0;
     browser.context.PastexDrive.updateText = async (token, id, value) => { driveWrites++; text = value; };
+    browser.context.PastexDrive.downloadText = async () => text;
     browser.context.PastexDrive.listChildren = async () => [];
     const panel = { id: "abc", url: "chrome-extension://abc/sidepanel.html" };
     const page = { id: "abc", tab: { id: 1 }, url: "https://allowed.example/" };
@@ -741,6 +742,7 @@ function editScenario() {
   const writes = [];
   browser.context.PastexLibrary.connect = async () => ({ token: "t", rootId: "root", index: { order: {}, collapsed: {} }, properties: {} });
   const drive = browser.context.PastexDrive;
+  drive.downloadText = async (t, id) => (library.find((node) => node.id === id) || {}).text;
   // A create checks for a duplicate name first, which is a listing of the
   // destination folder; it must be stubbed like every other Drive call.
   drive.listChildren = async () => [];
@@ -791,6 +793,26 @@ test("a create on a site is cached at once and not written to Drive", async () =
   assert.ok(library.result.tree.some((node) => node.name === "Draft"));
   const status = await send({ type: "pastex-panel-status" });
   assert.equal(status.result.pending, 1);
+});
+
+test("local edits report the actual queue count when a pending create is replaced or deleted", async () => {
+  const { send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const created = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Draft", text: "first", parentId: "root",
+    item: { kind: "text", name: "Draft", parentId: "root", localId: "" },
+  } });
+  assert.equal(created.result.pending, 1);
+  const id = created.result.applied[0];
+  const edited = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "edit", name: "Draft", text: "second", parentId: "root",
+    item: { id, kind: "text", parentId: "root", driveName: "Draft.txt" },
+  } });
+  assert.equal(edited.ok, true);
+  assert.equal(edited.result.pending, 1, "replacing a pending create does not add a write");
+  const deleted = await send({ type: "pastex-panel-local-edit", command: { kind: "delete", ids: [id] } });
+  assert.equal(deleted.ok, true);
+  assert.equal(deleted.result.pending, 0, "deleting an unuploaded create clears its write");
 });
 
 test("leaving the site sends the queue and gives the row its Drive id", async () => {
@@ -1076,9 +1098,10 @@ test("a write Drive refuses for good is reported instead of vanishing", async ()
   } });
   await new Promise((resolve) => browser.listeners.message({ type: "pastex-flush-now" }, site, resolve));
   await settle();
-  const dropped = posted.find((m) => m.dropped);
-  assert.ok(dropped, "the panel is told that the write was dropped");
-  assert.match(dropped.reason, /Invalid name/);
+  const blocked = posted.find((m) => m.blocked);
+  assert.ok(blocked, "the panel is told that the write is retained");
+  assert.match(blocked.reason, /Invalid name/);
+  assert.equal((await browser.context.deferredQueue.all()).length, 1);
 });
 
 test("a snippet kept out by the storage quota is not thrown away", async () => {
@@ -1316,4 +1339,144 @@ test("a window that is gone no longer counts as showing the panel", async () => 
   browser.listeners.windowRemoved(8);
   assert.equal((await ask({ type: "pastex-site-allowed" })).panelOpen, false,
     "a closed window cannot be showing a panel");
+});
+
+test("a queue storage failure does not publish an unsaved local edit", async () => {
+  const { browser, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const storage = browser.context.chrome.storage.local;
+  const original = storage.set;
+  storage.set = async (values) => {
+    if (values["pastex.deferred.v1"]) throw new Error("quota");
+    return original(values);
+  };
+  const response = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "create", name: "Not saved", text: "test", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "" },
+  } });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /Cannot save pending changes/);
+  const library = await send({ type: "pastex-panel-library" });
+  assert.equal(library.result.tree.some((node) => node.name === "Not saved"), false);
+});
+
+test("renaming a text snippet does not overwrite its Drive body", async () => {
+  const { browser, writes, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const response = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "rename", name: "Renamed", text: "old body", parentId: "root",
+    item: { id: "item1", kind: "text", driveName: "Synced.txt", parentId: "root" },
+  } });
+  assert.equal(response.ok, true);
+  await browser.context.flushSoon({ readBack: false });
+  assert.equal(writes.some((write) => write[0] === "update"), false);
+  assert.ok(writes.some((write) => write[0] === "rename"));
+});
+
+test("a Drive text conflict keeps the local edit in the queue", async () => {
+  const { browser, send, writes } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const queued = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "edit", name: "Synced", text: "local text", parentId: "root",
+    item: { id: "item1", kind: "text", driveName: "Synced.txt", parentId: "root" },
+  } });
+  assert.equal(queued.ok, true);
+  browser.context.PastexDrive.downloadText = async () => "changed outside Pastex";
+  await browser.context.flushSoon({ readBack: false });
+  assert.equal(writes.some((entry) => entry[0] === "update"), false);
+  assert.equal((await browser.context.deferredQueue.all()).length, 1);
+  assert.match(browser.context.lastFlushRefusals[0].error, /Conflict/);
+});
+
+test("a create accepted by Drive is recovered after queue removal fails", async () => {
+  const { browser, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  let remote = null, writes = 0;
+  const drive = browser.context.PastexDrive;
+  drive.listChildren = async () => remote ? [remote] : [];
+  drive.downloadText = async () => "hello";
+  drive.uploadNew = async (_t, _parent, name, text, _fetch, _exact, operationId) => {
+    writes++;
+    remote = { id: "made", name: name + ".txt", properties: { pastex_operation: operationId }, text };
+    return { id: remote.id };
+  };
+  await send({ type: "pastex-panel-local-edit", command: { kind: "create", name: "Recover",
+    text: "hello", parentId: "root", item: { kind: "text", parentId: "root", localId: "" } } });
+  const area = browser.context.chrome.storage.local;
+  const originalRemove = area.remove;
+  let fail = true;
+  area.remove = async (key) => {
+    if (key === "pastex.deferred.v1" && fail) { fail = false; throw new Error("storage failure"); }
+    return originalRemove(key);
+  };
+  await assert.rejects(browser.context.flushSoon({ readBack: false }), /Cannot save/);
+  assert.equal((await browser.context.deferredQueue.all()).length, 1);
+  await browser.context.flushSoon({ readBack: false });
+  assert.equal(writes, 1, "the accepted create is not submitted again");
+  assert.equal((await browser.context.deferredQueue.all()).length, 0);
+});
+
+test("a pending create is replayed when a panel opens after a worker interruption", async () => {
+  const { browser, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const command = { kind: "create", name: "Recovered after interruption", text: "hello", parentId: "root",
+    item: { kind: "text", parentId: "root", localId: "local-recovery" } };
+  await browser.context.deferredQueue.push([{ id: "pending", kind: "create", name: command.name,
+    text: command.text, item: command.item, command }]);
+  browser.context.recoveryFlight = null;
+  const result = await send({ type: "pastex-panel-library" });
+  assert.ok(result.result.tree.some((row) => row.id === "local-recovery" && row.text === "hello"));
+});
+
+test("only the extension panel can export pending changes", async () => {
+  const { browser, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: { kind: "create", name: "Draft", text: "pending text",
+    parentId: "root", item: { kind: "text", parentId: "root", localId: "" } } });
+  const exported = await send({ type: "pastex-export-pending" });
+  assert.equal(exported.ok, true);
+  assert.equal(exported.changes[0].text, "pending text");
+  assert.equal(JSON.stringify(exported).includes("client_secret"), false);
+  let denied;
+  browser.listeners.message({ type: "pastex-export-pending" }, { id: "abc", url: "https://allowed.example" }, (value) => { denied = value; });
+  assert.equal(denied.ok, false);
+});
+
+test("panel can compare a conflict and choose Drive text without dropping the queue", async () => {
+  const { browser, send } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  const edited = await send({ type: "pastex-panel-local-edit", command: {
+    kind: "edit", name: "Synced", text: "local text", parentId: "root",
+    item: { id: "item1", kind: "text", driveName: "Synced.txt", parentId: "root" },
+  } });
+  assert.equal(edited.ok, true);
+  browser.context.PastexDrive.downloadText = async () => "external text";
+  const preview = await send({ type: "pastex-conflict-preview" });
+  assert.equal(preview.ok, true);
+  assert.equal(preview.review.base, "from Drive");
+  assert.equal(preview.review.local, "local text");
+  assert.equal(preview.review.remote, "external text");
+  const chosen = await send({ type: "pastex-conflict-keep-drive", review: preview.review });
+  assert.equal(chosen.ok, true);
+  const queue = await browser.context.deferredQueue.all();
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].text, "external text");
+  const library = await send({ type: "pastex-panel-library" });
+  assert.equal(library.result.tree[0].text, "external text");
+});
+
+test("a reviewed local edit is rechecked when the queue is synced", async () => {
+  const { browser, send, writes } = editScenario();
+  await send({ type: "pastex-panel-library" });
+  await send({ type: "pastex-panel-local-edit", command: { kind: "edit", name: "Synced", text: "local text", parentId: "root",
+    item: { id: "item1", kind: "text", driveName: "Synced.txt", parentId: "root" } } });
+  let remote = "first remote";
+  browser.context.PastexDrive.downloadText = async () => remote;
+  const preview = await send({ type: "pastex-conflict-preview" });
+  assert.equal((await send({ type: "pastex-conflict-keep-local", review: preview.review })).ok, true);
+  remote = "newer remote";
+  await browser.context.flushSoon({ readBack: false });
+  assert.equal(writes.some((write) => write[0] === "update"), false);
+  assert.equal((await browser.context.deferredQueue.all()).length, 1);
+  assert.match(browser.context.lastFlushRefusals[0].error, /Conflict/);
 });

@@ -1,3 +1,58 @@
+pastex (2.34.5-1) unstable; urgency=medium
+
+  * Center the left-arrow icons in both newline controls.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:05 +0000
+
+pastex (2.34.4-1) unstable; urgency=medium
+
+  * Show a plain left arrow for both newline controls.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:04 +0000
+
+pastex (2.34.3-1) unstable; urgency=medium
+
+  * Add an explicit action to copy pending changes for manual recovery.
+  * Report queue read failures rather than claiming no changes are pending.
+  * Review the first pending text edit against its original and Drive versions;
+    allow an explicit choice without silently discarding dependent edits.
+  * Add a synthetic library benchmark, a local browser smoke test, and isolate
+    conflict review logic from the worker and panel.
+  * Separate edit command translation from the worker and panel, and report
+    the actual number of queued changes after an edit.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:03 +0000
+
+pastex (2.34.2-1) unstable; urgency=medium
+
+  * Append a trailing newline on ordinary snippet insertion; the toolbar mode
+    and row action now insert without trailing newlines instead.
+  * Improve contrast and visibility of the Edit menu in light and dark themes.
+  * Mark both no-newline controls with a crossed-out return arrow.
+  * Simplify tooltips and status messages while keeping recovery details.
+  * BREAKING: Chromium is no longer registered automatically; upgrades remove
+    its package-owned registration. Google Chrome remains registered.
+  * Retain pending writes on queue overflow and report storage failures; queue
+    edits before applying them to cache, and serialize queue updates.
+  * Check nested folders, bound concurrent downloads, and prevent duplicate
+    text after partial insertion failures.
+  * Retain refused writes, check text edits against their original Drive body,
+    and recover interrupted creates using a Drive operation marker.
+  * BREAKING: previously queued edits without an original text cannot sync
+    automatically; sync all pending edits before upgrading and back up any
+    remaining queued edits before resolving them.
+  * Simplify the README files and correct OAuth and cache descriptions.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:02 +0000
+
+pastex (2.34.1-1) unstable; urgency=medium
+
+  * Attempt multiline insertion through WhatsApp Web's paste handler, with
+    the existing editing commands as a fallback. This needs verification in
+    a signed-in WhatsApp Web session before relying on it.
+
+ -- Pastex maintainers <pastex@example.org>  Thu, 03 Dec 2026 09:00:01 +0000
+
 pastex (2.34.0-1) unstable; urgency=medium
 
   * One document instead of seven. SECURITY.md, DEVELOPMENT.md, ARCHITECTURE.md,

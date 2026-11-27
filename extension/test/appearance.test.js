@@ -183,12 +183,13 @@ test("the stylesheet styles every state the side panel sets", () => {
 });
 
 test("no button carries a word, in any state", () => {
-  // Every toolbar button is an icon: the glyph is in the markup and the meaning
+  // Every toolbar button is an icon: its glyph is in markup or CSS and its meaning
   // is in the tooltip. A button whose label is written by script (the old
   // "Select" / "Done") is a text button that only looks like an icon one.
   for (const m of html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)) {
     const glyph = m[1].trim();
-    assert.ok(glyph.length > 0, "every button needs a glyph");
+    assert.ok(glyph.length > 0 || /id="btn-newline"/.test(m[0]) && css.includes("#btn-newline::before"),
+      "every button needs a glyph or a CSS icon");
     assert.equal(/[A-Za-z]{2,}/.test(glyph), false, "a button glyph must not be a word: " + glyph);
   }
   // The one toggle that used to write a word into itself is checked by name.

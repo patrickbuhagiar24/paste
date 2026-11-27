@@ -226,27 +226,35 @@
 
   function create(storage) {
     var cached = null;
+    var writes = Promise.resolve();
+
+    function serialize(fn) {
+      var operation = writes.then(fn);
+      writes = operation.catch(function () {});
+      return operation;
+    }
 
     async function read() {
       if (cached) return cached;
       if (!storage) { cached = []; return cached; }
-      try {
-        var stored = (await storage.get(KEY))[KEY];
-        cached = Array.isArray(stored) ? stored : [];
-      } catch (ignored) { cached = []; }
+      var stored = (await storage.get(KEY))[KEY];
+      cached = Array.isArray(stored) ? stored : [];
       return cached;
     }
 
     async function write(list) {
-      cached = list;
-      if (!storage) return;
+      if (!storage) throw new Error("Cannot save pending changes: storage unavailable.");
       try {
         if (list.length) await storage.set({ [KEY]: list });
         else await storage.remove(KEY);
-      } catch (ignored) { /* the queue survives in memory for this session */ }
+      } catch (err) {
+        throw new Error("Cannot save pending changes. Check browser storage and try again.");
+      }
+      cached = list;
     }
 
     async function push(commands) {
+      return serialize(async function () {
       var list = (await read()).slice();
       var at = Date.now();
       (commands || []).forEach(function (command, order) {
@@ -264,29 +272,54 @@
         if (at2 !== -1 && command.kind === "delete") { list.splice(at2, 1); return; }
         list.push(command);
       });
-      // A very long queue is a sign that the flush never ran; keep the newest
-      // edits and say so instead of growing without bound.
-      if (list.length > MAX) list = list.slice(list.length - MAX);
+      // Never discard unsynced edits. Refuse new work until the queue is sent.
+      if (list.length > MAX) throw new Error("Pending changes are full. Sync before editing again.");
       await write(list);
       return list;
+      });
     }
 
-    async function all() { return (await read()).slice().sort(byOrder); }
+    async function all() { await writes; return (await read()).slice().sort(byOrder); }
 
     async function remove(ids) {
+      return serialize(async function () {
       var drop = new Set(ids || []);
       var list = (await read()).filter(function (command) { return !drop.has(command.id); });
       await write(list);
       return list;
+      });
     }
 
-    async function clear() { await write([]); }
+    // Only rebase the exact first edit the user reviewed. A newly queued or
+    // modified entry invalidates the preview instead of overwriting it.
+    async function rebaseFirst(id, expectedText, expectedBase, newBase, useDrive) {
+      return serialize(async function () {
+        var list = (await read()).slice();
+        var first = list.slice().sort(byOrder)[0];
+        if (!first || first.id !== id || first.kind !== "edit" ||
+            first.text !== expectedText || (first.baseText === undefined ? null : first.baseText) !== expectedBase)
+          throw new Error("Pending changes changed. Review them again.");
+        if (useDrive && list.some(function (entry) {
+          return entry.id !== id && entry.kind === "edit" && entry.item && first.item && entry.item.id === first.item.id;
+        })) throw new Error("Later edits depend on this snippet. Copy the versions and review them first.");
+        var at = list.findIndex(function (entry) { return entry.id === id; });
+        var updated = Object.assign({}, first, { baseText: newBase });
+        if (useDrive) {
+          updated.text = newBase;
+          if (updated.command) updated.command = Object.assign({}, updated.command, { text: newBase });
+        }
+        list[at] = updated;
+        await write(list);
+      });
+    }
+
+    async function clear() { return serialize(function () { return write([]); }); }
 
     function byOrder(a, b) {
       return (a.queuedAt || 0) - (b.queuedAt || 0) || (a.order || 0) - (b.order || 0);
     }
 
-    return { all: all, push: push, remove: remove, clear: clear };
+    return { all: all, push: push, remove: remove, clear: clear, rebaseFirst: rebaseFirst };
   }
 
   return {
