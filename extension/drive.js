@@ -660,12 +660,14 @@
     });
   }
 
-  async function createFolder(token, name, parentId, fetchImpl) {
+  async function createFolder(token, name, parentId, fetchImpl, operationId) {
+    var metadata = { name: name, mimeType: FOLDER_MIME, parents: [parentId] };
+    if (operationId) metadata.properties = { pastex_operation: operationId };
     var data = await driveFetch(token, "/files", {
       method: "POST",
       contentType: "application/json; charset=UTF-8",
       query: { fields: "id" },
-      body: JSON.stringify({ name: name, mimeType: FOLDER_MIME, parents: [parentId] }),
+      body: JSON.stringify(metadata),
       fetchImpl: fetchImpl,
     });
     return data.id;
@@ -685,14 +687,16 @@
 
   // A snippet is a .txt file. The index file is the one exception: it is stored
   // under its own name, so a reader can tell it apart from the snippets.
-  async function uploadNew(token, parentId, name, text, fetchImpl, exactName) {
+  async function uploadNew(token, parentId, name, text, fetchImpl, exactName, operationId) {
     var boundary = "pastex-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36);
+    var metadata = { name: exactName ? name : name + ".txt", mimeType: TEXT_MIME, parents: [parentId] };
+    if (operationId) metadata.properties = { pastex_operation: operationId };
     var data = await driveFetch(token, "/files", {
       method: "POST",
       upload: true,
       contentType: 'multipart/related; boundary="' + boundary + '"',
       query: { uploadType: "multipart", fields: "id,modifiedTime" },
-      body: multipartBody({ name: exactName ? name : name + ".txt", mimeType: TEXT_MIME, parents: [parentId] }, text, boundary),
+      body: multipartBody(metadata, text, boundary),
       fetchImpl: fetchImpl,
     });
     return data;

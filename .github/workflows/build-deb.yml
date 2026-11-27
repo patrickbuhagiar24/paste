@@ -86,7 +86,7 @@ jobs:
             printf '%s' "$CRX_SIGNING_SECRET" > "$RUNNER_TEMP/pastex-crx-key.pem"
             chmod 600 "$RUNNER_TEMP/pastex-crx-key.pem"
             export PASTEX_CRX_KEY="$RUNNER_TEMP/pastex-crx-key.pem"
-          elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]; then
+          elif [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             echo "::error::PASTEX_CRX_PRIVATE_KEY is required for a release; refusing an ephemeral extension ID."
             exit 1
           else

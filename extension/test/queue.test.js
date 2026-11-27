@@ -214,3 +214,28 @@ test("the index the queue writes is the index the loader accepts", async () => {
   assert.equal(result.index.order.root[0], "a", "the order survived the round trip");
   assert.equal(result.tree[1].collapsed, true, "the fold survived the round trip");
 });
+
+test("a full queue refuses new changes without discarding older ones", async () => {
+  const area = store();
+  const queue = Queue.create(area);
+  await queue.push(Array.from({ length: 500 }, (_, i) => ({ id: String(i), kind: "edit", item: {} })));
+  await assert.rejects(queue.push([{ id: "overflow", kind: "edit", item: {} }]), /full/i);
+  assert.equal((await Queue.create(area).all()).length, 500);
+  assert.equal((await queue.all())[0].id, "0");
+});
+
+test("a storage error is reported without pretending the queue was saved", async () => {
+  const area = store();
+  const queue = Queue.create(area);
+  await queue.push([{ id: "saved", item: {} }]);
+  area.set = async () => { throw new Error("quota"); };
+  await assert.rejects(queue.push([{ id: "lost", item: {} }]), /Cannot save/);
+  assert.deepEqual((await queue.all()).map((item) => item.id), ["saved"]);
+  assert.deepEqual((await Queue.create(area).all()).map((item) => item.id), ["saved"]);
+});
+
+test("concurrent queue writes do not overwrite one another", async () => {
+  const queue = Queue.create(store());
+  await Promise.all(Array.from({ length: 20 }, (_, i) => queue.push([{ id: String(i), item: {} }])));
+  assert.equal((await queue.all()).length, 20);
+});

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pastex post-installation note: the package registers a Chrome extension.
 #
-# Chrome and Chromium detect the packaged extension on browser startup.
+# Google Chrome detects the packaged extension on browser startup.
 # No per-user configuration files are created by this package.
 set -eu
 
@@ -14,7 +14,7 @@ case "${1:-}" in
     configure)
         # One-time only: apt passes "configure" on every upgrade as well.
         if [ ! -e "$NOTE_MARKER" ]; then
-            say "the Pastex extension is registered with Chrome and Chromium."
+            say "the Pastex extension is registered with Google Chrome."
             say "launch the browser and enable Pastex when it asks."
             say "Use Config in the extension to select a configuration folder."
             say "Setup is described in the README under /usr/share/doc/pastex/."
