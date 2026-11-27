@@ -214,7 +214,7 @@ test("only the branch that changed is listed and downloaded again", async () => 
     tree: first.tree, bodies: first.bodies, texts: first.texts,
     metadata: first.metadata, signatures: first.signatures,
   });
-  assert.deepEqual(listed.sort(), ["right", "root"], "the unchanged folder is not listed again");
+  assert.deepEqual(listed.sort(), ["left", "right", "root"], "all folders are checked");
   assert.deepEqual(downloads, ["rb"], "only the changed body is downloaded again");
   assert.equal(second.tree[0].children[0].text, "body la");
   assert.equal(second.tree[1].children[0].text, "body rb");
@@ -265,7 +265,7 @@ test("text inside a collapsed folder is deferred until the folder is opened", as
   assert.equal(downloads, 1);
 });
 
-test("unchanged nested folders are reused instead of being listed again", async () => {
+test("nested folders are checked while unchanged bodies are reused", async () => {
   const drive = fakeDrive();
   let lists = 0;
   let downloads = 0;
@@ -285,7 +285,7 @@ test("unchanged nested folders are reused instead of being listed again", async 
     metadata: first.metadata,
     signatures: first.signatures,
   });
-  assert.equal(lists, 3, "only the root should be listed; the unchanged folder is reused");
+  assert.equal(lists, 4, "the nested folder is checked again");
   assert.equal(downloads, 1, "the reused folder does not download its body again");
   assert.equal(second.tree[0].children[0].text, first.tree[0].children[0].text);
   assert.equal(second.metadata.f, "f-v1");
@@ -356,4 +356,34 @@ test("a deferred row waits for its folder and is not treated as a failure", asyn
   const before = downloads;
   await Library.fillMissing(native, drive, result.tree, { bodies: result.bodies, texts: result.texts });
   assert.equal(downloads, before, "a deferred row is not fetched by a fill pass");
+});
+
+test("a nested file change is detected even when its folder metadata is unchanged", async () => {
+  const drive = fakeDrive();
+  let version = "one";
+  drive.listChildren = async (_token, parent) => parent === "root"
+    ? [{ id: "folder", name: "Folder", mimeType: drive.FOLDER_MIME, modifiedTime: "unchanged" }]
+    : [{ id: "nested", name: "Nested.txt", mimeType: drive.TEXT_MIME, modifiedTime: version }];
+  drive.downloadText = async () => version;
+  const first = await Library.load(native, drive);
+  version = "two";
+  const second = await Library.load(native, drive, undefined, {
+    tree: first.tree, bodies: first.bodies, texts: first.texts,
+    metadata: first.metadata, signatures: first.signatures,
+  });
+  assert.equal(second.tree[0].children[0].text, "two");
+});
+
+test("filling missing bodies limits concurrent Drive requests", async () => {
+  const drive = fakeDrive();
+  let active = 0, maxActive = 0;
+  drive.downloadText = async (_token, id) => {
+    active++; maxActive = Math.max(active, maxActive);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active--; return id;
+  };
+  const tree = Array.from({ length: 20 }, (_, i) => ({ id: String(i), kind: "text", text: "" }));
+  const result = await Library.fillMissing(native, drive, tree);
+  assert.equal(result.filled, 20);
+  assert.ok(maxActive <= 6, "at most six downloads run at once");
 });

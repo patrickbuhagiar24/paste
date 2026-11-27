@@ -3,8 +3,8 @@
 # Output: dist/pastex_<version>_all.deb
 #
 # The payload is the Chrome extension in extension/: this script packs it
-# into a signed .crx and registers it for auto-detection by Chrome and
-# Chromium through /usr/share/<browser>/extensions/<id>.json.
+# into a signed .crx and registers it for auto-detection by Google Chrome
+# through /usr/share/google-chrome/extensions/<id>.json.
 #
 # The CRX signing key sets the extension id, so releases must reuse one
 # stable key: pass its path in PASTEX_CRX_KEY (release builds use the
@@ -55,7 +55,6 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" \
   "$STAGE/usr/share/pastex" \
   "$STAGE/usr/share/google-chrome/extensions" \
-  "$STAGE/usr/share/chromium/extensions" \
   "$STAGE/usr/share/doc/$PKG"
 
 # Unpacked extension (auditable; also enables manual loading from source).
@@ -68,12 +67,10 @@ python3 scripts/pack-crx.py --verify "$STAGE/usr/share/pastex/pastex.crx" >/dev/
 echo "extension id: $EXT_ID"
 # Published alongside the archive so users can compare the ID Chrome shows.
 
-# Auto-detection: Chrome and Chromium pick these JSON files up on launch
-# and offer to enable the extension with one click.
-for browser_dir in google-chrome chromium; do
-  printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
-    "$VERSION" >"$STAGE/usr/share/$browser_dir/extensions/$EXT_ID.json"
-done
+# Register only with Google Chrome. On upgrade dpkg removes the old
+# Chromium metadata file that belonged to the previous package version.
+printf '{"external_crx": "/usr/share/pastex/pastex.crx", "external_version": "%s"}\n' \
+  "$VERSION" >"$STAGE/usr/share/google-chrome/extensions/$EXT_ID.json"
 
 install -m 644 extension/README.md "$STAGE/usr/share/doc/$PKG/README.md"
 install -m 644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright"
@@ -105,14 +102,14 @@ Architecture: @ARCH@
 Installed-Size: @SIZE@
 Multi-Arch: foreign
 Maintainer: Patrick Buhagiar <patrickbuhagiar24@users.noreply.github.com>
-Recommends: google-chrome-stable | chromium
+Recommends: google-chrome-stable
 Description: One-click text snippet manager for Google Chrome
  Pastex is a Chrome extension (Manifest V3): a snippet library in the
  Side Panel and an in-page launcher at the cursor, using Google Drive
  through Google OAuth as the signed-in user.
  .
- Installing the package registers the extension with Chrome and
- Chromium: on the next launch the browser offers to enable Pastex
+ Installing the package registers the extension with Google Chrome:
+ on the next launch the browser offers to enable Pastex
  with one click. No daemons, groups, or system services are used.
  .
  Snippets are read and written as .txt files directly in Google Drive.

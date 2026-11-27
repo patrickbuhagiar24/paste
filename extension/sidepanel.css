@@ -335,9 +335,7 @@ button.icon {
   font-size: 11.5px;
 }
 
-/* The status line is the only thing in the bar, so it gets the whole width and
- * may wrap: a Drive error is long, and truncating it to an ellipsis hides the
- * one part the user needs to read. */
+/* The message may wrap so Drive errors remain readable beside the copy action. */
 #status {
   flex: 1 1 auto;
   min-width: 0;
@@ -608,13 +606,13 @@ main {
 #row-menu {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 0 8px 6px;
-  padding: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  box-shadow: 0 4px 14px var(--shadow-row);
+  gap: 6px;
+  margin: 0 8px 8px;
+  padding: 10px;
+  background: var(--bg);
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px var(--shadow-dialog);
 }
 
 #row-menu[hidden] {
@@ -622,18 +620,22 @@ main {
 }
 
 #row-menu button {
-  padding: 6px 10px;
+  min-height: 38px;
+  padding: 8px 12px;
   text-align: left;
-  font-size: 12.5px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+  background: var(--row-idle);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
   cursor: pointer;
 }
 
 #row-menu button:hover:not(:disabled),
 #row-menu button:focus-visible {
-  color: var(--accent);
+  color: var(--ink);
+  background: var(--row-hover);
   border-color: var(--accent);
 }
 
@@ -690,3 +692,37 @@ main {
     transform: none;
   }
 }
+
+#btn-copy-pending {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 24px;
+}
+
+#conflict-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  background: var(--overlay);
+}
+#conflict-overlay[hidden] { display: none; }
+#conflict-dialog {
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px var(--shadow-dialog);
+}
+#conflict-dialog h2 { margin: 0; font-size: 16px; }
+#conflict-dialog label { display: block; margin-top: 8px; font-weight: 600; }
+#conflict-dialog textarea { width: 100%; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); }
+#btn-review-conflict { flex: 0 0 auto; width: 26px; height: 24px; }
+
+#conflict-status[data-state="error"] { color: var(--danger-ink); font-weight: 600; }

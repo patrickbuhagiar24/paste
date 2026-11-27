@@ -22,8 +22,8 @@
  * Verified text bodies are addressed by the SHA-256 of their content and
  * survive tree invalidations, so an explicit refresh does not re-download
  * unchanged files. Every node also keeps the signature of the metadata Drive
- * reported for it, so a refresh only rebuilds the branch that changed, and a
- * cached snapshot can be confirmed with metadata alone (verify).
+ * reported for it, so a cached snapshot can be confirmed with metadata alone
+ * (verify). Folders are listed even when their own metadata is unchanged.
  *
  * The background (idle) check loads Drive once and compares the result with the
  * stored snapshot. The snapshot is only rewritten when Drive really reports a

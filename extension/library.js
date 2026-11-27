@@ -5,9 +5,9 @@
  *  - Bodies are cached by content. Every body is stored under the SHA-256 of
  *    its text, so Drive's own content checksum decides whether a snippet is
  *    downloaded again, and unchanged bodies survive a tree rebuild.
- *  - Every node carries a signature built from the metadata Drive reports in
- *    a listing. A node with the same signature is reused as it is, so only
- *    the branch that really changed is listed and downloaded again.
+ *  - Every folder is listed because a descendant can change without changing
+ *    its parent. Metadata signatures and body hashes still avoid unnecessary
+ *    downloads.
  *  - The order of the siblings and the folded folders live in one label on
  *    the root folder, so a reorder or a collapse is a single Drive write and
  *    a single read.
@@ -194,16 +194,6 @@
     // defers a folder it still has to walk.
     var deferCollapsed = options.deferCollapsed !== false;
 
-    // The previous tree is indexed once, so an unchanged folder can be
-    // reused without listing its children again.
-    var cachedNodes = new Map();
-    (function indexCached(nodes) {
-      (nodes || []).forEach(function (node) {
-        cachedNodes.set(node.id, node);
-        if (node.children) indexCached(node.children);
-      });
-    })(options.tree);
-
     function has(object, key) {
       return Object.prototype.hasOwnProperty.call(object, key);
     }
@@ -243,31 +233,6 @@
       return entry;
     }
 
-    // A reused subtree is copied, never shared: the copy can be reordered
-    // and folded without touching the snapshot that is still stored.
-    function cloneNode(node) {
-      seen.add(node.id);
-      var copy = {};
-      Object.keys(node).forEach(function (key) { copy[key] = node[key]; });
-      if (node.kind === "text") {
-        var entry = savedBodies[node.id];
-        var resolved = entry ? resolveBody(entry) : null;
-        if (resolved) {
-          bodies[node.id] = {
-            modifiedTime: node.modifiedTime || "", hash: resolved.hash,
-            driveHash: entry.driveHash || "",
-          };
-          texts[resolved.hash] = resolved.text;
-          copy.hash = resolved.hash;
-        } else if (node.hash) {
-          texts[node.hash] = node.text || "";
-          bodies[node.id] = { modifiedTime: node.modifiedTime || "", hash: node.hash, driveHash: "" };
-        }
-      }
-      if (node.children) copy.children = node.children.map(cloneNode);
-      return copy;
-    }
-
     var active = 0, waiting = [];
     function request(fn) {
       return new Promise(function (resolve, reject) {
@@ -286,11 +251,7 @@
     var tree = [];
     function update() { if (onUpdate) onUpdate(tree); }
 
-    async function visit(folderId, nodes, deferred, reuse) {
-      if (reuse) {
-        nodes.push(reuse);
-        return;
-      }
+    async function visit(folderId, nodes, deferred) {
       if (visited.has(folderId)) throw new Error("Drive folder cycle detected.");
       visited.add(folderId);
       var files = await request(function () {
@@ -307,7 +268,6 @@
       var jobs = [];
       files.forEach(function (file) {
         var signature = nodeSignature(file);
-        var unchanged = savedSigs[file.id] !== undefined && savedSigs[file.id] === signature;
         seen.add(file.id);
         if (file.mimeType === drive.FOLDER_MIME) {
           var collapsed = index.collapsed[file.id] === "1";
@@ -318,16 +278,12 @@
           nodes.push(folder);
           metadata[file.id] = file.modifiedTime || "";
           signatures[file.id] = signature;
-          var cached = cachedNodes.get(file.id);
-          if (unchanged && cached) {
-            // The folder did not change: its whole subtree is reused.
-            folder.children = (cached.children || []).map(cloneNode);
-          } else {
-            jobs.push(visit(file.id, folder.children,
-              deferred || (deferCollapsed && collapsed) || !!options.signaturesOnly, null)
-              .catch(function (err) { folder.loadError = err.message || String(err); })
-              .finally(update));
-          }
+          // A folder's own metadata does not prove its descendants are unchanged.
+          // List every folder, while reusing unchanged file bodies by checksum.
+          jobs.push(visit(file.id, folder.children,
+            deferred || (deferCollapsed && collapsed) || !!options.signaturesOnly)
+            .catch(function (err) { folder.loadError = err.message || String(err); })
+            .finally(update));
         } else if ((file.mimeType || "").indexOf("application/vnd.google-apps.") !== 0 &&
                    (file.mimeType === drive.TEXT_MIME || /\.txt$/i.test(file.name || ""))) {
           var body = reusableBody(file);
@@ -365,8 +321,7 @@
     }
 
     // The centralized index describes the order of the siblings and the
-    // folded folders. It is applied to the finished tree, so a reused
-    // subtree is ordered and folded exactly like a freshly listed one.
+    // folded folders. It is applied to the finished tree.
     function applyIndex(nodes, parentId) {
       var order = index.order || {};
       var collapsed = index.collapsed || {};
@@ -390,9 +345,8 @@
       });
     }
 
-    // Always list the root: child metadata changes (order/collapse) may not
-    // bump the parent's modifiedTime. Nested folders can still be reused.
-    await visit(rootId, tree, false, null);
+    // List every folder: a child's change need not change its parent metadata.
+    await visit(rootId, tree, false);
     applyIndex(tree, rootId);
     Object.keys(signatures).forEach(function (id) { if (!seen.has(id)) delete signatures[id]; });
     metadata[rootId] = session.modifiedTime || metadata[rootId] || "";
@@ -439,24 +393,27 @@
     })(tree);
     if (!missing.length) return { tree: tree, bodies: bodies, texts: texts, filled: 0 };
     var filled = 0;
-    await Promise.all(missing.map(function (item) {
-      return drive.downloadText(session.token, item.node.id).then(function (text) {
-        var hash = Hash.sha256Hex(text);
-        item.node.text = text;
-        item.node.hash = hash;
-        // The row is readable again, so the warning it used to show is gone.
-        delete item.node.loadError;
-        texts[hash] = text;
-        bodies[item.node.id] = { modifiedTime: item.node.modifiedTime || "", hash: hash, driveHash: "" };
-        filled++;
-      }).catch(function (err) { item.node.loadError = err.message || String(err); });
-    }));
+    var next = 0;
+    async function fillWorker() {
+      while (next < missing.length) {
+        var item = missing[next++];
+        try {
+          var text = await drive.downloadText(session.token, item.node.id);
+          var hash = Hash.sha256Hex(text);
+          item.node.text = text;
+          item.node.hash = hash;
+          delete item.node.loadError;
+          texts[hash] = text;
+          bodies[item.node.id] = { modifiedTime: item.node.modifiedTime || "", hash: hash, driveHash: "" };
+          filled++;
+        } catch (err) { item.node.loadError = err.message || String(err); }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(6, missing.length) }, fillWorker));
     return { tree: tree, bodies: bodies, texts: texts, filled: filled, session: session };
   }
 
-  // The signature walk used for a cheap freshness check: it needs a session
-  // (one token and one folder read) but lists only what changed and never
-  // downloads a body.
+  // The signature walk lists folders and never downloads a body.
   async function verifyTree(drive, session, options) {
     return loadTree(drive, session.token, session.rootId, null, Object.assign({}, options || {}, {
       signaturesOnly: true, index: session.index,
